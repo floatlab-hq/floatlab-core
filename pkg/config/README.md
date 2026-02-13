@@ -1,0 +1,59 @@
+FloatLab Config
+###
+
+Storage for the following configuration data:
+ 
+- Networks
+    - Network ID
+    - IP Address / Subnet Mask
+    - (optional) Reserved IP Range
+- Users
+    - User ID
+    - Login
+    - Name
+    - Email Address
+    - Contacts (WhatsApp/Slack/Telegram/etc)
+    - Passwords Hashes
+    - Subscriptions
+    - Webauthn Keys
+    - Public Keys
+    - OAuth Tokens
+- Container Stack
+    - Stack UUID
+    - Name
+    - Icon
+    - Snapshot Schedule
+    - Replication Schedule
+    - Backup Schedule
+    - Master Host
+    - Slave Host
+    - ZFS dataset
+- Nodes
+    - Node UUID
+    - Cluster UUID
+    - Node Name
+    - Network Addresses
+        - Type: LAN-4, LAN-6, WAN-4, WAN-6, Overlay-6
+        - Address
+        - Netmask
+        - Network ID
+- Lab
+    - Lab UUID
+    - Name
+    - Private Key
+    - Public Key
+- Alert Rules
+    - Rule UUID
+    - Name
+    - Description
+    - Type
+    - Conditions
+    - Actions
+    - Notification Channels
+- Alert
+  - Alert UUID
+  - Message
+  - State
+  - Action
+  - Severity
+  - DateTime
