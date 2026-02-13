@@ -1,7 +1,7 @@
 FloatLab Core
 ===
 
-FloatLab Core is the brain behind running your floatlab. It contains several core components that are used
+FloatLab Core is the brain behind running your FloatLab. It contains several core components that are used
 to orchestrate your workloads.
 
 ### FloatLab Raft - Distributed Consensus Algorithm
