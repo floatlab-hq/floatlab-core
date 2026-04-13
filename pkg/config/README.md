@@ -57,3 +57,6 @@ Storage for the following configuration data:
   - Action
   - Severity
   - DateTime
+
+### API Design
+Other services should be able to subscribe to changes in the configuration, and be notified when a change occurs.
