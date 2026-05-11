@@ -1,41 +1,292 @@
 openapi: 3.1.0
 info:
-  title: FloatLab Notification Service API
-  version: 1.0.0
-  description: Service for handling persistent and one-shot user notifications.
+  title: FloatLab Notifications API
+  version: 0.1.0
+  description: |
+    Persistent notification management backed by rqlite.
+    Real-time delivery via the /api/v1/events SSE multiplexer (notification.new events).
+    Notifications are retained for 30 days then purged by a background cleanup job.
+
+components:
+  schemas:
+    NotificationSeverity:
+      type: string
+      enum: [info, warning, critical]
+
+    NotificationState:
+      type: string
+      enum: [unread, read, silenced, resolved]
+
+    Notification:
+      type: object
+      required: [id, severity, state, title, body, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        alert_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Source alert that generated this notification, if any.
+        kind:
+          type: string
+          description: Machine-readable event category.
+          example: "failover.complete"
+        severity:
+          $ref: '#/components/schemas/NotificationSeverity'
+        state:
+          $ref: '#/components/schemas/NotificationState'
+        title:
+          type: string
+          example: "Failover complete — prod-db is now RunningBackup"
+        body:
+          type: string
+          example: "Failover completed in 47s after primary node-alpha became unreachable."
+        stack_id:
+          type: string
+          format: uuid
+          nullable: true
+        node_id:
+          type: string
+          format: uuid
+          nullable: true
+        silenced_until:
+          type: string
+          format: date-time
+          nullable: true
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    NotificationCreate:
+      type: object
+      required: [severity, title, body]
+      properties:
+        alert_id:
+          type: string
+          format: uuid
+          nullable: true
+        kind:
+          type: string
+        severity:
+          $ref: '#/components/schemas/NotificationSeverity'
+        title:
+          type: string
+        body:
+          type: string
+        stack_id:
+          type: string
+          format: uuid
+          nullable: true
+        node_id:
+          type: string
+          format: uuid
+          nullable: true
+
+    SilenceRequest:
+      type: object
+      required: [until]
+      properties:
+        until:
+          type: string
+          format: date-time
+          description: Silence the notification until this time. Must be in the future.
+
+    Error:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: integer
+        message:
+          type: string
+        code:
+          type: string
+
 paths:
   /notifications:
     get:
       summary: List notifications
+      operationId: listNotifications
+      tags: [notifications]
+      parameters:
+        - name: state
+          in: query
+          schema:
+            $ref: '#/components/schemas/NotificationState'
+        - name: severity
+          in: query
+          schema:
+            $ref: '#/components/schemas/NotificationSeverity'
+        - name: stack_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: since
+          in: query
+          description: Only return notifications created after this time.
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 500
       responses:
         '200':
-          description: A list of notifications
+          description: Notifications, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Notification'
     post:
-      summary: Create a notification
+      summary: Create a notification (internal use — normally created by the alert engine)
+      operationId: createNotification
+      tags: [notifications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationCreate'
       responses:
         '201':
-          description: Notification created
-  /notifications/{notificationId}/silence:
-    post:
-      summary: Temporarily suppress a notification
-      parameters:
-        - name: notificationId
-          in: path
-          required: true
-          schema:
-            type: string
+          description: Notification created and fanned out to SSE subscribers.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
+
+  /notifications/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get a notification by ID
+      operationId: getNotification
+      tags: [notifications]
+      responses:
+        '200':
+          description: Notification detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
+        '404':
+          description: Notification not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      summary: Delete a notification
+      operationId: deleteNotification
+      tags: [notifications]
       responses:
         '204':
-          description: Notification silenced
-  /notifications/{notificationId}/resolve:
+          description: Notification deleted.
+        '404':
+          description: Notification not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /notifications/{id}/silence:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
     post:
-      summary: Mark a persistent notification as resolved
-      parameters:
-        - name: notificationId
-          in: path
-          required: true
-          schema:
-            type: string
+      summary: Silence a notification until a given time
+      operationId: silenceNotification
+      tags: [notifications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SilenceRequest'
       responses:
-        '204':
-          description: Notification resolved
+        '200':
+          description: Notification silenced.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
+        '404':
+          description: Notification not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /notifications/{id}/resolve:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Mark a notification as resolved
+      operationId: resolveNotification
+      tags: [notifications]
+      description: Sets state to resolved and records resolved_at timestamp.
+      responses:
+        '200':
+          description: Notification resolved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
+        '404':
+          description: Notification not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /notifications/{id}/read:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Mark a notification as read
+      operationId: markNotificationRead
+      tags: [notifications]
+      responses:
+        '200':
+          description: Notification marked read.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
+        '404':
+          description: Notification not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'

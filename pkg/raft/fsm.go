@@ -15,11 +15,19 @@ import (
 type FSM struct {
 	mu     sync.RWMutex
 	stacks map[string]*run.StackInstance
+	notify chan run.StackStateChanged
 }
 
 func NewFSM() *FSM {
-	return &FSM{stacks: make(map[string]*run.StackInstance)}
+	return &FSM{
+		stacks: make(map[string]*run.StackInstance),
+		notify: make(chan run.StackStateChanged, 64),
+	}
 }
+
+// Subscribe returns a channel that receives each applied StackStateChanged entry.
+// The channel is buffered (64); slow consumers will miss entries silently.
+func (f *FSM) Subscribe() <-chan run.StackStateChanged { return f.notify }
 
 func (f *FSM) Apply(l *hraft.Log) interface{} {
 	var entry run.StackStateChanged
@@ -38,6 +46,11 @@ func (f *FSM) Apply(l *hraft.Log) interface{} {
 	updated.State = entry.To
 	updated.UpdatedAt = entry.Timestamp
 	f.stacks[entry.StackID] = &updated
+
+	select {
+	case f.notify <- entry:
+	default:
+	}
 	return nil
 }
 

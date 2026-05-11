@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/floatlab/floatlab-core/pkg/docker"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
 	"go.uber.org/zap"
 )
@@ -23,7 +24,14 @@ type Server struct {
 func NewServer(log *zap.Logger) *Server {
 	srv := &Server{log: log}
 	srv.ipc = ipc.NewServer(socketPath, log)
-	srv.dispatcher = newDispatcher(srv.ipc, log)
+
+	dc, err := docker.New()
+	if err != nil {
+		log.Warn("hostd: docker client unavailable, container management will fail",
+			zap.Error(err))
+	}
+
+	srv.dispatcher = newDispatcher(srv.ipc, dc, log)
 	srv.restore = newRestoreRunner(srv.ipc, log)
 	return srv
 }

@@ -1,47 +1,433 @@
 openapi: 3.1.0
 info:
-  title: FloatLab Config Service API
-  version: 0.0.1
-  description: Management of FloatLab configuration including networks, users, stacks, nodes, and alert rules.
+  title: FloatLab Config API
+  version: 0.1.0
+  description: |
+    Alert rule management and active alert tracking.
+    Network configuration (prefix pools and allocations are in network.yaml).
+    Stack and node CRUD are in stacks.yaml and nodes.yaml respectively.
+
+components:
+  schemas:
+    AlertSeverity:
+      type: string
+      enum: [info, warning, critical]
+
+    AlertState:
+      type: string
+      enum: [active, silenced, resolved]
+
+    AlertRuleCondition:
+      type: string
+      description: |
+        PromQL/MetricsQL expression that, when its result exceeds threshold, fires the alert.
+        Examples: "cpu_usage_percent > 90", "zfs_pool_health != 0"
+      example: "cpu_usage_percent > 90"
+
+    AlertRule:
+      type: object
+      required: [id, name, condition, severity, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "High CPU"
+        condition:
+          $ref: '#/components/schemas/AlertRuleCondition'
+        severity:
+          $ref: '#/components/schemas/AlertSeverity'
+        stack_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: If set, rule only fires for this stack.
+        node_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: If set, rule only fires for this node.
+        for_duration:
+          type: string
+          description: How long the condition must be true before firing (Prometheus duration string).
+          example: "5m"
+        annotations:
+          type: object
+          additionalProperties:
+            type: string
+          description: Human-readable annotations forwarded to notifications.
+        enabled:
+          type: boolean
+          default: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AlertRuleCreate:
+      type: object
+      required: [name, condition, severity]
+      properties:
+        name:
+          type: string
+        condition:
+          $ref: '#/components/schemas/AlertRuleCondition'
+        severity:
+          $ref: '#/components/schemas/AlertSeverity'
+        stack_id:
+          type: string
+          format: uuid
+          nullable: true
+        node_id:
+          type: string
+          format: uuid
+          nullable: true
+        for_duration:
+          type: string
+          example: "5m"
+        annotations:
+          type: object
+          additionalProperties:
+            type: string
+        enabled:
+          type: boolean
+          default: true
+
+    AlertRuleUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        condition:
+          $ref: '#/components/schemas/AlertRuleCondition'
+        severity:
+          $ref: '#/components/schemas/AlertSeverity'
+        for_duration:
+          type: string
+        annotations:
+          type: object
+          additionalProperties:
+            type: string
+        enabled:
+          type: boolean
+
+    Alert:
+      type: object
+      required: [id, rule_id, severity, state, message, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        rule_id:
+          type: string
+          format: uuid
+        stack_id:
+          type: string
+          format: uuid
+          nullable: true
+        node_id:
+          type: string
+          format: uuid
+          nullable: true
+        severity:
+          $ref: '#/components/schemas/AlertSeverity'
+        state:
+          $ref: '#/components/schemas/AlertState'
+        message:
+          type: string
+          example: "CPU usage 94% on node-alpha (threshold: 90%)"
+        silenced_until:
+          type: string
+          format: date-time
+          nullable: true
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    Network:
+      type: object
+      required: [id, name, cidr, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "overlay-net"
+        cidr:
+          type: string
+          description: IPv6 CIDR for this logical network.
+          example: "fd00::/48"
+        stack_id:
+          type: string
+          format: uuid
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    NetworkCreate:
+      type: object
+      required: [name, cidr]
+      properties:
+        name:
+          type: string
+        cidr:
+          type: string
+        stack_id:
+          type: string
+          format: uuid
+          nullable: true
+
+    Error:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: integer
+        message:
+          type: string
+        code:
+          type: string
+
 paths:
   /networks:
     get:
-      summary: List all networks
+      summary: List all logical networks
+      operationId: listNetworks
+      tags: [config]
       responses:
         '200':
-          description: A list of networks
+          description: All networks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Network'
     post:
-      summary: Create a new network
+      summary: Create a logical network
+      operationId: createNetwork
+      tags: [config]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NetworkCreate'
       responses:
         '201':
-          description: Network created
-  /users:
+          description: Network created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Network'
+        '409':
+          description: Network name or CIDR conflicts with existing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /networks/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
     get:
-      summary: List all users
+      summary: Get a network by ID
+      operationId: getNetwork
+      tags: [config]
       responses:
         '200':
-          description: A list of users
-  /stacks:
-    get:
-      summary: List all container stacks
+          description: Network detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Network'
+        '404':
+          description: Network not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      summary: Delete a network
+      operationId: deleteNetwork
+      tags: [config]
       responses:
-        '200':
-          description: A list of stacks
-  /nodes:
-    get:
-      summary: List all nodes in the cluster
-      responses:
-        '200':
-          description: A list of nodes
+        '204':
+          description: Network deleted.
+        '409':
+          description: Network has active IP reservations.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /alert-rules:
     get:
       summary: List all alert rules
+      operationId: listAlertRules
+      tags: [config]
+      parameters:
+        - name: stack_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: node_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: enabled
+          in: query
+          schema:
+            type: boolean
       responses:
         '200':
-          description: A list of alert rules
+          description: Alert rules.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AlertRule'
+    post:
+      summary: Create an alert rule
+      operationId: createAlertRule
+      tags: [config]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertRuleCreate'
+      responses:
+        '201':
+          description: Alert rule created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertRule'
+
+  /alert-rules/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get an alert rule by ID
+      operationId: getAlertRule
+      tags: [config]
+      responses:
+        '200':
+          description: Alert rule.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertRule'
+        '404':
+          description: Rule not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      summary: Update an alert rule
+      operationId: updateAlertRule
+      tags: [config]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertRuleUpdate'
+      responses:
+        '200':
+          description: Rule updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertRule'
+    delete:
+      summary: Delete an alert rule
+      operationId: deleteAlertRule
+      tags: [config]
+      responses:
+        '204':
+          description: Rule deleted.
+
   /alerts:
     get:
-      summary: List active alerts
+      summary: List alerts
+      operationId: listAlerts
+      tags: [config]
+      parameters:
+        - name: state
+          in: query
+          schema:
+            $ref: '#/components/schemas/AlertState'
+        - name: severity
+          in: query
+          schema:
+            $ref: '#/components/schemas/AlertSeverity'
+        - name: stack_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: node_id
+          in: query
+          schema:
+            type: string
+            format: uuid
       responses:
         '200':
-          description: A list of alerts
+          description: Alerts matching the filter.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Alert'
+
+  /alerts/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get an alert by ID
+      operationId: getAlert
+      tags: [config]
+      responses:
+        '200':
+          description: Alert detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alert'
+        '404':
+          description: Alert not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'

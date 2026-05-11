@@ -1,0 +1,402 @@
+openapi: 3.1.0
+info:
+  title: FloatLab Stacks API
+  version: 0.1.0
+
+components:
+  schemas:
+    StackState:
+      type: string
+      enum:
+        - Provisioning
+        - Idle
+        - Starting
+        - RunningPrimary
+        - FailingOver
+        - RunningBackup
+        - Restoring
+        - Stopping
+        - Updating
+        - RollingBack
+        - Failed
+      description: Current lifecycle state of the stack.
+
+    FailoverMode:
+      type: string
+      enum: [manual, auto]
+
+    Stack:
+      type: object
+      required: [id, name, state, primary_node, compose_file, dataset_path, failover_mode, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "plex"
+        state:
+          $ref: '#/components/schemas/StackState'
+        primary_node:
+          type: string
+          description: Node ID of the primary host.
+          example: "node-alpha"
+        secondary_node:
+          type: string
+          nullable: true
+          description: Node ID of the failover host.
+          example: "node-beta"
+        compose_file:
+          type: string
+          description: Raw docker-compose.yml content (includes x-fl-* extensions).
+        dataset_path:
+          type: string
+          description: ZFS dataset path — e.g. floatlab/plex
+          example: "floatlab/plex"
+        failover_mode:
+          $ref: '#/components/schemas/FailoverMode'
+        auto_trigger_after:
+          type: string
+          description: Duration string, only used when failover_mode=auto.
+          example: "120s"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    StackCreate:
+      type: object
+      required: [name, primary_node, compose_file]
+      properties:
+        name:
+          type: string
+        primary_node:
+          type: string
+        secondary_node:
+          type: string
+          nullable: true
+        compose_file:
+          type: string
+        failover_mode:
+          $ref: '#/components/schemas/FailoverMode'
+          default: manual
+        auto_trigger_after:
+          type: string
+          default: "120s"
+
+    ComposeUpdate:
+      type: object
+      required: [compose_file]
+      properties:
+        compose_file:
+          type: string
+
+    ContainerStatus:
+      type: string
+      enum: [running, stopped, starting, paused, error]
+
+    Container:
+      type: object
+      required: [id, name, image, status, node_id, stack_id]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        image:
+          type: string
+        status:
+          $ref: '#/components/schemas/ContainerStatus'
+        health:
+          type: string
+          enum: [healthy, unhealthy, starting, none]
+        node_id:
+          type: string
+        stack_id:
+          type: string
+          format: uuid
+        cpu_pct:
+          type: number
+          format: float
+          description: CPU usage 0–100.
+        mem_bytes:
+          type: integer
+          format: int64
+        mem_limit:
+          type: integer
+          format: int64
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    Error:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: integer
+        message:
+          type: string
+        code:
+          type: string
+
+paths:
+  /stacks:
+    get:
+      summary: List all stacks
+      operationId: listStacks
+      tags: [stacks]
+      responses:
+        '200':
+          description: List of all stacks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Stack'
+    post:
+      summary: Create a stack
+      operationId: createStack
+      tags: [stacks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StackCreate'
+      responses:
+        '201':
+          description: Stack created; dataset provisioned; state=Provisioning.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stack'
+        '400':
+          description: Invalid request body or compose_file validation failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Stack name already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /stacks/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get a stack by ID
+      operationId: getStack
+      tags: [stacks]
+      responses:
+        '200':
+          description: Stack detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stack'
+        '404':
+          description: Stack not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      summary: Delete a stack
+      operationId: deleteStack
+      tags: [stacks]
+      description: Stack must be in Idle or Failed state. Destroys ZFS dataset if requested.
+      parameters:
+        - name: destroy_data
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: Also destroy the ZFS dataset and all snapshots.
+      responses:
+        '204':
+          description: Stack deleted.
+        '409':
+          description: Stack is not in a deletable state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /stacks/{id}/compose:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      summary: Update the compose file for a stack
+      operationId: updateStackCompose
+      tags: [stacks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ComposeUpdate'
+      responses:
+        '200':
+          description: Compose file updated. Stack state unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stack'
+        '400':
+          description: Compose validation failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /stacks/{id}/start:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Start a stack (Idle → Starting → RunningPrimary)
+      operationId: startStack
+      tags: [stacks]
+      responses:
+        '202':
+          description: Start accepted; state transitions asynchronously.
+        '409':
+          description: Stack is not in a startable state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /stacks/{id}/stop:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Stop a stack (RunningPrimary → Stopping → Idle)
+      operationId: stopStack
+      tags: [stacks]
+      responses:
+        '202':
+          description: Stop accepted.
+        '409':
+          description: Stack is not in a stoppable state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /stacks/{id}/failover:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Trigger manual failover (RunningPrimary → FailingOver → RunningBackup)
+      operationId: triggerFailover
+      tags: [stacks]
+      responses:
+        '202':
+          description: Failover accepted.
+        '409':
+          description: Stack is not in RunningPrimary state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /stacks/{id}/restore:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Restore primary (RunningBackup → Restoring → RunningPrimary)
+      operationId: restoreStack
+      tags: [stacks]
+      responses:
+        '202':
+          description: Restore accepted.
+        '409':
+          description: Stack is not in RunningBackup state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /stacks/{id}/state:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get current state of a stack
+      operationId: getStackState
+      tags: [stacks]
+      responses:
+        '200':
+          description: Current state.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [state]
+                properties:
+                  state:
+                    $ref: '#/components/schemas/StackState'
+
+  /stacks/{id}/containers:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: List containers for a stack (across all nodes)
+      operationId: getStackContainers
+      tags: [stacks]
+      responses:
+        '200':
+          description: List of containers.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Container'

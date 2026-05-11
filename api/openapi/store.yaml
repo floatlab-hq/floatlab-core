@@ -1,52 +1,595 @@
 openapi: 3.1.0
 info:
-  title: FloatLab Store Service API
-  version: 1.0.0
-  description: ZFS Storage and Replication Management API.
+  title: FloatLab Storage API
+  version: 0.1.0
+  description: |
+    ZFS pool, dataset, snapshot, and replication management.
+    All destructive operations are dispatched via the IPC task queue to hostd;
+    the API returns immediately and the caller should poll for completion.
+    Snapshot naming conventions (normative):
+      - User snapshots:     user-YYYYMMDD-HHMMSS-<label>
+      - Scheduled:          flsnap-YYYYMMDD-HHMMSS-<hourly|daily|weekly|monthly>
+      - Replication:        fsrepl-<seq>-YYYYMMDD-HHMMSS
+
+components:
+  schemas:
+    ZfsVdevType:
+      type: string
+      enum: [disk, mirror, raidz, raidz2, raidz3, spare, cache, log]
+
+    ZfsVdev:
+      type: object
+      required: [name, type, state]
+      properties:
+        name:
+          type: string
+          description: Device path or vdev name.
+          example: "/dev/sda"
+        type:
+          $ref: '#/components/schemas/ZfsVdevType'
+        state:
+          type: string
+          enum: [ONLINE, DEGRADED, FAULTED, OFFLINE, UNAVAIL, REMOVED]
+        read_errors:
+          type: integer
+        write_errors:
+          type: integer
+        checksum_errors:
+          type: integer
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/ZfsVdev'
+
+    ZfsPool:
+      type: object
+      required: [name, node_id, state, size_bytes, alloc_bytes, free_bytes, vdevs, created_at]
+      properties:
+        name:
+          type: string
+          example: "floatlab"
+        node_id:
+          type: string
+          format: uuid
+        state:
+          type: string
+          enum: [ONLINE, DEGRADED, FAULTED, OFFLINE, REMOVED, UNAVAIL]
+        size_bytes:
+          type: integer
+          format: int64
+        alloc_bytes:
+          type: integer
+          format: int64
+        free_bytes:
+          type: integer
+          format: int64
+        frag_percent:
+          type: integer
+          description: Pool fragmentation percentage.
+        dedup_ratio:
+          type: number
+          format: float
+        vdevs:
+          type: array
+          items:
+            $ref: '#/components/schemas/ZfsVdev'
+        created_at:
+          type: string
+          format: date-time
+
+    ZfsDataset:
+      type: object
+      required: [name, pool, node_id, used_bytes, avail_bytes, created_at]
+      properties:
+        name:
+          type: string
+          description: Full dataset path (pool/dataset).
+          example: "floatlab/stacks/prod-db"
+        pool:
+          type: string
+          example: "floatlab"
+        node_id:
+          type: string
+          format: uuid
+        stack_id:
+          type: string
+          format: uuid
+          nullable: true
+        used_bytes:
+          type: integer
+          format: int64
+        avail_bytes:
+          type: integer
+          format: int64
+        referenced_bytes:
+          type: integer
+          format: int64
+        quota_bytes:
+          type: integer
+          format: int64
+          nullable: true
+        compression:
+          type: string
+          enum: [none, lz4, gzip, zstd]
+        block_size:
+          type: string
+          enum: ["4k", "8k", "32k", "128k"]
+        mountpoint:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    Snapshot:
+      type: object
+      required: [name, dataset, node_id, used_bytes, created_at]
+      properties:
+        name:
+          type: string
+          description: Snapshot name component (without dataset prefix).
+          example: "flsnap-20240101-120000-hourly"
+        dataset:
+          type: string
+          description: Full dataset path this snapshot belongs to.
+          example: "floatlab/stacks/prod-db"
+        node_id:
+          type: string
+          format: uuid
+        stack_id:
+          type: string
+          format: uuid
+          nullable: true
+        used_bytes:
+          type: integer
+          format: int64
+          description: Space used uniquely by this snapshot.
+        referenced_bytes:
+          type: integer
+          format: int64
+        kind:
+          type: string
+          enum: [user, scheduled, replication]
+          description: Derived from snapshot name prefix.
+        created_at:
+          type: string
+          format: date-time
+
+    SnapshotCreate:
+      type: object
+      required: [label]
+      properties:
+        label:
+          type: string
+          description: |
+            Short label appended to the snapshot name.
+            Final name will be: user-YYYYMMDD-HHMMSS-<label>
+          example: "pre-deploy"
+        recursive:
+          type: boolean
+          default: false
+          description: Snapshot all child datasets atomically.
+
+    ReplicationState:
+      type: string
+      enum: [idle, running, complete, failed]
+
+    ReplicationJob:
+      type: object
+      required: [id, stack_id, source_node_id, dest_node_id, state, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        stack_id:
+          type: string
+          format: uuid
+        source_node_id:
+          type: string
+          format: uuid
+        dest_node_id:
+          type: string
+          format: uuid
+        state:
+          $ref: '#/components/schemas/ReplicationState'
+        base_snapshot:
+          type: string
+          nullable: true
+          description: Snapshot used as the incremental base. Null for initial seed.
+        sent_snapshot:
+          type: string
+          nullable: true
+          description: Snapshot sent in this job.
+        bytes_transferred:
+          type: integer
+          format: int64
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    ZfsFault:
+      type: object
+      required: [id, node_id, pool, severity, message, detected_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        node_id:
+          type: string
+          format: uuid
+        pool:
+          type: string
+          example: "floatlab"
+        vdev:
+          type: string
+          nullable: true
+          description: Affected vdev path, if known.
+        severity:
+          type: string
+          enum: [warning, error, critical]
+        message:
+          type: string
+          example: "checksum errors exceeded threshold on /dev/sdb"
+        detected_at:
+          type: string
+          format: date-time
+        cleared_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    Error:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: integer
+        message:
+          type: string
+        code:
+          type: string
+
 paths:
   /storage/pools:
     get:
-      summary: List all ZFS storage pools
-      responses:
-        '200':
-          description: A list of storage pools
-  /storage/datasets:
-    get:
-      summary: List all ZFS datasets
-      responses:
-        '200':
-          description: A list of datasets
-    post:
-      summary: Create a new ZFS dataset for a container stack or volume
-      responses:
-        '201':
-          description: Dataset created
-  /storage/datasets/{datasetPath}/snapshots:
-    get:
-      summary: List snapshots for a specific dataset
+      summary: List all ZFS pools across all nodes
+      operationId: listPools
+      tags: [storage]
       parameters:
-        - name: datasetPath
-          in: path
-          required: true
+        - name: node_id
+          in: query
           schema:
             type: string
+            format: uuid
       responses:
         '200':
-          description: A list of snapshots
-    post:
-      summary: Create an ad-hoc snapshot
-      responses:
-        '201':
-          description: Snapshot created
-  /storage/replication/status:
+          description: All ZFS pools.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ZfsPool'
+
+  /storage/pools/{node_id}/{pool}:
+    parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: pool
+        in: path
+        required: true
+        schema:
+          type: string
+          description: ZFS pool name.
     get:
-      summary: Get the status of all replication jobs
+      summary: Get a specific pool on a specific node
+      operationId: getPool
+      tags: [storage]
       responses:
         '200':
-          description: Replication status
+          description: Pool detail including vdev tree.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ZfsPool'
+        '404':
+          description: Pool not found on this node.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /storage/datasets:
+    get:
+      summary: List all FloatLab-managed datasets
+      operationId: listDatasets
+      tags: [storage]
+      parameters:
+        - name: node_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: stack_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Datasets.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ZfsDataset'
+
+  /storage/datasets/{stack_id}:
+    parameters:
+      - name: stack_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get dataset details for a stack
+      operationId: getStackDataset
+      tags: [storage]
+      responses:
+        '200':
+          description: Stack dataset.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ZfsDataset'
+        '404':
+          description: No dataset for this stack.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /storage/datasets/{stack_id}/snapshots:
+    parameters:
+      - name: stack_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: List snapshots for a stack's dataset
+      operationId: listSnapshots
+      tags: [storage]
+      parameters:
+        - name: kind
+          in: query
+          description: Filter by snapshot kind.
+          schema:
+            type: string
+            enum: [user, scheduled, replication]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 500
+      responses:
+        '200':
+          description: Snapshots, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Snapshot'
+    post:
+      summary: Create an ad-hoc user snapshot
+      operationId: createSnapshot
+      tags: [storage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SnapshotCreate'
+      responses:
+        '202':
+          description: Snapshot task queued. Returns the snapshot with pending state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Snapshot'
+        '409':
+          description: Snapshot with this name already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /storage/datasets/{stack_id}/snapshots/{name}:
+    parameters:
+      - name: stack_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      summary: Delete a snapshot
+      operationId: deleteSnapshot
+      tags: [storage]
+      description: |
+        Queues an IPC task to destroy the snapshot on the host.
+        Replication snapshots (fsrepl-*) cannot be deleted while a replication job is running.
+      responses:
+        '202':
+          description: Delete task queued.
+        '404':
+          description: Snapshot not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Snapshot is in use by an active replication job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /storage/datasets/{stack_id}/snapshots/{name}/restore:
+    parameters:
+      - name: stack_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Roll back a dataset to this snapshot
+      operationId: restoreSnapshot
+      tags: [storage]
+      description: |
+        Stack must be in Idle or Stopped state. The rollback destroys all
+        snapshots created after this one unless destroy_newer=false is set,
+        in which case the request is rejected if newer snapshots exist.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                destroy_newer:
+                  type: boolean
+                  default: true
+                  description: |
+                    If true, snapshots newer than this one are destroyed.
+                    If false, the request is rejected when newer snapshots exist.
+      responses:
+        '202':
+          description: Restore task queued.
+        '404':
+          description: Snapshot not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Stack not in a restoreable state, or newer snapshots exist and destroy_newer=false.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /storage/replication:
+    get:
+      summary: List replication jobs
+      operationId: listReplicationJobs
+      tags: [storage]
+      parameters:
+        - name: stack_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: state
+          in: query
+          schema:
+            $ref: '#/components/schemas/ReplicationState'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 200
+      responses:
+        '200':
+          description: Replication jobs, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ReplicationJob'
+
+  /storage/replication/{stack_id}/trigger:
+    parameters:
+      - name: stack_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Trigger an ad-hoc replication run for a stack
+      operationId: triggerReplication
+      tags: [storage]
+      responses:
+        '202':
+          description: Replication job queued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplicationJob'
+        '409':
+          description: A replication job is already running for this stack.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /storage/faults:
     get:
-      summary: Get current ZFS fault conditions
+      summary: Get active ZFS fault conditions across all nodes
+      operationId: listFaults
+      tags: [storage]
+      parameters:
+        - name: node_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: include_cleared
+          in: query
+          description: Include faults that have been cleared.
+          schema:
+            type: boolean
+            default: false
       responses:
         '200':
-          description: List of ZFS faults
+          description: ZFS faults.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ZfsFault'

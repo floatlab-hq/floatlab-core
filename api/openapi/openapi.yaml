@@ -1,27 +1,173 @@
 openapi: 3.1.0
 info:
   title: FloatLab Core API
-  version: 0.0.1
-  description: Unified API for all FloatLab Core services - Initial Draft - Incomplete
+  version: 0.1.0
+  description: |
+    Unified REST API for the FloatLab platform.
+    Base URL: http://floatlab-node:8080/api/v1
+    Real-time events: GET /api/v1/events (text/event-stream)
+
+    Sub-specs:
+      stacks.yaml    — Stack lifecycle, compose, state
+      nodes.yaml     — Node registration, health, IPC ping
+      health.yaml    — Liveness, readiness, Raft state
+      failover.yaml  — Manual/auto failover trigger, abort, step log
+      network.yaml   — IPv6 prefix pools, address allocation
+      config.yaml    — Alert rules, active alerts, logical networks
+      logs.yaml      — Container/node logs, audit log, LogsQL search
+      notify.yaml    — Persistent notifications, silence, resolve
+      stats.yaml     — VictoriaMetrics proxy: node/stack/storage metrics
+      store.yaml     — ZFS pools, datasets, snapshots, replication jobs
+
 servers:
   - url: http://floatlab-node:8080/api/v1
+    description: Control plane API
+
+tags:
+  - name: stacks
+    description: Container stack lifecycle management
+  - name: nodes
+    description: Node registration and health
+  - name: health
+    description: Liveness, readiness, Raft consensus
+  - name: failover
+    description: Failover trigger, abort, and step log
+  - name: network
+    description: IPv6 prefix pools and address allocation
+  - name: config
+    description: Alert rules, alerts, logical networks
+  - name: logs
+    description: Container and system logs, audit trail
+  - name: notifications
+    description: Persistent notification management
+  - name: stats
+    description: VictoriaMetrics time-series metrics
+  - name: storage
+    description: ZFS pools, datasets, snapshots, replication
+
 paths:
-  # Config Service
-  /config:
-    $ref: './config.yaml'
+  # Stack lifecycle
+  /stacks:
+    $ref: './stacks.yaml#/paths/~1stacks'
+  /stacks/{id}:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}'
+  /stacks/{id}/compose:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1compose'
+  /stacks/{id}/start:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1start'
+  /stacks/{id}/stop:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1stop'
+  /stacks/{id}/failover:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1failover'
+  /stacks/{id}/restore:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1restore'
+  /stacks/{id}/state:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1state'
+  /stacks/{id}/containers:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1containers'
 
-  # Logs Service
-  /logs:
-    $ref: './logs.yaml'
+  # Nodes
+  /nodes:
+    $ref: './nodes.yaml#/paths/~1nodes'
+  /nodes/{id}:
+    $ref: './nodes.yaml#/paths/~1nodes~1{id}'
+  /nodes/{id}/health:
+    $ref: './nodes.yaml#/paths/~1nodes~1{id}~1health'
+  /nodes/{id}/stacks:
+    $ref: './nodes.yaml#/paths/~1nodes~1{id}~1stacks'
 
-  # Notify Service
-  /notify:
-    $ref: './notify.yaml'
+  # Health
+  /health:
+    $ref: './health.yaml#/paths/~1health'
+  /health/ready:
+    $ref: './health.yaml#/paths/~1health~1ready'
+  /health/raft:
+    $ref: './health.yaml#/paths/~1health~1raft'
 
-  # Stats Service
-  /stats:
-    $ref: './stats.yaml'
+  # Failover
+  /failover/status:
+    $ref: './failover.yaml#/paths/~1failover~1status'
+  /failover/{stack_id}/trigger:
+    $ref: './failover.yaml#/paths/~1failover~1{stack_id}~1trigger'
+  /failover/{stack_id}/abort:
+    $ref: './failover.yaml#/paths/~1failover~1{stack_id}~1abort'
+  /failover/{stack_id}/log:
+    $ref: './failover.yaml#/paths/~1failover~1{stack_id}~1log'
 
-  # Store Service
-  /storage:
-    $ref: './store.yaml'
+  # Network
+  /network/pools:
+    $ref: './network.yaml#/paths/~1network~1pools'
+  /network/allocations:
+    $ref: './network.yaml#/paths/~1network~1allocations'
+  /network/allocations/{id}:
+    $ref: './network.yaml#/paths/~1network~1allocations~1{id}'
+
+  # Config (alert rules, alerts, logical networks)
+  /networks:
+    $ref: './config.yaml#/paths/~1networks'
+  /networks/{id}:
+    $ref: './config.yaml#/paths/~1networks~1{id}'
+  /alert-rules:
+    $ref: './config.yaml#/paths/~1alert-rules'
+  /alert-rules/{id}:
+    $ref: './config.yaml#/paths/~1alert-rules~1{id}'
+  /alerts:
+    $ref: './config.yaml#/paths/~1alerts'
+  /alerts/{id}:
+    $ref: './config.yaml#/paths/~1alerts~1{id}'
+
+  # Logs
+  /logs/stacks/{stack_id}:
+    $ref: './logs.yaml#/paths/~1logs~1stacks~1{stack_id}'
+  /logs/containers/{container_id}:
+    $ref: './logs.yaml#/paths/~1logs~1containers~1{container_id}'
+  /logs/nodes/{node_id}:
+    $ref: './logs.yaml#/paths/~1logs~1nodes~1{node_id}'
+  /logs/search:
+    $ref: './logs.yaml#/paths/~1logs~1search'
+  /logs/audit:
+    $ref: './logs.yaml#/paths/~1logs~1audit'
+
+  # Notifications
+  /notifications:
+    $ref: './notify.yaml#/paths/~1notifications'
+  /notifications/{id}:
+    $ref: './notify.yaml#/paths/~1notifications~1{id}'
+  /notifications/{id}/silence:
+    $ref: './notify.yaml#/paths/~1notifications~1{id}~1silence'
+  /notifications/{id}/resolve:
+    $ref: './notify.yaml#/paths/~1notifications~1{id}~1resolve'
+  /notifications/{id}/read:
+    $ref: './notify.yaml#/paths/~1notifications~1{id}~1read'
+
+  # Stats
+  /stats/nodes/{node_id}:
+    $ref: './stats.yaml#/paths/~1stats~1nodes~1{node_id}'
+  /stats/stacks/{stack_id}:
+    $ref: './stats.yaml#/paths/~1stats~1stacks~1{stack_id}'
+  /stats/storage/{node_id}:
+    $ref: './stats.yaml#/paths/~1stats~1storage~1{node_id}'
+  /stats/query:
+    $ref: './stats.yaml#/paths/~1stats~1query'
+
+  # Storage
+  /storage/pools:
+    $ref: './store.yaml#/paths/~1storage~1pools'
+  /storage/pools/{node_id}/{pool}:
+    $ref: './store.yaml#/paths/~1storage~1pools~1{node_id}~1{pool}'
+  /storage/datasets:
+    $ref: './store.yaml#/paths/~1storage~1datasets'
+  /storage/datasets/{stack_id}:
+    $ref: './store.yaml#/paths/~1storage~1datasets~1{stack_id}'
+  /storage/datasets/{stack_id}/snapshots:
+    $ref: './store.yaml#/paths/~1storage~1datasets~1{stack_id}~1snapshots'
+  /storage/datasets/{stack_id}/snapshots/{name}:
+    $ref: './store.yaml#/paths/~1storage~1datasets~1{stack_id}~1snapshots~1{name}'
+  /storage/datasets/{stack_id}/snapshots/{name}/restore:
+    $ref: './store.yaml#/paths/~1storage~1datasets~1{stack_id}~1snapshots~1{name}~1restore'
+  /storage/replication:
+    $ref: './store.yaml#/paths/~1storage~1replication'
+  /storage/replication/{stack_id}/trigger:
+    $ref: './store.yaml#/paths/~1storage~1replication~1{stack_id}~1trigger'
+  /storage/faults:
+    $ref: './store.yaml#/paths/~1storage~1faults'

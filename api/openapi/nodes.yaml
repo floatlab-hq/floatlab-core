@@ -1,0 +1,283 @@
+openapi: 3.1.0
+info:
+  title: FloatLab Nodes API
+  version: 0.1.0
+
+components:
+  schemas:
+    NodeStatus:
+      type: string
+      enum: [online, offline, degraded, unknown]
+
+    NodeRole:
+      type: string
+      enum: [primary, secondary]
+
+    AddressType:
+      type: string
+      enum: [LAN-6, WAN-6, Overlay-6]
+      description: IPv6 address role. All addresses are native IPv6 (no SIIT/NAT64 in MVP — see DEV-002).
+
+    NodeAddress:
+      type: object
+      required: [type, address, interface]
+      properties:
+        type:
+          $ref: '#/components/schemas/AddressType'
+        address:
+          type: string
+          description: IPv6 address in CIDR notation.
+          example: "2001:db8::1/64"
+        interface:
+          type: string
+          example: "eth0"
+
+    Node:
+      type: object
+      required: [id, name, hostname, addresses, status, role, zfs_pool, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "node-alpha"
+        hostname:
+          type: string
+          example: "alpha.local"
+        addresses:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodeAddress'
+        status:
+          $ref: '#/components/schemas/NodeStatus'
+        role:
+          $ref: '#/components/schemas/NodeRole'
+        zfs_pool:
+          type: string
+          example: "floatlab"
+        os_version:
+          type: string
+          example: "Debian GNU/Linux 12 (bookworm)"
+        kernel_version:
+          type: string
+          example: "6.1.0-21-amd64"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    NodeCreate:
+      type: object
+      required: [name, hostname, zfs_pool]
+      properties:
+        name:
+          type: string
+        hostname:
+          type: string
+        addresses:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodeAddress'
+        role:
+          $ref: '#/components/schemas/NodeRole'
+          default: secondary
+        zfs_pool:
+          type: string
+
+    NodeUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        hostname:
+          type: string
+        addresses:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodeAddress'
+        role:
+          $ref: '#/components/schemas/NodeRole'
+        zfs_pool:
+          type: string
+
+    NodeHealth:
+      type: object
+      required: [status, latency_ms]
+      properties:
+        status:
+          type: string
+          enum: [reachable, unreachable, timeout]
+        latency_ms:
+          type: integer
+          description: Round-trip IPC ping latency in milliseconds.
+        last_seen:
+          type: string
+          format: date-time
+          nullable: true
+        raft_state:
+          type: string
+          enum: [Leader, Follower, Candidate, Shutdown]
+          nullable: true
+
+    Error:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: integer
+        message:
+          type: string
+        code:
+          type: string
+
+paths:
+  /nodes:
+    get:
+      summary: List all registered nodes
+      operationId: listNodes
+      tags: [nodes]
+      responses:
+        '200':
+          description: All registered nodes.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Node'
+    post:
+      summary: Register a new node
+      operationId: registerNode
+      tags: [nodes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeCreate'
+      responses:
+        '201':
+          description: Node registered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Node'
+        '409':
+          description: Node name or hostname already registered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /nodes/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get a node by ID
+      operationId: getNode
+      tags: [nodes]
+      responses:
+        '200':
+          description: Node detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Node'
+        '404':
+          description: Node not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      summary: Update a node
+      operationId: updateNode
+      tags: [nodes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeUpdate'
+      responses:
+        '200':
+          description: Node updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Node'
+    delete:
+      summary: Deregister a node
+      operationId: deleteNode
+      tags: [nodes]
+      description: Node must have no stacks assigned as primary or secondary.
+      responses:
+        '204':
+          description: Node deregistered.
+        '409':
+          description: Node has active stack assignments.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /nodes/{id}/health:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Check live health of a node via IPC ping
+      operationId: getNodeHealth
+      tags: [nodes]
+      responses:
+        '200':
+          description: Health status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeHealth'
+
+  /nodes/{id}/stacks:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: List stacks hosted on this node (primary or secondary)
+      operationId: getNodeStacks
+      tags: [nodes]
+      responses:
+        '200':
+          description: Stacks on this node.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    stack_id:
+                      type: string
+                      format: uuid
+                    stack_name:
+                      type: string
+                    role:
+                      type: string
+                      enum: [primary, secondary]
+                    state:
+                      type: string

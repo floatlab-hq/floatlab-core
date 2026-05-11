@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/floatlab/floatlab-core/pkg/docker"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
 	"go.uber.org/zap"
 )
@@ -14,12 +15,13 @@ import (
 // Dispatcher registers all IPC command handlers on the IPC server.
 // Each handler is a thin wrapper that shells out or calls a system API.
 type Dispatcher struct {
-	srv *ipc.Server
-	log *zap.Logger
+	srv    *ipc.Server
+	log    *zap.Logger
+	docker *docker.Client // nil if Docker daemon is unavailable at startup
 }
 
-func newDispatcher(srv *ipc.Server, log *zap.Logger) *Dispatcher {
-	return &Dispatcher{srv: srv, log: log}
+func newDispatcher(srv *ipc.Server, dc *docker.Client, log *zap.Logger) *Dispatcher {
+	return &Dispatcher{srv: srv, log: log, docker: dc}
 }
 
 func (d *Dispatcher) register() {
@@ -215,8 +217,21 @@ func (d *Dispatcher) dockerEvents(ctx context.Context, raw json.RawMessage) (any
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, err
 	}
-	// Sprint 2: wire up Docker event stream forwarding via goroutine.
-	return map[string]bool{"subscribed": p.Subscribe}, nil
+	if !p.Subscribe {
+		return map[string]bool{"subscribed": false}, nil
+	}
+	if d.docker == nil {
+		return nil, fmt.Errorf("docker client not available")
+	}
+	evCh := make(chan ipc.Event, 128)
+	go d.docker.StreamEvents(ctx, evCh, d.log)
+	go func() {
+		for ev := range evCh {
+			d.srv.Emit(ev.Name, json.RawMessage(ev.Payload))
+		}
+	}()
+	d.log.Info("docker event stream started")
+	return map[string]bool{"subscribed": true}, nil
 }
 
 func runShell(ctx context.Context, name string, args ...string) (string, error) {

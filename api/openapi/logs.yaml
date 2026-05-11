@@ -1,40 +1,319 @@
 openapi: 3.1.0
 info:
-  title: FloatLab Logs Service API
-  version: 1.0.0
-  description: API for retrieving and searching container and system logs.
-paths:
-  /logs/containers/{containerId}:
-    get:
-      summary: Get logs for a specific container
-      parameters:
-        - name: containerId
-          in: path
-          required: true
-          schema:
+  title: FloatLab Logs API
+  version: 0.1.0
+  description: |
+    Container and system log access via VictoriaLogs.
+    Streaming endpoints (follow=true) respond with text/event-stream (SSE).
+    Each SSE event carries a single JSON-encoded LogLine in its data field.
+
+components:
+  schemas:
+    LogLevel:
+      type: string
+      enum: [trace, debug, info, warn, error, fatal]
+
+    LogLine:
+      type: object
+      required: [ts, stream, msg]
+      properties:
+        ts:
+          type: string
+          format: date-time
+          description: Log timestamp (RFC 3339, nanosecond precision where available).
+        stream:
+          type: string
+          description: stdout or stderr.
+          enum: [stdout, stderr]
+        level:
+          $ref: '#/components/schemas/LogLevel'
+          nullable: true
+        msg:
+          type: string
+          description: Raw log line text.
+        labels:
+          type: object
+          additionalProperties:
             type: string
-        - name: follow
-          in: query
-          description: Whether to follow (stream) logs
-          schema:
-            type: boolean
+          description: VictoriaLogs stream labels (stack_id, container_id, service, node_id).
+
+    AuditEntry:
+      type: object
+      required: [id, actor, action, resource_type, resource_id, ts]
+      properties:
+        id:
+          type: string
+          format: uuid
+        actor:
+          type: string
+          description: Pangolin Remote-User value (email).
+          example: "operator@example.com"
+        action:
+          type: string
+          description: Verb + noun describing the operation.
+          example: "stack.failover.trigger"
+        resource_type:
+          type: string
+          example: "stack"
+        resource_id:
+          type: string
+          format: uuid
+        detail:
+          type: string
+          nullable: true
+          description: Optional JSON blob with before/after state or request body.
+        ts:
+          type: string
+          format: date-time
+
+    Error:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: integer
+        message:
+          type: string
+        code:
+          type: string
+
+paths:
+  /logs/stacks/{stack_id}:
+    parameters:
+      - name: stack_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get recent logs for all containers in a stack
+      operationId: getStackLogs
+      tags: [logs]
+      parameters:
         - name: tail
           in: query
-          description: Number of lines to return from the end of the logs
+          description: Number of lines to return from the end (default 200, max 5000).
           schema:
             type: integer
+            default: 200
+            maximum: 5000
+        - name: since
+          in: query
+          description: ISO 8601 timestamp — only return lines after this time.
+          schema:
+            type: string
+            format: date-time
+        - name: service
+          in: query
+          description: Filter to a specific Compose service name.
+          schema:
+            type: string
       responses:
         '200':
-          description: Container logs
+          description: Log lines for the stack.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LogLine'
+        '404':
+          description: Stack not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /logs/containers/{container_id}:
+    parameters:
+      - name: container_id
+        in: path
+        required: true
+        schema:
+          type: string
+          description: Docker container ID or name.
+    get:
+      summary: Get or stream logs for a single container
+      operationId: getContainerLogs
+      tags: [logs]
+      description: |
+        When follow=false (default): returns recent lines as JSON array.
+        When follow=true: upgrades to SSE (text/event-stream). Each event
+        carries a single JSON-encoded LogLine. The client MUST send
+        Accept: text/event-stream when requesting a live stream.
+        Connection is closed when the container stops.
+      parameters:
+        - name: follow
+          in: query
+          description: Stream logs in real time via SSE.
+          schema:
+            type: boolean
+            default: false
+        - name: tail
+          in: query
+          description: Seed the stream with this many historical lines before live events.
+          schema:
+            type: integer
+            default: 50
+            maximum: 1000
+        - name: since
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: |
+            Log lines (application/json) or live event stream (text/event-stream).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LogLine'
+            text/event-stream:
+              schema:
+                type: string
+                description: Newline-delimited SSE events, each data field is a JSON LogLine.
+        '404':
+          description: Container not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /logs/nodes/{node_id}:
+    parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get recent system logs from a node (journald / hostd daemon logs)
+      operationId: getNodeLogs
+      tags: [logs]
+      parameters:
+        - name: tail
+          in: query
+          schema:
+            type: integer
+            default: 200
+            maximum: 5000
+        - name: since
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: unit
+          in: query
+          description: systemd unit to filter by (e.g. "floatlab-hostd.service").
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Node log lines.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LogLine'
+        '404':
+          description: Node not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /logs/search:
     get:
-      summary: Search through logs
+      summary: Search logs using LogsQL
+      operationId: searchLogs
+      tags: [logs]
+      description: |
+        Passes the query directly to VictoriaLogs /select/logsql/query.
+        Results are returned newest-first unless _time asc is specified in the query.
       parameters:
         - name: query
           in: query
           required: true
+          description: LogsQL query string.
           schema:
             type: string
+            example: '_stream:{stack_id="abc"} level:error'
+        - name: start
+          in: query
+          description: Start of time range (ISO 8601 or relative like "1h").
+          schema:
+            type: string
+        - name: end
+          in: query
+          description: End of time range. Defaults to now.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Max results (default 500, max 5000).
+          schema:
+            type: integer
+            default: 500
+            maximum: 5000
       responses:
         '200':
-          description: Search results
+          description: Matching log lines.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LogLine'
+        '400':
+          description: Invalid LogsQL query.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /logs/audit:
+    get:
+      summary: Get the audit log
+      operationId: getAuditLog
+      tags: [logs]
+      parameters:
+        - name: actor
+          in: query
+          schema:
+            type: string
+        - name: action
+          in: query
+          description: Prefix match on action field (e.g. "stack." returns all stack events).
+          schema:
+            type: string
+        - name: resource_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: since
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+      responses:
+        '200':
+          description: Audit entries, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AuditEntry'

@@ -1,0 +1,214 @@
+openapi: 3.1.0
+info:
+  title: FloatLab Network API
+  version: 0.1.0
+  description: |
+    IPv6 prefix pool management and per-container address allocation.
+    Native IPv6 only — SIIT/NAT64 excluded from MVP (see DEV-002).
+
+components:
+  schemas:
+    PrefixPool:
+      type: object
+      required: [id, name, prefix, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "overlay-pool-1"
+        prefix:
+          type: string
+          description: IPv6 CIDR prefix from which addresses are allocated.
+          example: "fd00::/48"
+        stack_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: If set, this pool is dedicated to a specific stack.
+        total_addresses:
+          type: integer
+          format: int64
+        allocated_addresses:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+
+    PrefixPoolCreate:
+      type: object
+      required: [name, prefix]
+      properties:
+        name:
+          type: string
+        prefix:
+          type: string
+          description: IPv6 CIDR prefix.
+          example: "fd00::/48"
+        stack_id:
+          type: string
+          format: uuid
+          nullable: true
+
+    IpReservation:
+      type: object
+      required: [id, stack_id, service, address, prefix_pool, allocated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        stack_id:
+          type: string
+          format: uuid
+        service:
+          type: string
+          description: Docker Compose service name this address is assigned to.
+          example: "db"
+        address:
+          type: string
+          description: Allocated IPv6 address in CIDR notation.
+          example: "fd00::1/48"
+        prefix_pool:
+          type: string
+          format: uuid
+          description: ID of the pool this address was drawn from.
+        allocated_at:
+          type: string
+          format: date-time
+
+    IpReservationCreate:
+      type: object
+      required: [stack_id, service, prefix_pool]
+      properties:
+        stack_id:
+          type: string
+          format: uuid
+        service:
+          type: string
+        prefix_pool:
+          type: string
+          format: uuid
+        address:
+          type: string
+          nullable: true
+          description: Request a specific address. Omit for auto-allocation.
+
+    Error:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: integer
+        message:
+          type: string
+        code:
+          type: string
+
+paths:
+  /network/pools:
+    get:
+      summary: List all IPv6 prefix pools
+      operationId: listPrefixPools
+      tags: [network]
+      responses:
+        '200':
+          description: All prefix pools.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PrefixPool'
+    post:
+      summary: Create a prefix pool
+      operationId: createPrefixPool
+      tags: [network]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrefixPoolCreate'
+      responses:
+        '201':
+          description: Pool created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrefixPool'
+        '409':
+          description: Prefix overlaps with an existing pool.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /network/allocations:
+    get:
+      summary: List all IP reservations
+      operationId: listAllocations
+      tags: [network]
+      parameters:
+        - name: stack_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Filter by stack.
+      responses:
+        '200':
+          description: IP reservations.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/IpReservation'
+    post:
+      summary: Allocate an IPv6 address for a container service
+      operationId: createAllocation
+      tags: [network]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IpReservationCreate'
+      responses:
+        '201':
+          description: Address allocated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IpReservation'
+        '409':
+          description: Requested address already reserved, or pool exhausted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /network/allocations/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      summary: Release an IP reservation
+      operationId: deleteAllocation
+      tags: [network]
+      description: Releases the address back to the pool. Kernel routes must be withdrawn before calling this.
+      responses:
+        '204':
+          description: Reservation released.
+        '404':
+          description: Reservation not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'

@@ -1,0 +1,118 @@
+openapi: 3.1.0
+info:
+  title: FloatLab Health API
+  version: 0.1.0
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      required: [status, version, uptime_seconds]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, unavailable]
+        version:
+          type: string
+          example: "0.1.0"
+        uptime_seconds:
+          type: integer
+          format: int64
+
+    ReadinessStatus:
+      type: object
+      required: [ready, checks]
+      properties:
+        ready:
+          type: boolean
+        checks:
+          type: object
+          additionalProperties:
+            type: object
+            required: [ok]
+            properties:
+              ok:
+                type: boolean
+              error:
+                type: string
+                nullable: true
+          example:
+            rqlite: { ok: true }
+            raft: { ok: true }
+            hostd: { ok: false, error: "connection refused" }
+
+    RaftHealth:
+      type: object
+      required: [leader, state, peers, commit_index, last_log_index]
+      properties:
+        leader:
+          type: string
+          description: Raft address of the current leader.
+          example: "192.168.1.10:7000"
+        state:
+          type: string
+          enum: [Leader, Follower, Candidate, Shutdown]
+        peers:
+          type: array
+          items:
+            type: string
+          example: ["192.168.1.10:7000", "192.168.1.11:7000"]
+        commit_index:
+          type: integer
+          format: int64
+        last_log_index:
+          type: integer
+          format: int64
+        applied_index:
+          type: integer
+          format: int64
+
+paths:
+  /health:
+    get:
+      summary: Basic liveness check
+      operationId: getHealth
+      tags: [health]
+      description: Returns 200 as long as the process is running. No dependency checks.
+      responses:
+        '200':
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /health/ready:
+    get:
+      summary: Readiness check — all critical dependencies
+      operationId: getReadiness
+      tags: [health]
+      description: |
+        Returns 200 when rqlite, Raft, and at least one hostd connection are healthy.
+        Returns 503 if any critical dependency is unavailable.
+      responses:
+        '200':
+          description: All critical dependencies ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessStatus'
+        '503':
+          description: One or more critical dependencies unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessStatus'
+
+  /health/raft:
+    get:
+      summary: Raft consensus state
+      operationId: getRaftHealth
+      tags: [health]
+      responses:
+        '200':
+          description: Raft cluster state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RaftHealth'

@@ -1,0 +1,176 @@
+openapi: 3.1.0
+info:
+  title: FloatLab Failover API
+  version: 0.1.0
+
+components:
+  schemas:
+    FailoverStatus:
+      type: object
+      required: [stack_id, state, triggered_by, started_at]
+      properties:
+        stack_id:
+          type: string
+          format: uuid
+        state:
+          type: string
+          enum: [idle, running, complete, failed, aborted]
+        triggered_by:
+          type: string
+          enum: [manual, auto, operator]
+        current_step:
+          type: integer
+          description: 1–6. Null when idle or complete.
+          nullable: true
+        current_step_name:
+          type: string
+          nullable: true
+          example: "zfs-sync"
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        error:
+          type: string
+          nullable: true
+
+    FailoverLogEntry:
+      type: object
+      required: [step, name, state, started_at]
+      properties:
+        step:
+          type: integer
+          description: |
+            Step number in the 6-step failover sequence:
+            1=raft-quorum, 2=zfs-sync, 3=snapshot-promote, 4=ip-takeover, 5=compose-up, 6=raft-apply
+        name:
+          type: string
+          example: "ip-takeover"
+        state:
+          type: string
+          enum: [pending, running, complete, failed, skipped]
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        detail:
+          type: string
+          nullable: true
+          description: Human-readable outcome or error detail.
+
+    Error:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: integer
+        message:
+          type: string
+        code:
+          type: string
+
+paths:
+  /failover/status:
+    get:
+      summary: Get failover status across all stacks
+      operationId: listFailoverStatus
+      tags: [failover]
+      responses:
+        '200':
+          description: Current failover status for each stack that has one active or recent.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FailoverStatus'
+
+  /failover/{stack_id}/trigger:
+    parameters:
+      - name: stack_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Trigger manual failover for a stack
+      operationId: triggerStackFailover
+      tags: [failover]
+      description: |
+        Equivalent to POST /stacks/{id}/failover. Initiates the 6-step failover sequence.
+        Stack must be in RunningPrimary state.
+      responses:
+        '202':
+          description: Failover sequence initiated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FailoverStatus'
+        '409':
+          description: Stack not in RunningPrimary state or failover already in progress.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /failover/{stack_id}/abort:
+    parameters:
+      - name: stack_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Abort an in-progress failover
+      operationId: abortFailover
+      tags: [failover]
+      description: |
+        Only possible during step 1 (raft-quorum) or step 2 (zfs-sync). Once IP takeover
+        has begun (step 4), abort is not safe and will be rejected.
+      responses:
+        '202':
+          description: Abort accepted.
+        '409':
+          description: Failover has progressed past the point of safe abort.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /failover/{stack_id}/log:
+    parameters:
+      - name: stack_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get step-by-step log of the most recent failover sequence
+      operationId: getFailoverLog
+      tags: [failover]
+      responses:
+        '200':
+          description: Ordered list of failover steps with their outcomes.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FailoverLogEntry'
+        '404':
+          description: No failover history for this stack.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'

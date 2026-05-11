@@ -1,42 +1,295 @@
 openapi: 3.1.0
 info:
-  title: FloatLab Stats Service API
-  version: 1.0.0
-  description: Service for querying node and container statistics from VictoriaMetrics.
+  title: FloatLab Stats API
+  version: 0.1.0
+  description: |
+    Metrics proxy over VictoriaMetrics. All time-series are stored in VM and
+    this API provides scoped, pre-labeled queries for the UI.
+    Raw PromQL/MetricsQL access is available via /stats/query.
+
+components:
+  schemas:
+    MetricRange:
+      type: string
+      enum: ["1h", "6h", "24h", "7d"]
+      description: Pre-defined time range for metric queries. Defaults to 1h.
+      default: "1h"
+
+    MetricPoint:
+      type: object
+      required: [ts, value]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Unix timestamp in milliseconds.
+        value:
+          type: number
+          format: double
+
+    MetricSeries:
+      type: object
+      required: [name, labels, points]
+      properties:
+        name:
+          type: string
+          description: Metric name.
+          example: "cpu_usage_percent"
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+          description: Label set from VictoriaMetrics.
+        points:
+          type: array
+          items:
+            $ref: '#/components/schemas/MetricPoint'
+
+    NodeStats:
+      type: object
+      required: [node_id, range, series]
+      properties:
+        node_id:
+          type: string
+          format: uuid
+        range:
+          $ref: '#/components/schemas/MetricRange'
+        series:
+          type: object
+          description: Named metric series for this node.
+          properties:
+            cpu_usage_percent:
+              $ref: '#/components/schemas/MetricSeries'
+            memory_used_bytes:
+              $ref: '#/components/schemas/MetricSeries'
+            memory_total_bytes:
+              $ref: '#/components/schemas/MetricSeries'
+            disk_read_bytes_per_sec:
+              $ref: '#/components/schemas/MetricSeries'
+            disk_write_bytes_per_sec:
+              $ref: '#/components/schemas/MetricSeries'
+            net_rx_bytes_per_sec:
+              $ref: '#/components/schemas/MetricSeries'
+            net_tx_bytes_per_sec:
+              $ref: '#/components/schemas/MetricSeries'
+            load_1m:
+              $ref: '#/components/schemas/MetricSeries'
+            load_5m:
+              $ref: '#/components/schemas/MetricSeries'
+
+    StackStats:
+      type: object
+      required: [stack_id, range, series]
+      properties:
+        stack_id:
+          type: string
+          format: uuid
+        range:
+          $ref: '#/components/schemas/MetricRange'
+        series:
+          type: object
+          description: Named metric series aggregated across all containers in the stack.
+          properties:
+            cpu_usage_percent:
+              $ref: '#/components/schemas/MetricSeries'
+            memory_used_bytes:
+              $ref: '#/components/schemas/MetricSeries'
+            memory_limit_bytes:
+              $ref: '#/components/schemas/MetricSeries'
+            net_rx_bytes_per_sec:
+              $ref: '#/components/schemas/MetricSeries'
+            net_tx_bytes_per_sec:
+              $ref: '#/components/schemas/MetricSeries'
+            block_read_bytes_per_sec:
+              $ref: '#/components/schemas/MetricSeries'
+            block_write_bytes_per_sec:
+              $ref: '#/components/schemas/MetricSeries'
+
+    StorageStats:
+      type: object
+      required: [node_id, range, series]
+      properties:
+        node_id:
+          type: string
+          format: uuid
+        range:
+          $ref: '#/components/schemas/MetricRange'
+        series:
+          type: object
+          properties:
+            zfs_pool_alloc_bytes:
+              $ref: '#/components/schemas/MetricSeries'
+            zfs_pool_free_bytes:
+              $ref: '#/components/schemas/MetricSeries'
+            zfs_pool_size_bytes:
+              $ref: '#/components/schemas/MetricSeries'
+            zfs_arc_size_bytes:
+              $ref: '#/components/schemas/MetricSeries'
+            zfs_arc_hit_ratio:
+              $ref: '#/components/schemas/MetricSeries'
+            repl_bytes_transferred:
+              $ref: '#/components/schemas/MetricSeries'
+            repl_lag_seconds:
+              $ref: '#/components/schemas/MetricSeries'
+
+    QueryResult:
+      type: object
+      required: [query, series]
+      properties:
+        query:
+          type: string
+        series:
+          type: array
+          items:
+            $ref: '#/components/schemas/MetricSeries'
+
+    Error:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: integer
+        message:
+          type: string
+        code:
+          type: string
+
 paths:
-  /stats/nodes/{nodeId}:
+  /stats/nodes/{node_id}:
+    parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
     get:
-      summary: Get stats for a specific node (CPU, RAM, Disk, IO)
+      summary: Get time-series metrics for a node
+      operationId: getNodeStats
+      tags: [stats]
       parameters:
-        - name: nodeId
-          in: path
-          required: true
+        - name: range
+          in: query
           schema:
-            type: string
+            $ref: '#/components/schemas/MetricRange'
       responses:
         '200':
-          description: Node statistics
-  /stats/containers/{containerId}:
+          description: Node metrics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeStats'
+        '404':
+          description: Node not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /stats/stacks/{stack_id}:
+    parameters:
+      - name: stack_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
     get:
-      summary: Get stats for a specific container (Latency, IO, Resource Usage)
+      summary: Get time-series metrics for a stack (aggregated across containers)
+      operationId: getStackStats
+      tags: [stats]
       parameters:
-        - name: containerId
-          in: path
-          required: true
+        - name: range
+          in: query
           schema:
-            type: string
+            $ref: '#/components/schemas/MetricRange'
       responses:
         '200':
-          description: Container statistics
+          description: Stack metrics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StackStats'
+        '404':
+          description: Stack not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /stats/storage/{node_id}:
+    parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get ZFS and replication metrics for a node
+      operationId: getStorageStats
+      tags: [stats]
+      parameters:
+        - name: range
+          in: query
+          schema:
+            $ref: '#/components/schemas/MetricRange'
+      responses:
+        '200':
+          description: Storage metrics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageStats'
+        '404':
+          description: Node not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /stats/query:
     get:
-      summary: Direct query to VictoriaMetrics
+      summary: Raw MetricsQL query against VictoriaMetrics
+      operationId: queryMetrics
+      tags: [stats]
+      description: |
+        Passes the query to VictoriaMetrics /api/v1/query_range and returns
+        the result as MetricSeries[]. Useful for custom dashboard panels.
       parameters:
         - name: query
           in: query
           required: true
+          description: MetricsQL expression.
           schema:
             type: string
+            example: 'rate(container_cpu_usage_seconds_total{stack_id="abc"}[5m])'
+        - name: start
+          in: query
+          description: Start of range (Unix timestamp or ISO 8601).
+          schema:
+            type: string
+        - name: end
+          in: query
+          description: End of range. Defaults to now.
+          schema:
+            type: string
+        - name: step
+          in: query
+          description: Query resolution step (Prometheus duration string, e.g. "30s").
+          schema:
+            type: string
+            default: "30s"
       responses:
         '200':
-          description: Query results
+          description: Query result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryResult'
+        '400':
+          description: Invalid MetricsQL query.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
