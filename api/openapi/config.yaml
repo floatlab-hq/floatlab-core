@@ -1,0 +1,47 @@
+openapi: 3.1.0
+info:
+  title: FloatLab Config Service API
+  version: 0.0.1
+  description: Management of FloatLab configuration including networks, users, stacks, nodes, and alert rules.
+paths:
+  /networks:
+    get:
+      summary: List all networks
+      responses:
+        '200':
+          description: A list of networks
+    post:
+      summary: Create a new network
+      responses:
+        '201':
+          description: Network created
+  /users:
+    get:
+      summary: List all users
+      responses:
+        '200':
+          description: A list of users
+  /stacks:
+    get:
+      summary: List all container stacks
+      responses:
+        '200':
+          description: A list of stacks
+  /nodes:
+    get:
+      summary: List all nodes in the cluster
+      responses:
+        '200':
+          description: A list of nodes
+  /alert-rules:
+    get:
+      summary: List all alert rules
+      responses:
+        '200':
+          description: A list of alert rules
+  /alerts:
+    get:
+      summary: List active alerts
+      responses:
+        '200':
+          description: A list of alerts

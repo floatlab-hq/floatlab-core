@@ -1,0 +1,27 @@
+openapi: 3.1.0
+info:
+  title: FloatLab Core API
+  version: 0.0.1
+  description: Unified API for all FloatLab Core services - Initial Draft - Incomplete
+servers:
+  - url: http://floatlab-node:8080/api/v1
+paths:
+  # Config Service
+  /config:
+    $ref: './config.yaml'
+
+  # Logs Service
+  /logs:
+    $ref: './logs.yaml'
+
+  # Notify Service
+  /notify:
+    $ref: './notify.yaml'
+
+  # Stats Service
+  /stats:
+    $ref: './stats.yaml'
+
+  # Store Service
+  /storage:
+    $ref: './store.yaml'

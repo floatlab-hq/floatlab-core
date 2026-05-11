@@ -1,0 +1,40 @@
+openapi: 3.1.0
+info:
+  title: FloatLab Logs Service API
+  version: 1.0.0
+  description: API for retrieving and searching container and system logs.
+paths:
+  /logs/containers/{containerId}:
+    get:
+      summary: Get logs for a specific container
+      parameters:
+        - name: containerId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: follow
+          in: query
+          description: Whether to follow (stream) logs
+          schema:
+            type: boolean
+        - name: tail
+          in: query
+          description: Number of lines to return from the end of the logs
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Container logs
+  /logs/search:
+    get:
+      summary: Search through logs
+      parameters:
+        - name: query
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Search results

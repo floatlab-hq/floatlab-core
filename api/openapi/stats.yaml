@@ -1,0 +1,42 @@
+openapi: 3.1.0
+info:
+  title: FloatLab Stats Service API
+  version: 1.0.0
+  description: Service for querying node and container statistics from VictoriaMetrics.
+paths:
+  /stats/nodes/{nodeId}:
+    get:
+      summary: Get stats for a specific node (CPU, RAM, Disk, IO)
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Node statistics
+  /stats/containers/{containerId}:
+    get:
+      summary: Get stats for a specific container (Latency, IO, Resource Usage)
+      parameters:
+        - name: containerId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Container statistics
+  /stats/query:
+    get:
+      summary: Direct query to VictoriaMetrics
+      parameters:
+        - name: query
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Query results

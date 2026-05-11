@@ -1,0 +1,52 @@
+openapi: 3.1.0
+info:
+  title: FloatLab Store Service API
+  version: 1.0.0
+  description: ZFS Storage and Replication Management API.
+paths:
+  /storage/pools:
+    get:
+      summary: List all ZFS storage pools
+      responses:
+        '200':
+          description: A list of storage pools
+  /storage/datasets:
+    get:
+      summary: List all ZFS datasets
+      responses:
+        '200':
+          description: A list of datasets
+    post:
+      summary: Create a new ZFS dataset for a container stack or volume
+      responses:
+        '201':
+          description: Dataset created
+  /storage/datasets/{datasetPath}/snapshots:
+    get:
+      summary: List snapshots for a specific dataset
+      parameters:
+        - name: datasetPath
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: A list of snapshots
+    post:
+      summary: Create an ad-hoc snapshot
+      responses:
+        '201':
+          description: Snapshot created
+  /storage/replication/status:
+    get:
+      summary: Get the status of all replication jobs
+      responses:
+        '200':
+          description: Replication status
+  /storage/faults:
+    get:
+      summary: Get current ZFS fault conditions
+      responses:
+        '200':
+          description: List of ZFS faults

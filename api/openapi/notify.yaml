@@ -1,0 +1,41 @@
+openapi: 3.1.0
+info:
+  title: FloatLab Notification Service API
+  version: 1.0.0
+  description: Service for handling persistent and one-shot user notifications.
+paths:
+  /notifications:
+    get:
+      summary: List notifications
+      responses:
+        '200':
+          description: A list of notifications
+    post:
+      summary: Create a notification
+      responses:
+        '201':
+          description: Notification created
+  /notifications/{notificationId}/silence:
+    post:
+      summary: Temporarily suppress a notification
+      parameters:
+        - name: notificationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Notification silenced
+  /notifications/{notificationId}/resolve:
+    post:
+      summary: Mark a persistent notification as resolved
+      parameters:
+        - name: notificationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Notification resolved
