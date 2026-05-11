@@ -113,6 +113,24 @@ type DockerEventsPayload struct {
 	Subscribe bool `json:"subscribe"`
 }
 
+type DockerListPayload struct {
+	StackID string `json:"stack_id"`
+}
+
+type ContainerInfo struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Image   string `json:"image"`
+	State   string `json:"state"`
+	Health  string `json:"health"`
+	Service string `json:"service"`
+	StackID string `json:"stack_id"`
+}
+
+type DockerListResult struct {
+	Containers []ContainerInfo `json:"containers"`
+}
+
 // Event payloads
 
 type ContainerStateEvent struct {

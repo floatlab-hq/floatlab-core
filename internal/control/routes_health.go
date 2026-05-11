@@ -116,11 +116,6 @@ func (s *Server) handleNodeStacks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// Stub route registrations for domains implemented in Sprint 2+
-func registerStackRoutes(r chi.Router, s *Server) {
-	r.Get("/stacks", s.handleListStacks)
-	r.Get("/stacks/{id}", s.handleGetStack)
-}
 func registerStorageRoutes(r chi.Router, s *Server)  { r.Get("/storage/pools", stub([]interface{}{})) }
 func registerFailoverRoutes(r chi.Router, s *Server) {
 	r.Get("/failover/status", stub(map[string]string{"status": "none"}))
@@ -135,25 +130,6 @@ func stub(v interface{}) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, v)
 	}
-}
-
-func (s *Server) handleListStacks(w http.ResponseWriter, r *http.Request) {
-	stacks, err := s.store.ListStacks(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, stacks)
-}
-
-func (s *Server) handleGetStack(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	st, err := s.store.GetStack(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, st)
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {

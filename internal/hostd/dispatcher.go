@@ -41,6 +41,7 @@ func (d *Dispatcher) register() {
 	d.srv.Handle("net.route.del", d.netRouteDel)
 	d.srv.Handle("sys.info", d.sysInfo)
 	d.srv.Handle("sys.docker.events", d.dockerEvents)
+	d.srv.Handle("docker.list", d.dockerList)
 }
 
 func (d *Dispatcher) composeUp(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -197,6 +198,33 @@ func (d *Dispatcher) netRouteDel(ctx context.Context, raw json.RawMessage) (any,
 	}
 	_, err := runShell(ctx, "ip", "-6", "route", "del", p.Prefix)
 	return map[string]string{"prefix": p.Prefix}, err
+}
+
+func (d *Dispatcher) dockerList(ctx context.Context, raw json.RawMessage) (any, error) {
+	var p ipc.DockerListPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, err
+	}
+	if d.docker == nil {
+		return nil, fmt.Errorf("docker client not available")
+	}
+	summaries, err := d.docker.ListByStack(ctx, p.StackID)
+	if err != nil {
+		return nil, fmt.Errorf("docker.list: %w", err)
+	}
+	result := ipc.DockerListResult{Containers: make([]ipc.ContainerInfo, 0, len(summaries))}
+	for _, s := range summaries {
+		result.Containers = append(result.Containers, ipc.ContainerInfo{
+			ID:      s.ID,
+			Name:    s.Name,
+			Image:   s.Image,
+			State:   s.State,
+			Health:  s.Health,
+			Service: s.Service,
+			StackID: s.StackID,
+		})
+	}
+	return result, nil
 }
 
 func (d *Dispatcher) sysInfo(ctx context.Context, _ json.RawMessage) (any, error) {

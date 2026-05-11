@@ -13,15 +13,17 @@ import (
 	"github.com/floatlab/floatlab-core/pkg/config"
 	"github.com/floatlab/floatlab-core/pkg/hostclient"
 	floatraft "github.com/floatlab/floatlab-core/pkg/raft"
+	"github.com/floatlab/floatlab-core/pkg/run"
 )
 
 type Server struct {
-	cfg     *Config
-	router  *chi.Mux
-	log     *zap.Logger
-	store   *config.Store
-	raft    *floatraft.Node
-	hosts   *hostclient.Pool
+	cfg    *Config
+	router *chi.Mux
+	log    *zap.Logger
+	store  *config.Store
+	raft   *floatraft.Node
+	hosts  *hostclient.Pool
+	sm     run.StateMachine
 }
 
 type Config struct {
@@ -37,6 +39,7 @@ func NewServer(cfg *Config, store *config.Store, raftNode *floatraft.Node, hosts
 		store: store,
 		raft:  raftNode,
 		hosts: hosts,
+		sm:    run.New(),
 	}
 	s.router = s.buildRouter()
 	return s

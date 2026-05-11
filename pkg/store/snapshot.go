@@ -1,7 +1,9 @@
 package store
 
 import (
+	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -62,4 +64,32 @@ func DatasetPath(pool, stackName string) string {
 
 func VolumeDatasetPath(pool, stackName, service, volume string) string {
 	return fmt.Sprintf("%s/%s/%s/%s", pool, stackName, service, volume)
+}
+
+// ApplyRetention deletes scheduled snapshots of snapType beyond the keep limit.
+// snapType must be "hourly", "daily", "weekly", or "monthly".
+// Snapshots are sorted descending (lexicographic == chronological for this date format)
+// so the newest `keep` snapshots are preserved and the rest are destroyed.
+func ApplyRetention(ctx context.Context, zfs ZFSStore, dataset, snapType string, keep int) error {
+	snaps, err := zfs.SnapshotList(ctx, dataset)
+	if err != nil {
+		return fmt.Errorf("store: retention %s %s: list: %w", dataset, snapType, err)
+	}
+	prefix := PrefixScheduled + "-"
+	suffix := "-" + snapType
+	var matching []SnapshotInfo
+	for _, s := range snaps {
+		if strings.HasPrefix(s.Name, prefix) && strings.HasSuffix(s.Name, suffix) {
+			matching = append(matching, s)
+		}
+	}
+	sort.Slice(matching, func(i, j int) bool {
+		return matching[i].Name > matching[j].Name
+	})
+	for i := keep; i < len(matching); i++ {
+		if err := zfs.SnapshotDestroy(ctx, matching[i].Dataset, matching[i].Name); err != nil {
+			return fmt.Errorf("store: retention cleanup %s@%s: %w", matching[i].Dataset, matching[i].Name, err)
+		}
+	}
+	return nil
 }
