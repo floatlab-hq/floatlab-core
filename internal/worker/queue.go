@@ -5,8 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 	"time"
 
+	"github.com/floatlab/floatlab-core/pkg/config"
+	"github.com/floatlab/floatlab-core/pkg/hostclient"
+	"github.com/floatlab/floatlab-core/pkg/ipc"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
 	"github.com/floatlab/floatlab-core/pkg/store"
 	"go.uber.org/zap"
@@ -15,29 +20,28 @@ import (
 const (
 	pollInterval  = 5 * time.Second
 	maxAttempts   = 5
-	backoffFactor = 60 // seconds; attempt N waits N*backoffFactor seconds
+	backoffFactor = 60 // attempt N waits N*backoffFactor seconds
 )
 
-// Handler processes a task by type. It receives the raw JSON payload and
-// returns an error to mark the task failed (retryable), or nil on success.
+// Handler processes a single task payload, returning an error to trigger retry.
 type Handler func(ctx context.Context, payload json.RawMessage) error
 
-// Worker polls the rqlite tasks table and dispatches tasks to registered handlers.
-// Tasks are claimed with a hostname lock to prevent double execution in a multi-node
-// control-plane deployment. Exponential backoff delays retries for failing tasks.
+// Worker polls the rqlite tasks table and dispatches tasks via IPC to hostd.
 type Worker struct {
 	db       *rqlite.Client
-	zfs      store.ZFSStore
+	store    *config.Store
+	pool     *hostclient.Pool
 	hostname string
 	handlers map[string]Handler
 	log      *zap.Logger
 }
 
-func New(db *rqlite.Client, zfs store.ZFSStore, log *zap.Logger) *Worker {
+func New(db *rqlite.Client, cfgStore *config.Store, pool *hostclient.Pool, log *zap.Logger) *Worker {
 	h, _ := os.Hostname()
 	w := &Worker{
 		db:       db,
-		zfs:      zfs,
+		store:    cfgStore,
+		pool:     pool,
 		hostname: h,
 		handlers: make(map[string]Handler),
 		log:      log,
@@ -68,10 +72,7 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 }
 
-// poll claims and executes up to one pending task per call.
 func (w *Worker) poll(ctx context.Context) error {
-	// Claim a pending task that is either on its first attempt or past its backoff window.
-	// Backoff window: attempts * backoffFactor seconds since last update.
 	claimSQL := `
 		UPDATE tasks
 		SET state = 'running', locked_by = ?, updated_at = datetime('now')
@@ -117,8 +118,7 @@ func (w *Worker) poll(ctx context.Context) error {
 		return nil
 	}
 
-	execErr := handler(ctx, json.RawMessage(payloadStr))
-	if execErr != nil {
+	if execErr := handler(ctx, json.RawMessage(payloadStr)); execErr != nil {
 		w.log.Error("worker: task failed",
 			zap.String("id", taskID),
 			zap.String("type", taskType),
@@ -146,7 +146,7 @@ func (w *Worker) failTask(ctx context.Context, id, errMsg string) {
 func (w *Worker) handleSnapshotCreate(ctx context.Context, raw json.RawMessage) error {
 	var p SnapshotCreatePayload
 	if err := json.Unmarshal(raw, &p); err != nil {
-		return fmt.Errorf("snapshot.create: parse payload: %w", err)
+		return fmt.Errorf("snapshot.create: parse: %w", err)
 	}
 	var name string
 	if p.SnapType == "user" {
@@ -154,11 +154,14 @@ func (w *Worker) handleSnapshotCreate(ctx context.Context, raw json.RawMessage) 
 	} else {
 		name = store.ScheduledSnapshotName(p.SnapType)
 	}
-	if err := w.zfs.SnapshotCreate(ctx, p.Dataset, name); err != nil {
+	if _, err := w.pool.Execute(ctx, p.NodeID, "fs.snapshot.create", ipc.SnapshotCreatePayload{
+		Dataset: p.Dataset,
+		Name:    name,
+	}); err != nil {
 		return fmt.Errorf("snapshot.create %s: %w", p.Dataset, err)
 	}
 	if p.Keep > 0 {
-		if err := store.ApplyRetention(ctx, w.zfs, p.Dataset, p.SnapType, p.Keep); err != nil {
+		if err := w.applyRetentionViaIPC(ctx, p.NodeID, p.Dataset, p.SnapType, p.Keep); err != nil {
 			w.log.Warn("worker: retention cleanup failed", zap.String("dataset", p.Dataset), zap.Error(err))
 		}
 	}
@@ -168,23 +171,61 @@ func (w *Worker) handleSnapshotCreate(ctx context.Context, raw json.RawMessage) 
 func (w *Worker) handleSnapshotDelete(ctx context.Context, raw json.RawMessage) error {
 	var p SnapshotDeletePayload
 	if err := json.Unmarshal(raw, &p); err != nil {
-		return fmt.Errorf("snapshot.delete: parse payload: %w", err)
+		return fmt.Errorf("snapshot.delete: parse: %w", err)
 	}
-	return w.zfs.SnapshotDestroy(ctx, p.Dataset, p.Snapshot)
+	_, err := w.pool.Execute(ctx, p.NodeID, "fs.snapshot.destroy", ipc.SnapshotDestroyPayload{
+		Dataset: p.Dataset,
+		Name:    p.Snapshot,
+	})
+	return err
 }
 
 func (w *Worker) handleReplTrigger(ctx context.Context, raw json.RawMessage) error {
 	var p ReplTriggerPayload
 	if err := json.Unmarshal(raw, &p); err != nil {
-		return fmt.Errorf("repl.trigger: parse payload: %w", err)
-	}
-	newSnap, baseSnap, err := store.PlanReplication(ctx, w.zfs, p.Dataset)
-	if err != nil {
-		return err
+		return fmt.Errorf("repl.trigger: parse: %w", err)
 	}
 	jobID := fmt.Sprintf("repl-%s-%d", p.StackID, time.Now().UnixMilli())
-	_, err = store.SendReplication(ctx, jobID, p.Dataset, newSnap, baseSnap, p.DestHost, p.DestPort)
+	_, err := w.pool.Execute(ctx, p.NodeID, "fs.repl.send", ipc.ReplSendPayload{
+		Dataset:  p.Dataset,
+		DestHost: p.DestHost,
+		DestPort: p.DestPort,
+		JobID:    jobID,
+	})
 	return err
+}
+
+// applyRetentionViaIPC lists snapshots of the given type and destroys those
+// beyond the keep limit, using IPC calls to the target node.
+func (w *Worker) applyRetentionViaIPC(ctx context.Context, nodeID, dataset, snapType string, keep int) error {
+	raw, err := w.pool.Execute(ctx, nodeID, "fs.snapshot.list", ipc.SnapshotListPayload{Dataset: dataset})
+	if err != nil {
+		return fmt.Errorf("retention list: %w", err)
+	}
+	var result ipc.SnapshotListResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return fmt.Errorf("retention parse: %w", err)
+	}
+
+	prefix := store.PrefixScheduled + "-"
+	suffix := "-" + snapType
+	var matching []ipc.SnapshotInfoResult
+	for _, s := range result.Snapshots {
+		if strings.HasPrefix(s.Name, prefix) && strings.HasSuffix(s.Name, suffix) {
+			matching = append(matching, s)
+		}
+	}
+	sort.Slice(matching, func(i, j int) bool { return matching[i].Name > matching[j].Name })
+
+	for i := keep; i < len(matching); i++ {
+		if _, err := w.pool.Execute(ctx, nodeID, "fs.snapshot.destroy", ipc.SnapshotDestroyPayload{
+			Dataset: matching[i].Dataset,
+			Name:    matching[i].Name,
+		}); err != nil {
+			return fmt.Errorf("retention destroy %s@%s: %w", matching[i].Dataset, matching[i].Name, err)
+		}
+	}
+	return nil
 }
 
 // EnqueueTask inserts a new pending task into the rqlite tasks table.

@@ -78,6 +78,7 @@ func scheduleTick(ctx context.Context, orch *Orchestrator, db *rqlite.Client, no
 			taskID := uuid.New().String()
 			payload := worker.SnapshotCreatePayload{
 				Dataset:  stack.ZFSDataset,
+				NodeID:   stack.PrimaryNodeID,
 				SnapType: s.name,
 				Keep:     s.keep,
 			}

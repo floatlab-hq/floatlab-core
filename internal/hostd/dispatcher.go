@@ -9,6 +9,7 @@ import (
 
 	"github.com/floatlab/floatlab-core/pkg/docker"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
+	"github.com/floatlab/floatlab-core/pkg/store"
 	"go.uber.org/zap"
 )
 
@@ -18,10 +19,11 @@ type Dispatcher struct {
 	srv    *ipc.Server
 	log    *zap.Logger
 	docker *docker.Client // nil if Docker daemon is unavailable at startup
+	zfs    store.ZFSStore
 }
 
 func newDispatcher(srv *ipc.Server, dc *docker.Client, log *zap.Logger) *Dispatcher {
-	return &Dispatcher{srv: srv, log: log, docker: dc}
+	return &Dispatcher{srv: srv, log: log, docker: dc, zfs: store.New()}
 }
 
 func (d *Dispatcher) register() {
@@ -42,6 +44,10 @@ func (d *Dispatcher) register() {
 	d.srv.Handle("sys.info", d.sysInfo)
 	d.srv.Handle("sys.docker.events", d.dockerEvents)
 	d.srv.Handle("docker.list", d.dockerList)
+	d.srv.Handle("fs.pool.list", d.poolList)
+	d.srv.Handle("fs.pool.health", d.poolHealth)
+	d.srv.Handle("fs.snapshot.list", d.snapshotList)
+	d.srv.Handle("fs.dataset.list", d.datasetList)
 }
 
 func (d *Dispatcher) composeUp(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -260,6 +266,87 @@ func (d *Dispatcher) dockerEvents(ctx context.Context, raw json.RawMessage) (any
 	}()
 	d.log.Info("docker event stream started")
 	return map[string]bool{"subscribed": true}, nil
+}
+
+func (d *Dispatcher) poolList(ctx context.Context, _ json.RawMessage) (any, error) {
+	pools, err := d.zfs.PoolList(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("fs.pool.list: %w", err)
+	}
+	result := ipc.PoolListResult{Pools: make([]ipc.PoolSummaryResult, 0, len(pools))}
+	for _, p := range pools {
+		result.Pools = append(result.Pools, ipc.PoolSummaryResult{
+			Name:      p.Name,
+			Health:    p.Health,
+			Used:      p.Used,
+			Available: p.Available,
+		})
+	}
+	return result, nil
+}
+
+func (d *Dispatcher) poolHealth(ctx context.Context, raw json.RawMessage) (any, error) {
+	var p ipc.PoolHealthPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, err
+	}
+	status, err := d.zfs.PoolHealth(ctx, p.Pool)
+	if err != nil {
+		return nil, fmt.Errorf("fs.pool.health: %w", err)
+	}
+	result := ipc.PoolHealthResult{
+		Name:   status.Name,
+		Health: status.Health,
+		Errors: status.Errors,
+		VDevs:  make([]ipc.PoolVDevInfo, 0, len(status.VDevs)),
+	}
+	for _, v := range status.VDevs {
+		result.VDevs = append(result.VDevs, ipc.PoolVDevInfo{Name: v.Name, State: v.State})
+	}
+	return result, nil
+}
+
+func (d *Dispatcher) snapshotList(ctx context.Context, raw json.RawMessage) (any, error) {
+	var p ipc.SnapshotListPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, err
+	}
+	snaps, err := d.zfs.SnapshotList(ctx, p.Dataset)
+	if err != nil {
+		return nil, fmt.Errorf("fs.snapshot.list: %w", err)
+	}
+	result := ipc.SnapshotListResult{Snapshots: make([]ipc.SnapshotInfoResult, 0, len(snaps))}
+	for _, s := range snaps {
+		result.Snapshots = append(result.Snapshots, ipc.SnapshotInfoResult{
+			Name:      s.Name,
+			Dataset:   s.Dataset,
+			Used:      s.Used,
+			CreatedAt: s.CreatedAt,
+		})
+	}
+	return result, nil
+}
+
+func (d *Dispatcher) datasetList(ctx context.Context, raw json.RawMessage) (any, error) {
+	var p ipc.DatasetListPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, err
+	}
+	datasets, err := d.zfs.DatasetList(ctx, p.Parent)
+	if err != nil {
+		return nil, fmt.Errorf("fs.dataset.list: %w", err)
+	}
+	result := ipc.DatasetListResult{Datasets: make([]ipc.DatasetInfoResult, 0, len(datasets))}
+	for _, ds := range datasets {
+		result.Datasets = append(result.Datasets, ipc.DatasetInfoResult{
+			Name:       ds.Name,
+			Used:       ds.Used,
+			Available:  ds.Available,
+			Quota:      ds.Quota,
+			Mountpoint: ds.Mountpoint,
+		})
+	}
+	return result, nil
 }
 
 func runShell(ctx context.Context, name string, args ...string) (string, error) {

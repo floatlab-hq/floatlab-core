@@ -86,6 +86,7 @@ type ReplSendPayload struct {
 	BaseSnapshot string `json:"base_snapshot,omitempty"`
 	DestHost     string `json:"dest_host"`
 	DestPort     int    `json:"dest_port"`
+	JobID        string `json:"job_id,omitempty"`
 }
 
 type ReplRecvPayload struct {
@@ -176,4 +177,64 @@ type SysInfoResult struct {
 	KernelVersion string   `json:"kernel_version"`
 	ZFSPools      []string `json:"zfs_pools"`
 	DockerVersion string   `json:"docker_version"`
+}
+
+// ZFS list result types — used by fs.pool.list, fs.pool.health, fs.snapshot.list, fs.dataset.list
+
+type PoolSummaryResult struct {
+	Name      string `json:"name"`
+	Health    string `json:"health"`
+	Used      int64  `json:"used"`
+	Available int64  `json:"available"`
+}
+
+type PoolListResult struct {
+	Pools []PoolSummaryResult `json:"pools"`
+}
+
+type PoolHealthPayload struct {
+	Pool string `json:"pool"`
+}
+
+type PoolVDevInfo struct {
+	Name  string `json:"name"`
+	State string `json:"state"`
+}
+
+type PoolHealthResult struct {
+	Name   string         `json:"name"`
+	Health string         `json:"health"`
+	VDevs  []PoolVDevInfo `json:"vdevs"`
+	Errors string         `json:"errors"`
+}
+
+type SnapshotListPayload struct {
+	Dataset string `json:"dataset"`
+}
+
+type SnapshotInfoResult struct {
+	Name      string `json:"name"`
+	Dataset   string `json:"dataset"`
+	Used      int64  `json:"used"`
+	CreatedAt string `json:"created_at"`
+}
+
+type SnapshotListResult struct {
+	Snapshots []SnapshotInfoResult `json:"snapshots"`
+}
+
+type DatasetListPayload struct {
+	Parent string `json:"parent"`
+}
+
+type DatasetInfoResult struct {
+	Name       string `json:"name"`
+	Used       int64  `json:"used"`
+	Available  int64  `json:"available"`
+	Quota      int64  `json:"quota"`
+	Mountpoint string `json:"mountpoint"`
+}
+
+type DatasetListResult struct {
+	Datasets []DatasetInfoResult `json:"datasets"`
 }

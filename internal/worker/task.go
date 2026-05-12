@@ -9,24 +9,27 @@ const (
 	TaskReplTrigger    = "repl.trigger"
 )
 
-// SnapshotCreatePayload is the JSON body stored in tasks.payload for snapshot.create.
+// SnapshotCreatePayload is stored in tasks.payload for snapshot.create tasks.
 type SnapshotCreatePayload struct {
 	Dataset  string `json:"dataset"`
+	NodeID   string `json:"node_id"`
 	SnapType string `json:"snap_type"` // "hourly", "daily", "weekly", "monthly", "user"
 	Label    string `json:"label,omitempty"`
 	Keep     int    `json:"keep"`
 }
 
-// SnapshotDeletePayload is the JSON body stored in tasks.payload for snapshot.delete.
+// SnapshotDeletePayload is stored in tasks.payload for snapshot.delete tasks.
 type SnapshotDeletePayload struct {
 	Dataset  string `json:"dataset"`
+	NodeID   string `json:"node_id"`
 	Snapshot string `json:"snapshot"`
 }
 
-// ReplTriggerPayload is the JSON body stored in tasks.payload for repl.trigger.
+// ReplTriggerPayload is stored in tasks.payload for repl.trigger tasks.
 type ReplTriggerPayload struct {
 	StackID  string `json:"stack_id"`
 	Dataset  string `json:"dataset"`
+	NodeID   string `json:"node_id"` // primary node that runs zfs send
 	DestHost string `json:"dest_host"`
 	DestPort int    `json:"dest_port"`
 }

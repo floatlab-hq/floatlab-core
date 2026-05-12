@@ -10,6 +10,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/floatlab/floatlab-core/internal/control"
+	"github.com/floatlab/floatlab-core/internal/orchestrator"
+	"github.com/floatlab/floatlab-core/internal/worker"
 	"github.com/floatlab/floatlab-core/pkg/config"
 	"github.com/floatlab/floatlab-core/pkg/hostclient"
 	floatraft "github.com/floatlab/floatlab-core/pkg/raft"
@@ -85,11 +87,30 @@ func run(cmd *cobra.Command, args []string) error {
 	hosts := hostclient.NewPool(log)
 	defer hosts.Close()
 
+	// Orchestrator: drives stack state machine from Raft + IPC events.
+	orch := orchestrator.New(store, raftNode, hosts, log)
+	go func() {
+		if err := orch.Run(ctx); err != nil && err != context.Canceled {
+			log.Error("orchestrator exited", zap.Error(err))
+		}
+	}()
+
+	// Snapshot scheduler: minute-tick loop that enqueues snapshot tasks.
+	go orchestrator.RunScheduler(ctx, orch, db, log)
+
+	// Task worker: polls rqlite tasks table and dispatches IPC to hostd.
+	w := worker.New(db, store, hosts, log)
+	go func() {
+		if err := w.Run(ctx); err != nil && err != context.Canceled {
+			log.Error("worker exited", zap.Error(err))
+		}
+	}()
+
 	// HTTP control server.
 	srv := control.NewServer(&control.Config{
 		ListenAddr: listenAddr,
 		RQLiteURL:  rqliteURL,
-	}, store, raftNode, hosts, log)
+	}, db, store, raftNode, hosts, log)
 
 	log.Info("floatlab-control starting",
 		zap.String("listen", listenAddr),

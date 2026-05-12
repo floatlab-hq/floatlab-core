@@ -15,6 +15,47 @@ import (
 	"github.com/floatlab/floatlab-core/pkg/run"
 )
 
+// stackResponse matches the frontend Stack interface field names exactly.
+type stackResponse struct {
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	State            string    `json:"state"`
+	PrimaryNode      string    `json:"primary_node"`
+	SecondaryNode    string    `json:"secondary_node"`
+	ComposeFile      string    `json:"compose_file"`
+	DatasetPath      string    `json:"dataset_path"`
+	FailoverMode     string    `json:"failover_mode"`
+	AutoTriggerAfter string    `json:"auto_trigger_after"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+func toStackResponse(st *config.Stack, fsmState string) stackResponse {
+	return stackResponse{
+		ID:            st.ID,
+		Name:          st.Name,
+		State:         fsmState,
+		PrimaryNode:   st.PrimaryNodeID,
+		SecondaryNode: st.BackupNodeID,
+		ComposeFile:   st.ComposeYAML,
+		DatasetPath:   st.ZFSDataset,
+		CreatedAt:     st.CreatedAt,
+		UpdatedAt:     st.UpdatedAt,
+	}
+}
+
+// containerResponse matches the frontend Container interface.
+type containerResponse struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Image   string `json:"image"`
+	Status  string `json:"status"`
+	Health  string `json:"health"`
+	NodeID  string `json:"node_id"`
+	StackID string `json:"stack_id"`
+	Service string `json:"service"`
+}
+
 func registerStackRoutes(r chi.Router, s *Server) {
 	r.Get("/stacks", s.handleListStacks)
 	r.Post("/stacks", s.handleCreateStack)
@@ -33,18 +74,13 @@ func (s *Server) handleListStacks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// Enrich with FSM state.
-	type stackWithState struct {
-		*config.Stack
-		FSMState string `json:"fsm_state"`
-	}
-	result := make([]stackWithState, 0, len(stacks))
+	result := make([]stackResponse, 0, len(stacks))
 	for _, st := range stacks {
 		var state string
 		if inst, ok := s.raft.FSM().State(st.ID); ok {
 			state = string(inst.State)
 		}
-		result = append(result, stackWithState{Stack: st, FSMState: state})
+		result = append(result, toStackResponse(st, state))
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -60,18 +96,15 @@ func (s *Server) handleGetStack(w http.ResponseWriter, r *http.Request) {
 	if inst, ok := s.raft.FSM().State(id); ok {
 		state = string(inst.State)
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"stack":     st,
-		"fsm_state": state,
-	})
+	writeJSON(w, http.StatusOK, toStackResponse(st, state))
 }
 
 type createStackRequest struct {
 	Name          string `json:"name"`
 	Icon          string `json:"icon,omitempty"`
-	PrimaryNodeID string `json:"primary_node_id"`
-	BackupNodeID  string `json:"backup_node_id,omitempty"`
-	ComposeYAML   string `json:"compose_yaml"`
+	PrimaryNodeID string `json:"primary_node"`
+	BackupNodeID  string `json:"secondary_node,omitempty"`
+	ComposeFile   string `json:"compose_file"`
 }
 
 func (s *Server) handleCreateStack(w http.ResponseWriter, r *http.Request) {
@@ -85,15 +118,15 @@ func (s *Server) handleCreateStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.PrimaryNodeID == "" {
-		writeError(w, http.StatusBadRequest, "primary_node_id is required")
+		writeError(w, http.StatusBadRequest, "primary_node is required")
 		return
 	}
-	if req.ComposeYAML == "" {
-		writeError(w, http.StatusBadRequest, "compose_yaml is required")
+	if req.ComposeFile == "" {
+		writeError(w, http.StatusBadRequest, "compose_file is required")
 		return
 	}
 
-	parsed, err := compose.Parse(r.Context(), req.ComposeYAML, req.Name)
+	parsed, err := compose.Parse(r.Context(), req.ComposeFile, req.Name)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "compose parse error: "+err.Error())
 		return
@@ -112,7 +145,7 @@ func (s *Server) handleCreateStack(w http.ResponseWriter, r *http.Request) {
 		Icon:          req.Icon,
 		PrimaryNodeID: req.PrimaryNodeID,
 		BackupNodeID:  req.BackupNodeID,
-		ComposeYAML:   req.ComposeYAML,
+		ComposeYAML:   req.ComposeFile,
 		ZFSDataset:    dataset,
 	}
 
@@ -135,7 +168,7 @@ func (s *Server) handleCreateStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, st)
+	writeJSON(w, http.StatusCreated, toStackResponse(st, string(run.StateProvisioning)))
 }
 
 func (s *Server) handleUpdateStackCompose(w http.ResponseWriter, r *http.Request) {
@@ -147,18 +180,18 @@ func (s *Server) handleUpdateStackCompose(w http.ResponseWriter, r *http.Request
 	}
 
 	var body struct {
-		ComposeYAML string `json:"compose_yaml"`
+		ComposeFile string `json:"compose_file"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if body.ComposeYAML == "" {
-		writeError(w, http.StatusBadRequest, "compose_yaml is required")
+	if body.ComposeFile == "" {
+		writeError(w, http.StatusBadRequest, "compose_file is required")
 		return
 	}
 
-	parsed, err := compose.Parse(r.Context(), body.ComposeYAML, st.Name)
+	parsed, err := compose.Parse(r.Context(), body.ComposeFile, st.Name)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "compose parse error: "+err.Error())
 		return
@@ -168,7 +201,7 @@ func (s *Server) handleUpdateStackCompose(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := s.store.UpdateStackCompose(r.Context(), id, body.ComposeYAML); err != nil {
+	if err := s.store.UpdateStackCompose(r.Context(), id, body.ComposeFile); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -312,5 +345,23 @@ func (s *Server) handleGetStackContainers(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadGateway, "hostd error: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, raw)
+	var result ipc.DockerListResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		writeError(w, http.StatusInternalServerError, "parse hostd response: "+err.Error())
+		return
+	}
+	containers := make([]containerResponse, 0, len(result.Containers))
+	for _, c := range result.Containers {
+		containers = append(containers, containerResponse{
+			ID:      c.ID,
+			Name:    c.Name,
+			Image:   c.Image,
+			Status:  c.State,
+			Health:  c.Health,
+			NodeID:  nodeID,
+			StackID: id,
+			Service: c.Service,
+		})
+	}
+	writeJSON(w, http.StatusOK, containers)
 }

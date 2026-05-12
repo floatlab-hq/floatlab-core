@@ -241,3 +241,77 @@ func scanStack(row []interface{}) (*Stack, error) {
 	}
 	return st, nil
 }
+
+// ---- Networks ----
+
+func (s *Store) CreateNetwork(ctx context.Context, n *Network) error {
+	if n.ID == "" {
+		n.ID = uuid.New().String()
+	}
+	err := s.db.Execute(ctx, []rqlite.Statement{{
+		SQL:    `INSERT INTO networks(id, name, prefix, reserved_min, reserved_max) VALUES(?,?,?,?,?)`,
+		Params: []interface{}{n.ID, n.Name, n.Prefix, n.ReservedMin, n.ReservedMax},
+	}})
+	if err != nil {
+		return fmt.Errorf("config: create network: %w", err)
+	}
+	s.notify(ChangeEvent{Entity: "network", Action: "create", ID: n.ID})
+	return nil
+}
+
+func (s *Store) GetNetwork(ctx context.Context, id string) (*Network, error) {
+	res, err := s.db.Query(ctx, rqlite.Statement{
+		SQL:    `SELECT id, name, prefix, reserved_min, reserved_max FROM networks WHERE id=?`,
+		Params: []interface{}{id},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("config: get network: %w", err)
+	}
+	if len(res.Values) == 0 {
+		return nil, fmt.Errorf("config: network %s not found", id)
+	}
+	return scanNetwork(res.Values[0])
+}
+
+func (s *Store) ListNetworks(ctx context.Context) ([]*Network, error) {
+	res, err := s.db.Query(ctx, rqlite.Statement{
+		SQL: `SELECT id, name, prefix, reserved_min, reserved_max FROM networks ORDER BY name`,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("config: list networks: %w", err)
+	}
+	nets := make([]*Network, 0, len(res.Values))
+	for _, row := range res.Values {
+		n, err := scanNetwork(row)
+		if err != nil {
+			return nil, err
+		}
+		nets = append(nets, n)
+	}
+	return nets, nil
+}
+
+func (s *Store) DeleteNetwork(ctx context.Context, id string) error {
+	err := s.db.Execute(ctx, []rqlite.Statement{{
+		SQL:    `DELETE FROM networks WHERE id=?`,
+		Params: []interface{}{id},
+	}})
+	if err != nil {
+		return fmt.Errorf("config: delete network: %w", err)
+	}
+	s.notify(ChangeEvent{Entity: "network", Action: "delete", ID: id})
+	return nil
+}
+
+func scanNetwork(row []interface{}) (*Network, error) {
+	if len(row) < 5 {
+		return nil, fmt.Errorf("config: scanNetwork: short row")
+	}
+	n := &Network{}
+	n.ID, _ = row[0].(string)
+	n.Name, _ = row[1].(string)
+	n.Prefix, _ = row[2].(string)
+	n.ReservedMin, _ = row[3].(string)
+	n.ReservedMax, _ = row[4].(string)
+	return n, nil
+}

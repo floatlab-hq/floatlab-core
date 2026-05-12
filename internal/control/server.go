@@ -13,6 +13,7 @@ import (
 	"github.com/floatlab/floatlab-core/pkg/config"
 	"github.com/floatlab/floatlab-core/pkg/hostclient"
 	floatraft "github.com/floatlab/floatlab-core/pkg/raft"
+	"github.com/floatlab/floatlab-core/pkg/rqlite"
 	"github.com/floatlab/floatlab-core/pkg/run"
 )
 
@@ -20,6 +21,7 @@ type Server struct {
 	cfg    *Config
 	router *chi.Mux
 	log    *zap.Logger
+	db     *rqlite.Client
 	store  *config.Store
 	raft   *floatraft.Node
 	hosts  *hostclient.Pool
@@ -32,10 +34,11 @@ type Config struct {
 	RQLiteURL  string
 }
 
-func NewServer(cfg *Config, store *config.Store, raftNode *floatraft.Node, hosts *hostclient.Pool, log *zap.Logger) *Server {
+func NewServer(cfg *Config, db *rqlite.Client, store *config.Store, raftNode *floatraft.Node, hosts *hostclient.Pool, log *zap.Logger) *Server {
 	s := &Server{
 		cfg:   cfg,
 		log:   log,
+		db:    db,
 		store: store,
 		raft:  raftNode,
 		hosts: hosts,
