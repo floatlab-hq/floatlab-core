@@ -8,6 +8,7 @@ import (
 	hraft "github.com/hashicorp/raft"
 
 	"github.com/floatlab/floatlab-core/pkg/config"
+	"github.com/floatlab/floatlab-core/pkg/rqlite"
 )
 
 func registerHealthRoutes(r chi.Router, s *Server) {
@@ -90,16 +91,6 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) handleNodeHealth(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	_, err := s.hosts.Execute(r.Context(), id, "sys.info", nil)
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "offline", "error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "online"})
-}
-
 func (s *Server) handleNodeStacks(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	all, err := s.store.ListStacks(r.Context())
@@ -116,15 +107,129 @@ func (s *Server) handleNodeStacks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-func registerStorageRoutes(r chi.Router, s *Server)  { r.Get("/storage/pools", stub([]interface{}{})) }
 func registerFailoverRoutes(r chi.Router, s *Server) {
 	r.Get("/failover/status", stub(map[string]string{"status": "none"}))
+	r.Post("/failover/{stack_id}/trigger", stub(map[string]string{"status": "triggered"}))
+	r.Post("/failover/{stack_id}/abort", stub(map[string]string{"status": "aborted"}))
+	r.Get("/failover/{stack_id}/log", stub([]interface{}{}))
 }
-func registerNetworkRoutes(r chi.Router, s *Server) { r.Get("/network/pools", stub([]interface{}{})) }
-func registerLogRoutes(r chi.Router, s *Server)     { r.Get("/logs/search", stub([]interface{}{})) }
-func registerStatsRoutes(r chi.Router, s *Server)   { r.Get("/stats/query", stub([]interface{}{})) }
-func registerNotifyRoutes(r chi.Router, s *Server)  { r.Get("/notifications", stub([]interface{}{})) }
-func registerEventRoutes(r chi.Router, s *Server)   { r.Get("/events", s.handleEvents) }
+func registerNetworkRoutes(r chi.Router, s *Server) {
+	r.Get("/network/pools", stub([]interface{}{}))
+	r.Get("/network/allocations", s.handleListAllocations)
+	r.Delete("/network/allocations/{id}", stub(nil))
+}
+func registerLogRoutes(r chi.Router, s *Server) {
+	r.Get("/logs/search", stub([]interface{}{}))
+	r.Get("/logs/audit", stub([]interface{}{}))
+	r.Get("/logs/stacks/{stack_id}", stub([]interface{}{}))
+	r.Get("/logs/containers/{container_id}", stub([]interface{}{}))
+	r.Get("/logs/nodes/{node_id}", stub([]interface{}{}))
+}
+func registerStatsRoutes(r chi.Router, s *Server) {
+	r.Get("/stats/query", stub([]interface{}{}))
+	r.Get("/stats/nodes/{node_id}", stub([]interface{}{}))
+	r.Get("/stats/stacks/{stack_id}", stub([]interface{}{}))
+	r.Get("/stats/storage/{node_id}", stub([]interface{}{}))
+}
+func registerNotifyRoutes(r chi.Router, s *Server) {
+	r.Get("/notifications", s.handleListNotifications)
+	r.Post("/notifications/{id}/silence", stub(map[string]string{"status": "silenced"}))
+	r.Post("/notifications/{id}/resolve", s.handleResolveNotification)
+	r.Delete("/notifications/{id}", stub(nil))
+}
+func registerEventRoutes(r chi.Router, s *Server) { r.Get("/events", s.handleEvents) }
+
+func (s *Server) handleListAllocations(w http.ResponseWriter, r *http.Request) {
+	stackID := r.URL.Query().Get("stack_id")
+	result, err := s.db.Query(r.Context(), rqlite.Statement{
+		SQL:    `SELECT id, stack_id, service, address, prefix_pool, allocated_at FROM ip_reservations WHERE (? = '' OR stack_id = ?) ORDER BY allocated_at DESC`,
+		Params: []interface{}{stackID, stackID},
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	type allocation struct {
+		ID          string `json:"id"`
+		StackID     string `json:"stack_id"`
+		Service     string `json:"service"`
+		Address     string `json:"address"`
+		PrefixPool  string `json:"prefix_pool"`
+		AllocatedAt string `json:"allocated_at"`
+	}
+	rows := make([]allocation, 0, len(result.Values))
+	for _, row := range result.Values {
+		a := allocation{}
+		a.ID, _ = row[0].(string)
+		a.StackID, _ = row[1].(string)
+		a.Service, _ = row[2].(string)
+		a.Address, _ = row[3].(string)
+		a.PrefixPool, _ = row[4].(string)
+		a.AllocatedAt, _ = row[5].(string)
+		rows = append(rows, a)
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request) {
+	result, err := s.db.Query(r.Context(), rqlite.Statement{
+		SQL: `SELECT id, alert_id, kind, severity, title, body, state, created_at, resolved_at FROM notifications ORDER BY created_at DESC LIMIT 200`,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	type notification struct {
+		ID         string  `json:"id"`
+		AlertID    string  `json:"alert_id"`
+		Kind       string  `json:"kind"`
+		Severity   string  `json:"severity"`
+		Title      string  `json:"title"`
+		Body       string  `json:"body"`
+		State      string  `json:"state"`
+		CreatedAt  string  `json:"created_at"`
+		ResolvedAt *string `json:"resolved_at"`
+	}
+	rows := make([]notification, 0, len(result.Values))
+	for _, row := range result.Values {
+		n := notification{}
+		n.ID, _ = row[0].(string)
+		n.AlertID, _ = row[1].(string)
+		n.Kind, _ = row[2].(string)
+		n.Severity, _ = row[3].(string)
+		n.Title, _ = row[4].(string)
+		n.Body, _ = row[5].(string)
+		n.State, _ = row[6].(string)
+		n.CreatedAt, _ = row[7].(string)
+		if v, ok := row[8].(string); ok && v != "" {
+			n.ResolvedAt = &v
+		}
+		rows = append(rows, n)
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) handleResolveNotification(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := s.db.Execute(r.Context(), []rqlite.Statement{{
+		SQL:    `UPDATE notifications SET state = 'read', resolved_at = datetime('now') WHERE id = ?`,
+		Params: []interface{}{id},
+	}}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "resolved"})
+}
+
+func (s *Server) handleNodeHealth(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	_, err := s.hosts.Execute(r.Context(), id, "sys.info", nil)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "offline", "latency_ms": 0})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "online", "latency_ms": 1})
+}
 
 func stub(v interface{}) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
