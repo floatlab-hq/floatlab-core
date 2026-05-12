@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -94,6 +95,22 @@ func run(cmd *cobra.Command, args []string) error {
 
 	// Notification broker — fan-out SSE publisher.
 	broker := notify.NewBroker()
+
+	// Notification retention: purge read notifications older than 30 days, daily.
+	go func() {
+		t := time.NewTicker(24 * time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := notify.Cleanup(ctx, db); err != nil {
+					log.Warn("notify cleanup", zap.Error(err))
+				}
+			}
+		}
+	}()
 
 	// Failover detector — pings primaries and auto-triggers when configured.
 	seq := failover.NewSequence(db, store, raftNode, hosts, broker, log)

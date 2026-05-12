@@ -1,0 +1,31 @@
+groups:
+  - name: floatlab.storage
+    rules:
+      - alert: ZFSPoolUsageHigh
+        expr: (zfs_pool_used_bytes / (zfs_pool_used_bytes + zfs_pool_free_bytes)) > 0.90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ZFS pool usage above 90% on {{ $labels.node_id }}"
+          description: "Pool {{ $labels.pool }} on node {{ $labels.node_id }} is {{ $value | humanizePercentage }} full."
+
+      - alert: ZFSPoolUsageCritical
+        expr: (zfs_pool_used_bytes / (zfs_pool_used_bytes + zfs_pool_free_bytes)) > 0.95
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ZFS pool usage above 95% on {{ $labels.node_id }}"
+          description: "Pool {{ $labels.pool }} on node {{ $labels.node_id }} is {{ $value | humanizePercentage }} full."
+
+  - name: floatlab.containers
+    rules:
+      - alert: ContainerMemoryHigh
+        expr: (container_memory_usage_bytes / container_spec_memory_limit_bytes) > 0.90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.container_name }} memory above 90%"
+          description: "Stack {{ $labels.stack_id }} container {{ $labels.container_name }} is using {{ $value | humanizePercentage }} of its memory limit."

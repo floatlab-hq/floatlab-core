@@ -96,6 +96,20 @@ func (s *Store) ListNodes(ctx context.Context) ([]*Node, error) {
 	return nodes, nil
 }
 
+func (s *Store) UpdateNode(ctx context.Context, n *Node) error {
+	n.UpdatedAt = time.Now().UTC()
+	addrsJSON, _ := json.Marshal(n.Addresses)
+	err := s.db.Execute(ctx, []rqlite.Statement{{
+		SQL:    `UPDATE nodes SET cluster_uuid=?, name=?, addresses=?, updated_at=? WHERE id=?`,
+		Params: []interface{}{n.ClusterUUID, n.Name, string(addrsJSON), n.UpdatedAt, n.ID},
+	}})
+	if err != nil {
+		return fmt.Errorf("config: update node: %w", err)
+	}
+	s.notify(ChangeEvent{Entity: "node", Action: "update", ID: n.ID})
+	return nil
+}
+
 func (s *Store) DeleteNode(ctx context.Context, id string) error {
 	err := s.db.Execute(ctx, []rqlite.Statement{{
 		SQL:    `DELETE FROM nodes WHERE id=?`,

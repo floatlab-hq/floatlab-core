@@ -61,3 +61,12 @@ func Silence(ctx context.Context, db *rqlite.Client, id string, until time.Time)
 		Params: []interface{}{until.UTC(), id},
 	}})
 }
+
+// Cleanup deletes resolved/read notifications older than 30 days.
+func Cleanup(ctx context.Context, db *rqlite.Client) error {
+	cutoff := time.Now().UTC().Add(-30 * 24 * time.Hour)
+	return db.Execute(ctx, []rqlite.Statement{{
+		SQL:    `DELETE FROM notifications WHERE state = 'read' AND created_at < ?`,
+		Params: []interface{}{cutoff},
+	}})
+}

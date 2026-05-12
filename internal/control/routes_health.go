@@ -45,6 +45,7 @@ func registerNodeRoutes(r chi.Router, s *Server) {
 	r.Get("/nodes", s.handleListNodes)
 	r.Post("/nodes", s.handleCreateNode)
 	r.Get("/nodes/{id}", s.handleGetNode)
+	r.Put("/nodes/{id}", s.handleUpdateNode)
 	r.Delete("/nodes/{id}", s.handleDeleteNode)
 	r.Get("/nodes/{id}/health", s.handleNodeHealth)
 	r.Get("/nodes/{id}/stacks", s.handleNodeStacks)
@@ -80,6 +81,27 @@ func (s *Server) handleGetNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, n)
+}
+
+func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	existing, err := s.store.GetNode(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	var body config.Node
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	body.ID = existing.ID
+	body.CreatedAt = existing.CreatedAt
+	if err := s.store.UpdateNode(r.Context(), &body); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
