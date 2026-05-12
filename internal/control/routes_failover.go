@@ -130,3 +130,18 @@ func (s *Server) handleStackFailover(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleStackRestore is mounted on /stacks/{id}/restore — matches frontend restoreStack().
+func (s *Server) handleStackRestore(w http.ResponseWriter, r *http.Request) {
+	stackID := chi.URLParam(r, "id")
+	go func() {
+		if err := s.seq.Restore(r.Context(), stackID); err != nil {
+			s.log.Error("failover: restore", zap.String("stack", stackID), zap.Error(err))
+		}
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"status":   "triggered",
+		"action":   "restore",
+		"stack_id": stackID,
+	})
+}
+

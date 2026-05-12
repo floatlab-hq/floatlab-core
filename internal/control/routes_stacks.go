@@ -66,6 +66,7 @@ func registerStackRoutes(r chi.Router, s *Server) {
 	r.Post("/stacks/{id}/start", s.handleStartStack)
 	r.Post("/stacks/{id}/stop", s.handleStopStack)
 	r.Post("/stacks/{id}/failover", s.handleStackFailover)
+	r.Post("/stacks/{id}/restore", s.handleStackRestore)
 	r.Delete("/stacks/{id}", s.handleDeleteStack)
 	r.Get("/stacks/{id}/state", s.handleGetStackState)
 	r.Get("/stacks/{id}/containers", s.handleGetStackContainers)
