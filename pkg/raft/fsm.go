@@ -15,19 +15,48 @@ import (
 type FSM struct {
 	mu     sync.RWMutex
 	stacks map[string]*run.StackInstance
-	notify chan run.StackStateChanged
+
+	subsMu sync.Mutex
+	subs   map[uint64]chan run.StackStateChanged
+	nextID uint64
 }
 
 func NewFSM() *FSM {
 	return &FSM{
 		stacks: make(map[string]*run.StackInstance),
-		notify: make(chan run.StackStateChanged, 64),
+		subs:   make(map[uint64]chan run.StackStateChanged),
 	}
 }
 
-// Subscribe returns a channel that receives each applied StackStateChanged entry.
-// The channel is buffered (64); slow consumers will miss entries silently.
-func (f *FSM) Subscribe() <-chan run.StackStateChanged { return f.notify }
+// Subscribe returns a buffered channel that receives each applied
+// StackStateChanged entry and an unsubscribe function the caller must invoke
+// when done. Multiple callers each get their own independent channel.
+func (f *FSM) Subscribe() (<-chan run.StackStateChanged, func()) {
+	f.subsMu.Lock()
+	id := f.nextID
+	f.nextID++
+	ch := make(chan run.StackStateChanged, 64)
+	f.subs[id] = ch
+	f.subsMu.Unlock()
+
+	return ch, func() {
+		f.subsMu.Lock()
+		delete(f.subs, id)
+		close(ch)
+		f.subsMu.Unlock()
+	}
+}
+
+func (f *FSM) fanOut(entry run.StackStateChanged) {
+	f.subsMu.Lock()
+	defer f.subsMu.Unlock()
+	for _, ch := range f.subs {
+		select {
+		case ch <- entry:
+		default: // slow subscriber; drop
+		}
+	}
+}
 
 func (f *FSM) Apply(l *hraft.Log) interface{} {
 	var entry run.StackStateChanged
@@ -47,10 +76,7 @@ func (f *FSM) Apply(l *hraft.Log) interface{} {
 	updated.UpdatedAt = entry.Timestamp
 	f.stacks[entry.StackID] = &updated
 
-	select {
-	case f.notify <- entry:
-	default:
-	}
+	f.fanOut(entry)
 	return nil
 }
 

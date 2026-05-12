@@ -107,35 +107,16 @@ func (s *Server) handleNodeStacks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-func registerFailoverRoutes(r chi.Router, s *Server) {
-	r.Get("/failover/status", stub(map[string]string{"status": "none"}))
-	r.Post("/failover/{stack_id}/trigger", stub(map[string]string{"status": "triggered"}))
-	r.Post("/failover/{stack_id}/abort", stub(map[string]string{"status": "aborted"}))
-	r.Get("/failover/{stack_id}/log", stub([]interface{}{}))
-}
 func registerNetworkRoutes(r chi.Router, s *Server) {
 	r.Get("/network/pools", stub([]interface{}{}))
 	r.Get("/network/allocations", s.handleListAllocations)
-	r.Delete("/network/allocations/{id}", stub(nil))
-}
-func registerLogRoutes(r chi.Router, s *Server) {
-	r.Get("/logs/search", stub([]interface{}{}))
-	r.Get("/logs/audit", stub([]interface{}{}))
-	r.Get("/logs/stacks/{stack_id}", stub([]interface{}{}))
-	r.Get("/logs/containers/{container_id}", stub([]interface{}{}))
-	r.Get("/logs/nodes/{node_id}", stub([]interface{}{}))
-}
-func registerStatsRoutes(r chi.Router, s *Server) {
-	r.Get("/stats/query", stub([]interface{}{}))
-	r.Get("/stats/nodes/{node_id}", stub([]interface{}{}))
-	r.Get("/stats/stacks/{stack_id}", stub([]interface{}{}))
-	r.Get("/stats/storage/{node_id}", stub([]interface{}{}))
+	r.Delete("/network/allocations/{id}", s.handleDeleteAllocation)
 }
 func registerNotifyRoutes(r chi.Router, s *Server) {
 	r.Get("/notifications", s.handleListNotifications)
-	r.Post("/notifications/{id}/silence", stub(map[string]string{"status": "silenced"}))
+	r.Post("/notifications/{id}/silence", s.handleSilenceNotification)
 	r.Post("/notifications/{id}/resolve", s.handleResolveNotification)
-	r.Delete("/notifications/{id}", stub(nil))
+	r.Delete("/notifications/{id}", s.handleDeleteNotification)
 }
 func registerEventRoutes(r chi.Router, s *Server) { r.Get("/events", s.handleEvents) }
 
@@ -173,7 +154,8 @@ func (s *Server) handleListAllocations(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request) {
 	result, err := s.db.Query(r.Context(), rqlite.Statement{
-		SQL: `SELECT id, alert_id, kind, severity, title, body, state, created_at, resolved_at FROM notifications ORDER BY created_at DESC LIMIT 200`,
+		SQL: `SELECT id, alert_id, stack_id, node_id, kind, severity, title, body, state, created_at, resolved_at
+		      FROM notifications ORDER BY created_at DESC LIMIT 200`,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -182,6 +164,8 @@ func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request)
 	type notification struct {
 		ID         string  `json:"id"`
 		AlertID    string  `json:"alert_id"`
+		StackID    string  `json:"stack_id,omitempty"`
+		NodeID     string  `json:"node_id,omitempty"`
 		Kind       string  `json:"kind"`
 		Severity   string  `json:"severity"`
 		Title      string  `json:"title"`
@@ -195,13 +179,15 @@ func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request)
 		n := notification{}
 		n.ID, _ = row[0].(string)
 		n.AlertID, _ = row[1].(string)
-		n.Kind, _ = row[2].(string)
-		n.Severity, _ = row[3].(string)
-		n.Title, _ = row[4].(string)
-		n.Body, _ = row[5].(string)
-		n.State, _ = row[6].(string)
-		n.CreatedAt, _ = row[7].(string)
-		if v, ok := row[8].(string); ok && v != "" {
+		n.StackID, _ = row[2].(string)
+		n.NodeID, _ = row[3].(string)
+		n.Kind, _ = row[4].(string)
+		n.Severity, _ = row[5].(string)
+		n.Title, _ = row[6].(string)
+		n.Body, _ = row[7].(string)
+		n.State, _ = row[8].(string)
+		n.CreatedAt, _ = row[9].(string)
+		if v, ok := row[10].(string); ok && v != "" {
 			n.ResolvedAt = &v
 		}
 		rows = append(rows, n)
@@ -219,6 +205,46 @@ func (s *Server) handleResolveNotification(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "resolved"})
+}
+
+func (s *Server) handleDeleteAllocation(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := s.db.Execute(r.Context(), []rqlite.Statement{{
+		SQL:    `DELETE FROM ip_reservations WHERE id = ?`,
+		Params: []interface{}{id},
+	}}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleSilenceNotification(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var body struct {
+		Until string `json:"until"` // RFC3339
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if err := s.db.Execute(r.Context(), []rqlite.Statement{{
+		SQL:    `UPDATE notifications SET silenced_until = ? WHERE id = ?`,
+		Params: []interface{}{body.Until, id},
+	}}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "silenced"})
+}
+
+func (s *Server) handleDeleteNotification(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := s.db.Execute(r.Context(), []rqlite.Statement{{
+		SQL:    `DELETE FROM notifications WHERE id = ?`,
+		Params: []interface{}{id},
+	}}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleNodeHealth(w http.ResponseWriter, r *http.Request) {

@@ -29,6 +29,8 @@ func Migrate(ctx context.Context, db *rqlite.Client) error {
 			replication_schedule TEXT,
 			backup_schedule      TEXT,
 			backup_target        TEXT,
+			failover_mode        TEXT NOT NULL DEFAULT 'manual',
+			auto_trigger_after   TEXT,
 			created_at           DATETIME NOT NULL,
 			updated_at           DATETIME NOT NULL
 		)`},

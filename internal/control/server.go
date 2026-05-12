@@ -10,11 +10,15 @@ import (
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"go.uber.org/zap"
 
+	"github.com/floatlab/floatlab-core/internal/failover"
 	"github.com/floatlab/floatlab-core/pkg/config"
 	"github.com/floatlab/floatlab-core/pkg/hostclient"
+	"github.com/floatlab/floatlab-core/pkg/logs"
+	"github.com/floatlab/floatlab-core/pkg/notify"
 	floatraft "github.com/floatlab/floatlab-core/pkg/raft"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
 	"github.com/floatlab/floatlab-core/pkg/run"
+	"github.com/floatlab/floatlab-core/pkg/stats"
 )
 
 type Server struct {
@@ -26,23 +30,42 @@ type Server struct {
 	raft   *floatraft.Node
 	hosts  *hostclient.Pool
 	sm     run.StateMachine
+	broker *notify.Broker
+	vlogs  *logs.Client
+	vmets  *stats.Client
+	seq    *failover.Sequence
 }
 
 type Config struct {
-	ListenAddr string
-	RaftConfig floatraft.Config
-	RQLiteURL  string
+	ListenAddr   string
+	RaftConfig   floatraft.Config
+	RQLiteURL    string
+	VLogsURL     string
+	VMetricsURL  string
 }
 
-func NewServer(cfg *Config, db *rqlite.Client, store *config.Store, raftNode *floatraft.Node, hosts *hostclient.Pool, log *zap.Logger) *Server {
+func NewServer(
+	cfg *Config,
+	db *rqlite.Client,
+	store *config.Store,
+	raftNode *floatraft.Node,
+	hosts *hostclient.Pool,
+	broker *notify.Broker,
+	seq *failover.Sequence,
+	log *zap.Logger,
+) *Server {
 	s := &Server{
-		cfg:   cfg,
-		log:   log,
-		db:    db,
-		store: store,
-		raft:  raftNode,
-		hosts: hosts,
-		sm:    run.New(),
+		cfg:    cfg,
+		log:    log,
+		db:     db,
+		store:  store,
+		raft:   raftNode,
+		hosts:  hosts,
+		sm:     run.New(),
+		broker: broker,
+		vlogs:  logs.NewClient(cfg.VLogsURL),
+		vmets:  stats.NewClient(cfg.VMetricsURL),
+		seq:    seq,
 	}
 	s.router = s.buildRouter()
 	return s
@@ -73,11 +96,14 @@ func (s *Server) buildRouter() *chi.Mux {
 }
 
 func (s *Server) Run(ctx context.Context) error {
+	// Bridge FSM events → broker so SSE clients get independent channels.
+	go s.bridgeFSMToBroker()
+
 	srv := &http.Server{
 		Addr:         s.cfg.ListenAddr,
 		Handler:      s.router,
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 0, // 0 = no timeout for SSE streaming endpoints
+		WriteTimeout: 0, // SSE endpoints need no write timeout
 		IdleTimeout:  120 * time.Second,
 	}
 

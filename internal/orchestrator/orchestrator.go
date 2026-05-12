@@ -51,7 +51,8 @@ func New(
 // Run starts the orchestrator event loop. It blocks until ctx is cancelled.
 func (o *Orchestrator) Run(ctx context.Context) error {
 	configChanges := o.store.Watch()
-	stateChanges := o.raft.FSM().Subscribe()
+	stateChanges, unsub := o.raft.FSM().Subscribe()
+	defer unsub()
 
 	for {
 		select {
@@ -59,7 +60,10 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			return ctx.Err()
 		case ev := <-configChanges:
 			o.handleConfigChange(ctx, ev)
-		case entry := <-stateChanges:
+		case entry, ok := <-stateChanges:
+			if !ok {
+				return nil
+			}
 			o.handleStateChange(ctx, entry)
 		case ev := <-o.merged:
 			o.handleIPCEvent(ctx, ev)

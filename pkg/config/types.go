@@ -30,6 +30,9 @@ type Stack struct {
 	ReplicationSchedule string    `json:"replication_schedule,omitempty"`
 	BackupSchedule      string    `json:"backup_schedule,omitempty"`
 	BackupTarget        string    `json:"backup_target,omitempty"`
+	FailoverMode        string    `json:"failover_mode,omitempty"`      // "manual" | "auto"
+	AutoTriggerAfter    string    `json:"auto_trigger_after,omitempty"` // e.g. "120s"
+	State               string    `json:"state,omitempty"`              // runtime FSM state (not persisted)
 	CreatedAt           time.Time `json:"created_at"`
 	UpdatedAt           time.Time `json:"updated_at"`
 }

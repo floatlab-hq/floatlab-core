@@ -119,12 +119,13 @@ func (s *Store) CreateStack(ctx context.Context, stack *Stack) error {
 	err := s.db.Execute(ctx, []rqlite.Statement{{
 		SQL: `INSERT INTO stacks(id, name, icon, primary_node_id, backup_node_id, compose_yaml,
 		      zfs_dataset, snapshot_schedule, replication_schedule, backup_schedule, backup_target,
-		      created_at, updated_at)
-		      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		      failover_mode, auto_trigger_after, created_at, updated_at)
+		      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		Params: []interface{}{
 			stack.ID, stack.Name, stack.Icon, stack.PrimaryNodeID, stack.BackupNodeID,
 			stack.ComposeYAML, stack.ZFSDataset, stack.SnapshotSchedule,
 			stack.ReplicationSchedule, stack.BackupSchedule, stack.BackupTarget,
+			stack.FailoverMode, stack.AutoTriggerAfter,
 			stack.CreatedAt, stack.UpdatedAt,
 		},
 	}})
@@ -139,7 +140,7 @@ func (s *Store) GetStack(ctx context.Context, id string) (*Stack, error) {
 	res, err := s.db.Query(ctx, rqlite.Statement{
 		SQL: `SELECT id, name, icon, primary_node_id, backup_node_id, compose_yaml,
 		      zfs_dataset, snapshot_schedule, replication_schedule, backup_schedule, backup_target,
-		      created_at, updated_at FROM stacks WHERE id=?`,
+		      failover_mode, auto_trigger_after, created_at, updated_at FROM stacks WHERE id=?`,
 		Params: []interface{}{id},
 	})
 	if err != nil {
@@ -155,7 +156,7 @@ func (s *Store) ListStacks(ctx context.Context) ([]*Stack, error) {
 	res, err := s.db.Query(ctx, rqlite.Statement{
 		SQL: `SELECT id, name, icon, primary_node_id, backup_node_id, compose_yaml,
 		      zfs_dataset, snapshot_schedule, replication_schedule, backup_schedule, backup_target,
-		      created_at, updated_at FROM stacks ORDER BY name`,
+		      failover_mode, auto_trigger_after, created_at, updated_at FROM stacks ORDER BY name`,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("config: list stacks: %w", err)
@@ -218,7 +219,7 @@ func scanNode(row []interface{}) (*Node, error) {
 }
 
 func scanStack(row []interface{}) (*Stack, error) {
-	if len(row) < 13 {
+	if len(row) < 15 {
 		return nil, fmt.Errorf("config: scanStack: short row")
 	}
 	st := &Stack{}
@@ -233,10 +234,12 @@ func scanStack(row []interface{}) (*Stack, error) {
 	st.ReplicationSchedule, _ = row[8].(string)
 	st.BackupSchedule, _ = row[9].(string)
 	st.BackupTarget, _ = row[10].(string)
-	if t, ok := row[11].(string); ok {
+	st.FailoverMode, _ = row[11].(string)
+	st.AutoTriggerAfter, _ = row[12].(string)
+	if t, ok := row[13].(string); ok {
 		st.CreatedAt, _ = time.Parse(time.RFC3339, t)
 	}
-	if t, ok := row[12].(string); ok {
+	if t, ok := row[14].(string); ok {
 		st.UpdatedAt, _ = time.Parse(time.RFC3339, t)
 	}
 	return st, nil

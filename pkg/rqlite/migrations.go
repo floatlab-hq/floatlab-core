@@ -42,13 +42,16 @@ func Migrate(ctx context.Context, c *Client) error {
 		{SQL: `CREATE TABLE IF NOT EXISTS notifications (
 			id          TEXT PRIMARY KEY,
 			alert_id    TEXT,
+			stack_id    TEXT,
+			node_id     TEXT,
 			kind        TEXT NOT NULL,
 			severity    TEXT NOT NULL,
 			title       TEXT NOT NULL,
 			body        TEXT NOT NULL,
 			state       TEXT NOT NULL DEFAULT 'unread',
 			created_at  DATETIME NOT NULL,
-			resolved_at DATETIME
+			resolved_at DATETIME,
+			silenced_until DATETIME
 		)`},
 		{SQL: `CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state)`},
 		{SQL: `CREATE INDEX IF NOT EXISTS idx_alerts_state ON alerts(state)`},

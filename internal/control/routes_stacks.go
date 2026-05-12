@@ -32,15 +32,17 @@ type stackResponse struct {
 
 func toStackResponse(st *config.Stack, fsmState string) stackResponse {
 	return stackResponse{
-		ID:            st.ID,
-		Name:          st.Name,
-		State:         fsmState,
-		PrimaryNode:   st.PrimaryNodeID,
-		SecondaryNode: st.BackupNodeID,
-		ComposeFile:   st.ComposeYAML,
-		DatasetPath:   st.ZFSDataset,
-		CreatedAt:     st.CreatedAt,
-		UpdatedAt:     st.UpdatedAt,
+		ID:               st.ID,
+		Name:             st.Name,
+		State:            fsmState,
+		PrimaryNode:      st.PrimaryNodeID,
+		SecondaryNode:    st.BackupNodeID,
+		ComposeFile:      st.ComposeYAML,
+		DatasetPath:      st.ZFSDataset,
+		FailoverMode:     st.FailoverMode,
+		AutoTriggerAfter: st.AutoTriggerAfter,
+		CreatedAt:        st.CreatedAt,
+		UpdatedAt:        st.UpdatedAt,
 	}
 }
 
@@ -63,6 +65,7 @@ func registerStackRoutes(r chi.Router, s *Server) {
 	r.Put("/stacks/{id}/compose", s.handleUpdateStackCompose)
 	r.Post("/stacks/{id}/start", s.handleStartStack)
 	r.Post("/stacks/{id}/stop", s.handleStopStack)
+	r.Post("/stacks/{id}/failover", s.handleStackFailover)
 	r.Delete("/stacks/{id}", s.handleDeleteStack)
 	r.Get("/stacks/{id}/state", s.handleGetStackState)
 	r.Get("/stacks/{id}/containers", s.handleGetStackContainers)
