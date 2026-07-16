@@ -1,0 +1,286 @@
+openapi: 3.1.0
+info:
+  title: FloatLab ZFS API
+  version: 0.0.1
+  description: ZFS dataset, snapshot, send, and receive API used through the FloatLab host daemon.
+paths:
+  /zfs/bootstrap:
+    post:
+      summary: Ensure FloatLab system ZFS datasets exist
+      description: Requires an existing ZFS pool or dataset named `floatlab`, then creates `floatlab/system`, `floatlab/system/logs`, and `floatlab/system/metrics` when missing.
+      responses:
+        '200':
+          description: System datasets exist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BootstrapResponse'
+        '404':
+          description: The `floatlab` ZFS pool or dataset was not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /zfs/datasets:
+    get:
+      summary: List ZFS datasets
+      deprecated: true
+      description: Compatibility alias for `GET /zfs/dataset`.
+      responses:
+        '200':
+          description: ZFS datasets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatasetListResponse'
+  /zfs/dataset:
+    get:
+      summary: List ZFS datasets
+      responses:
+        '200':
+          description: ZFS datasets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatasetListResponse'
+  /zfs/dataset/{dataset}:
+    parameters:
+      - $ref: '#/components/parameters/DatasetPath'
+    get:
+      summary: Get a ZFS dataset
+      responses:
+        '200':
+          description: ZFS dataset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ZFSDataset'
+        '404':
+          $ref: '#/components/responses/Error'
+    put:
+      summary: Create a ZFS dataset
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDatasetRequest'
+      responses:
+        '204':
+          description: Dataset created
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+    delete:
+      summary: Delete a ZFS dataset
+      parameters:
+        - $ref: '#/components/parameters/Recursive'
+      responses:
+        '204':
+          description: Dataset deleted
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /zfs/snapshots/{dataset}:
+    parameters:
+      - $ref: '#/components/parameters/DatasetPath'
+      - $ref: '#/components/parameters/Recursive'
+    get:
+      summary: List ZFS snapshots
+      responses:
+        '200':
+          description: ZFS snapshots
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnapshotListResponse'
+  /zfs/snapshot/{target}:
+    parameters:
+      - $ref: '#/components/parameters/SnapshotTarget'
+      - $ref: '#/components/parameters/Recursive'
+    put:
+      summary: Create a named ZFS snapshot
+      responses:
+        '204':
+          description: Snapshot created
+    delete:
+      summary: Delete a ZFS snapshot
+      responses:
+        '204':
+          description: Snapshot deleted
+  /zfs/send/{target}:
+    parameters:
+      - $ref: '#/components/parameters/SnapshotTarget'
+      - name: from
+        in: query
+        required: false
+        description: Base snapshot component for an incremental send.
+        schema:
+          type: string
+      - $ref: '#/components/parameters/Recursive'
+    get:
+      summary: Stream a ZFS send
+      responses:
+        '200':
+          description: ZFS send stream
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+  /zfs/receive/{dataset}:
+    parameters:
+      - $ref: '#/components/parameters/DatasetPath'
+      - name: forceRollback
+        in: query
+        required: false
+        schema:
+          type: boolean
+        description: Enables destructive `zfs receive -F` only when true.
+    put:
+      summary: Receive a ZFS send stream
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '204':
+          description: Stream received
+components:
+  parameters:
+    DatasetPath:
+      name: dataset
+      in: path
+      required: true
+      description: ZFS dataset path, for example `floatlab/app/db`.
+      schema:
+        type: string
+    SnapshotTarget:
+      name: target
+      in: path
+      required: true
+      description: ZFS snapshot target, for example `floatlab/app/db@backup`.
+      schema:
+        type: string
+    Recursive:
+      name: recursive
+      in: query
+      required: false
+      schema:
+        type: boolean
+  responses:
+    Error:
+      description: JSON error response
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    BootstrapResponse:
+      type: object
+      required:
+        - datasets
+      properties:
+        datasets:
+          type: array
+          items:
+            type: string
+          example:
+            - floatlab/system
+            - floatlab/system/logs
+            - floatlab/system/metrics
+    ZFSDataset:
+      type: object
+      required:
+        - name
+        - type
+        - usedBytes
+        - availableBytes
+        - referencedBytes
+        - snapshotUsedBytes
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+        mountpoint:
+          type: string
+        usedBytes:
+          type: integer
+          format: uint64
+        availableBytes:
+          type: integer
+          format: uint64
+        referencedBytes:
+          type: integer
+          format: uint64
+        snapshotUsedBytes:
+          type: integer
+          format: uint64
+        quotaBytes:
+          type: integer
+          format: uint64
+    DatasetListResponse:
+      type: object
+      required:
+        - datasets
+      properties:
+        datasets:
+          type: array
+          items:
+            $ref: '#/components/schemas/ZFSDataset'
+    CreateDatasetRequest:
+      type: object
+      properties:
+        quota:
+          type: string
+        compression:
+          type: string
+        recordsize:
+          type: string
+    Snapshot:
+      type: object
+      required:
+        - name
+        - dataset
+        - snapshot
+        - createdAt
+        - usedBytes
+        - referencedBytes
+      properties:
+        name:
+          type: string
+        dataset:
+          type: string
+        snapshot:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        usedBytes:
+          type: integer
+          format: uint64
+        referencedBytes:
+          type: integer
+          format: uint64
+    SnapshotListResponse:
+      type: object
+      required:
+        - snapshots
+      properties:
+        snapshots:
+          type: array
+          items:
+            $ref: '#/components/schemas/Snapshot'
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
