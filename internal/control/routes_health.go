@@ -130,9 +130,16 @@ func (s *Server) handleNodeStacks(w http.ResponseWriter, r *http.Request) {
 }
 
 func registerNetworkRoutes(r chi.Router, s *Server) {
-	r.Get("/network/pools", stub([]interface{}{}))
-	r.Get("/network/allocations", s.handleListAllocations)
-	r.Delete("/network/allocations/{id}", s.handleDeleteAllocation)
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireAdminJWT)
+		r.Use(s.idempotency)
+		r.Get("/settings/network-pools", s.handleListNetworkPools)
+		r.Post("/settings/network-pools", s.handleCreateNetworkPool)
+		r.Put("/settings/network-pools/{id}", s.handleUpdateNetworkPool)
+		r.Delete("/settings/network-pools/{id}", s.handleDeleteNetworkPool)
+		r.Get("/network/allocations", s.handleListAllocations)
+		r.Delete("/network/allocations/{id}", s.handleDeleteAllocation)
+	})
 }
 func registerNotifyRoutes(r chi.Router, s *Server) {
 	r.Get("/notifications", s.handleListNotifications)
@@ -283,18 +290,4 @@ func stub(v interface{}) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, v)
 	}
-}
-
-func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-	_, _ = w.Write([]byte(": keepalive\n\n"))
-	flusher.Flush()
-	<-r.Context().Done()
 }

@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/floatlab/floatlab-core/pkg/logs"
+	"github.com/go-chi/chi/v5"
 )
 
 // frontendLogLine matches the frontend LogLine interface.

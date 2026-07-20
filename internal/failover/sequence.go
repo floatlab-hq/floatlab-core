@@ -126,7 +126,8 @@ func (s *Sequence) Restore(ctx context.Context, stackID string) error {
 
 	// Stop secondary containers.
 	_, _ = s.hosts.Execute(ctx, stack.BackupNodeID, "compose.down", ipc.ComposeDownPayload{
-		StackID: stackID,
+		StackID:     stackID,
+		DatasetPath: stack.ZFSDataset,
 	})
 	log.Info("failover: restore: step 2/4: secondary containers stopped")
 

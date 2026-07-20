@@ -15,7 +15,7 @@ type StackExtension struct {
 }
 
 type FailoverConfig struct {
-	Mode             string `json:"mode"`              // "manual" | "auto"
+	Mode             string `json:"mode"` // "manual" | "auto"
 	AutoTriggerAfter string `json:"auto_trigger_after,omitempty"`
 }
 

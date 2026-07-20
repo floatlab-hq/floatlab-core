@@ -106,7 +106,47 @@ components:
         code:
           type: string
 
+    NetworkPool:
+      type: object
+      required: [id, name, cidr, start_ip, end_ip, is_default]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        cidr: {type: string, example: 192.0.2.0/24}
+        start_ip: {type: string, example: 192.0.2.10}
+        end_ip: {type: string, example: 192.0.2.200}
+        is_default: {type: boolean}
+
 paths:
+  /settings/network-pools:
+    get:
+      summary: List managed IPv4 network pools
+      operationId: listNetworkPools
+      responses:
+        '200': {description: Network pools.}
+    post:
+      summary: Create a managed IPv4 network pool
+      operationId: createNetworkPool
+      responses:
+        '201': {description: Network pool created.}
+        '409': {description: Invalid or overlapping pool.}
+
+  /settings/network-pools/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+    put:
+      summary: Update a managed IPv4 network pool
+      operationId: updateNetworkPool
+      responses:
+        '200': {description: Network pool updated.}
+        '409': {description: Update conflicts with a pool or active allocation.}
+    delete:
+      summary: Delete an unused network pool
+      operationId: deleteNetworkPool
+      responses:
+        '204': {description: Network pool deleted.}
+        '409': {description: Pool has active allocations.}
+
   /network/pools:
     get:
       summary: List all IPv6 prefix pools

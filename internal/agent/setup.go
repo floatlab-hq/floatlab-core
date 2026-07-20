@@ -32,8 +32,9 @@ type CommandSetupValidator struct {
 func (v CommandSetupValidator) RunSetupChecks(ctx context.Context) SetupReport {
 	checks := []SetupCheck{
 		checkCommand(ctx, "docker", "docker", "version"),
-		checkCommand(ctx, "docker-compose", "docker", "compose", "version"),
 		checkCommand(ctx, "zfs", "zfs", "version"),
+		checkCommand(ctx, "ip", "ip", "-Version"),
+		checkCommand(ctx, "floatlab-lan", "ip", "link", "show", "dev", "floatlab-lan"),
 		v.checkFloatlabDataset(ctx),
 	}
 

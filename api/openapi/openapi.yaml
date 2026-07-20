@@ -57,6 +57,10 @@ paths:
     $ref: './stacks.yaml#/paths/~1stacks~1{id}~1start'
   /stacks/{id}/stop:
     $ref: './stacks.yaml#/paths/~1stacks~1{id}~1stop'
+  /stacks/{id}/restart:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1restart'
+  /stacks/{id}/upgrade:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1upgrade'
   /stacks/{id}/failover:
     $ref: './stacks.yaml#/paths/~1stacks~1{id}~1failover'
   /stacks/{id}/restore:
@@ -65,6 +69,24 @@ paths:
     $ref: './stacks.yaml#/paths/~1stacks~1{id}~1state'
   /stacks/{id}/containers:
     $ref: './stacks.yaml#/paths/~1stacks~1{id}~1containers'
+  /stacks/{id}/status:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1status'
+  /stacks/{id}/config:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1config'
+  /stacks/{id}/snapshots:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1snapshots'
+  /stacks/{id}/snapshots/{snapshotId}:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1snapshots~1{snapshotId}'
+  /stacks/{id}/alerts:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1alerts'
+  /stacks/{id}/events:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1events'
+  /stacks/{id}/containers/{containerId}/terminal:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1containers~1{containerId}~1terminal'
+  /operations/{operationId}:
+    $ref: './stacks.yaml#/paths/~1operations~1{operationId}'
+  /internal/alerts/transition:
+    $ref: './stacks.yaml#/paths/~1internal~1alerts~1transition'
 
   # Nodes
   /nodes:
@@ -97,6 +119,10 @@ paths:
   # Network
   /network/pools:
     $ref: './network.yaml#/paths/~1network~1pools'
+  /settings/network-pools:
+    $ref: './network.yaml#/paths/~1settings~1network-pools'
+  /settings/network-pools/{id}:
+    $ref: './network.yaml#/paths/~1settings~1network-pools~1{id}'
   /network/allocations:
     $ref: './network.yaml#/paths/~1network~1allocations'
   /network/allocations/{id}:

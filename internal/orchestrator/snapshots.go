@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/floatlab/floatlab-core/internal/worker"
@@ -44,11 +46,42 @@ func scheduleTick(ctx context.Context, orch *Orchestrator, db *rqlite.Client, no
 	}
 
 	for _, stack := range stacks {
+		if active, err := orch.ops.Active(ctx); err == nil {
+			busy := false
+			for _, operation := range active {
+				if operation.StackID == stack.ID {
+					busy = true
+					break
+				}
+			}
+			if busy {
+				continue
+			}
+		}
 		inst, ok := orch.raft.FSM().State(stack.ID)
 		if !ok {
 			continue
 		}
 		if inst.State != run.StateRunningPrimary && inst.State != run.StateRunningBackup {
+			continue
+		}
+
+		lifecycle, lifecycleErr := compose.ParseLifecycle(stack.ComposeYAML, stack.Name)
+		if lifecycleErr == nil {
+			for _, mount := range lifecycle.Mounts {
+				for _, tier := range mount.Snapshots {
+					if !snapshotDue(now, tier.Interval) {
+						continue
+					}
+					taskID := fmt.Sprintf("snapshot-%s-%s-%s-%s", stack.ID, strings.ReplaceAll(mount.Dataset, "/", "-"), tier.Interval, now.Format("200601021504"))
+					payload := worker.SnapshotCreatePayload{Dataset: mount.Dataset, NodeID: stack.PrimaryNodeID, SnapType: tier.Interval, Keep: tier.Retain, Name: "flsnap-" + taskID + "-" + tier.Interval}
+					if err := worker.EnqueueTask(ctx, db, taskID, worker.TaskSnapshotCreate, stack.ID, payload); err != nil {
+						log.Error("snapshot scheduler: enqueue", zap.String("stack", stack.ID), zap.Error(err))
+					} else {
+						_ = db.Execute(ctx, []rqlite.Statement{{SQL: `INSERT INTO scheduler_state(stack_id,mount,interval,last_boundary,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(stack_id,mount,interval) DO UPDATE SET last_boundary=excluded.last_boundary,updated_at=excluded.updated_at`, Params: []interface{}{stack.ID, mount.Dataset, tier.Interval, now, time.Now().UTC()}}})
+					}
+				}
+			}
 			continue
 		}
 
@@ -96,4 +129,36 @@ func scheduleTick(ctx context.Context, orch *Orchestrator, db *rqlite.Client, no
 			}
 		}
 	}
+}
+
+func snapshotDue(now time.Time, interval string) bool {
+	if interval == "" {
+		return false
+	}
+	unit := interval[len(interval)-1:]
+	countText := interval[:len(interval)-1]
+	if len(interval) > 2 && interval[len(interval)-2:] == "mo" {
+		unit, countText = "mo", interval[:len(interval)-2]
+	}
+	count := 0
+	_, _ = fmt.Sscanf(countText, "%d", &count)
+	if count < 1 {
+		return false
+	}
+	switch unit {
+	case "m":
+		return now.Minute()%count == 0
+	case "h":
+		return now.Minute() == 0 && now.Hour()%count == 0
+	case "d":
+		return now.Hour() == 0 && now.Minute() == 0 && (now.YearDay()-1)%count == 0
+	case "w":
+		_, week := now.ISOWeek()
+		return now.Weekday() == time.Monday && now.Hour() == 0 && now.Minute() == 0 && (week-1)%count == 0
+	case "mo":
+		return now.Day() == 1 && now.Hour() == 0 && now.Minute() == 0 && (int(now.Month())-1)%count == 0
+	case "y":
+		return now.Month() == time.January && now.Day() == 1 && now.Hour() == 0 && now.Minute() == 0 && now.Year()%count == 0
+	}
+	return false
 }

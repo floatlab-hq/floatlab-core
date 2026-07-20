@@ -17,27 +17,31 @@ import (
 )
 
 func registerStorageRoutes(r chi.Router, s *Server) {
-	r.Get("/storage/pools", s.handleListPools)
-	r.Get("/storage/pools/{node_id}/{pool}", s.handleGetPool)
-	r.Get("/storage/datasets/{stack_id}", s.handleGetStackDataset)
-	r.Get("/storage/datasets/{stack_id}/snapshots", s.handleListSnapshots)
-	r.Post("/storage/datasets/{stack_id}/snapshots", s.handleCreateSnapshot)
-	r.Delete("/storage/datasets/{stack_id}/snapshots/{name}", s.handleDeleteSnapshot)
-	r.Post("/storage/replication/{stack_id}/trigger", s.handleTriggerReplication)
-	r.Get("/storage/replication", s.handleListReplication)
-	r.Get("/storage/faults", s.handleListFaults)
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireAdminJWT)
+		r.Use(s.idempotency)
+		r.Get("/storage/pools", s.handleListPools)
+		r.Get("/storage/pools/{node_id}/{pool}", s.handleGetPool)
+		r.Get("/storage/datasets/{stack_id}", s.handleGetStackDataset)
+		r.Get("/storage/datasets/{stack_id}/snapshots", s.handleListSnapshots)
+		r.Post("/storage/datasets/{stack_id}/snapshots", s.handleCreateSnapshot)
+		r.Delete("/storage/datasets/{stack_id}/snapshots/{name}", s.handleDeleteSnapshot)
+		r.Post("/storage/replication/{stack_id}/trigger", s.handleTriggerReplication)
+		r.Get("/storage/replication", s.handleListReplication)
+		r.Get("/storage/faults", s.handleListFaults)
+	})
 }
 
 // poolResponse maps to the frontend ZfsPool type.
 type poolResponse struct {
-	NodeID     string        `json:"node_id"`
-	Name       string        `json:"name"`
-	State      string        `json:"state"`
-	SizeBytes  int64         `json:"size_bytes"`
-	AllocBytes int64         `json:"alloc_bytes"`
-	FreeBytes  int64         `json:"free_bytes"`
-	CapPct     float64       `json:"cap_pct"`
-	Health     string        `json:"health"`
+	NodeID     string         `json:"node_id"`
+	Name       string         `json:"name"`
+	State      string         `json:"state"`
+	SizeBytes  int64          `json:"size_bytes"`
+	AllocBytes int64          `json:"alloc_bytes"`
+	FreeBytes  int64          `json:"free_bytes"`
+	CapPct     float64        `json:"cap_pct"`
+	Health     string         `json:"health"`
 	VDevs      []vdevResponse `json:"vdevs"`
 }
 

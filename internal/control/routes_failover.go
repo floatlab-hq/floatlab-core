@@ -1,8 +1,10 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
@@ -11,10 +13,14 @@ import (
 )
 
 func registerFailoverRoutes(r chi.Router, s *Server) {
-	r.Get("/failover/status", s.handleFailoverStatus)
-	r.Post("/failover/{stack_id}/trigger", s.handleTriggerFailover)
-	r.Post("/failover/{stack_id}/abort", s.handleAbortFailover)
-	r.Get("/failover/{stack_id}/log", s.handleFailoverLog)
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireAdminJWT)
+		r.Use(s.idempotency)
+		r.Get("/failover/status", s.handleFailoverStatus)
+		r.Post("/failover/{stack_id}/trigger", s.handleTriggerFailover)
+		r.Post("/failover/{stack_id}/abort", s.handleAbortFailover)
+		r.Get("/failover/{stack_id}/log", s.handleFailoverLog)
+	})
 }
 
 func (s *Server) handleFailoverStatus(w http.ResponseWriter, r *http.Request) {
@@ -107,19 +113,26 @@ func (s *Server) handleStackFailover(w http.ResponseWriter, r *http.Request) {
 		body.Action = "trigger"
 	}
 	stackID := chi.URLParam(r, "id")
+	opID := operationID(r.Context())
 
 	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
 		var err error
 		if body.Action == "restore" {
-			err = s.seq.Restore(r.Context(), stackID)
+			err = s.seq.Restore(ctx, stackID)
 		} else {
-			err = s.seq.Execute(r.Context(), stackID)
+			err = s.seq.Execute(ctx, stackID)
 		}
 		if err != nil {
+			_ = s.ops.Update(context.Background(), opID, "failed", "failed", err.Error())
 			s.log.Error("failover: stack action",
 				zap.String("stack", stackID),
 				zap.String("action", body.Action),
 				zap.Error(err))
+		}
+		if err == nil {
+			_ = s.ops.Update(context.Background(), opID, "succeeded", "succeeded", "")
 		}
 	}()
 
@@ -133,10 +146,16 @@ func (s *Server) handleStackFailover(w http.ResponseWriter, r *http.Request) {
 // handleStackRestore is mounted on /stacks/{id}/restore — matches frontend restoreStack().
 func (s *Server) handleStackRestore(w http.ResponseWriter, r *http.Request) {
 	stackID := chi.URLParam(r, "id")
+	opID := operationID(r.Context())
 	go func() {
-		if err := s.seq.Restore(r.Context(), stackID); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		if err := s.seq.Restore(ctx, stackID); err != nil {
+			_ = s.ops.Update(context.Background(), opID, "failed", "failed", err.Error())
 			s.log.Error("failover: restore", zap.String("stack", stackID), zap.Error(err))
+			return
 		}
+		_ = s.ops.Update(context.Background(), opID, "succeeded", "succeeded", "")
 	}()
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"status":   "triggered",
@@ -144,4 +163,3 @@ func (s *Server) handleStackRestore(w http.ResponseWriter, r *http.Request) {
 		"stack_id": stackID,
 	})
 }
-

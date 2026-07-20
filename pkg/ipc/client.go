@@ -18,6 +18,8 @@ type Client struct {
 	mu         sync.Mutex
 	pending    map[string]chan Response
 	events     chan Event
+	subs       map[int]chan Event
+	nextSub    int
 }
 
 func NewClient(socketPath string) *Client {
@@ -25,6 +27,7 @@ func NewClient(socketPath string) *Client {
 		socketPath: socketPath,
 		pending:    make(map[string]chan Response),
 		events:     make(chan Event, 256),
+		subs:       make(map[int]chan Event),
 	}
 }
 
@@ -51,6 +54,20 @@ func (c *Client) Close() error {
 
 // Events returns the channel on which unsolicited events are delivered.
 func (c *Client) Events() <-chan Event { return c.events }
+
+func (c *Client) SubscribeEvents() (<-chan Event, func()) {
+	c.mu.Lock()
+	id := c.nextSub
+	c.nextSub++
+	ch := make(chan Event, 64)
+	c.subs[id] = ch
+	c.mu.Unlock()
+	return ch, func() {
+		c.mu.Lock()
+		delete(c.subs, id)
+		c.mu.Unlock()
+	}
+}
 
 func (c *Client) Execute(ctx context.Context, name string, payload any) (json.RawMessage, error) {
 	id := uuid.New().String()
@@ -126,6 +143,14 @@ func (c *Client) readLoop(ctx context.Context) {
 			case c.events <- ev:
 			default:
 			}
+			c.mu.Lock()
+			for _, subscriber := range c.subs {
+				select {
+				case subscriber <- ev:
+				default:
+				}
+			}
+			c.mu.Unlock()
 		}
 	}
 }

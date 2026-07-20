@@ -68,6 +68,15 @@ func (p *Pool) Events(nodeID string) <-chan ipc.Event {
 	return c.Events()
 }
 
+func (p *Pool) SubscribeEvents(ctx context.Context, nodeID string) (<-chan ipc.Event, func(), error) {
+	c, err := p.getOrConnect(ctx, nodeID)
+	if err != nil {
+		return nil, nil, err
+	}
+	events, cancel := c.SubscribeEvents()
+	return events, cancel, nil
+}
+
 func (p *Pool) getOrConnect(ctx context.Context, nodeID string) (*ipc.Client, error) {
 	p.mu.RLock()
 	c, ok := p.clients[nodeID]

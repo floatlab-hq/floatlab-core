@@ -50,12 +50,21 @@ type ComposeUpPayload struct {
 
 type ComposeDownPayload struct {
 	StackID       string `json:"stack_id"`
+	DatasetPath   string `json:"dataset_path"`
 	RemoveVolumes bool   `json:"remove_volumes"`
 }
 
 type ComposePullPayload struct {
-	StackID  string   `json:"stack_id"`
-	Services []string `json:"services,omitempty"`
+	StackID     string   `json:"stack_id"`
+	DatasetPath string   `json:"dataset_path"`
+	ComposeFile string   `json:"compose_file"`
+	Services    []string `json:"services,omitempty"`
+}
+
+type ComposeSourcePayload struct {
+	StackID     string `json:"stack_id"`
+	DatasetPath string `json:"dataset_path"`
+	ComposeFile string `json:"compose_file"`
 }
 
 type DatasetCreatePayload struct {
@@ -70,9 +79,30 @@ type DatasetDestroyPayload struct {
 	Recursive bool   `json:"recursive"`
 }
 
-type SnapshotCreatePayload struct {
+type DatasetSetPayload struct {
+	Dataset    string            `json:"dataset"`
+	Properties map[string]string `json:"properties"`
+}
+
+type DatasetClonePayload struct {
+	Snapshot string `json:"snapshot"`
+	Target   string `json:"target"`
+}
+
+type DatasetRenamePayload struct {
+	Source    string `json:"source"`
+	Target    string `json:"target"`
+	Recursive bool   `json:"recursive,omitempty"`
+}
+
+type DatasetPromotePayload struct {
 	Dataset string `json:"dataset"`
-	Name    string `json:"name"`
+}
+
+type SnapshotCreatePayload struct {
+	Dataset   string `json:"dataset"`
+	Name      string `json:"name"`
+	Recursive bool   `json:"recursive,omitempty"`
 }
 
 type SnapshotDestroyPayload struct {
@@ -110,6 +140,14 @@ type NetRoutePayload struct {
 	Nexthop string `json:"nexthop,omitempty"`
 }
 
+type VethPayload struct {
+	StackID  string `json:"stack_id"`
+	HostName string `json:"host_name"`
+	PeerName string `json:"peer_name"`
+	Address  string `json:"address,omitempty"`
+	Bridge   string `json:"bridge"`
+}
+
 type DockerEventsPayload struct {
 	Subscribe bool `json:"subscribe"`
 }
@@ -119,17 +157,44 @@ type DockerListPayload struct {
 }
 
 type ContainerInfo struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Image   string `json:"image"`
-	State   string `json:"state"`
-	Health  string `json:"health"`
-	Service string `json:"service"`
-	StackID string `json:"stack_id"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Image    string `json:"image"`
+	State    string `json:"state"`
+	Health   string `json:"health"`
+	Service  string `json:"service"`
+	StackID  string `json:"stack_id"`
+	ExitCode int    `json:"exit_code"`
 }
 
 type DockerListResult struct {
 	Containers []ContainerInfo `json:"containers"`
+}
+
+type TerminalOpenPayload struct {
+	StackID     string   `json:"stack_id"`
+	ContainerID string   `json:"container_id"`
+	Command     []string `json:"command,omitempty"`
+	Rows        uint     `json:"rows"`
+	Cols        uint     `json:"cols"`
+}
+type TerminalSessionPayload struct {
+	SessionID string `json:"session_id"`
+}
+type TerminalWritePayload struct {
+	SessionID string `json:"session_id"`
+	Data      []byte `json:"data"`
+}
+type TerminalResizePayload struct {
+	SessionID string `json:"session_id"`
+	Rows      uint   `json:"rows"`
+	Cols      uint   `json:"cols"`
+}
+type TerminalOutputEvent struct {
+	SessionID string `json:"session_id"`
+	Data      []byte `json:"data,omitempty"`
+	Error     string `json:"error,omitempty"`
+	Closed    bool   `json:"closed,omitempty"`
 }
 
 // Event payloads
@@ -138,6 +203,9 @@ type ContainerStateEvent struct {
 	ContainerID string `json:"container_id"`
 	StackID     string `json:"stack_id"`
 	Status      string `json:"status"`
+	Service     string `json:"service,omitempty"`
+	Image       string `json:"image,omitempty"`
+	ExitStatus  string `json:"exit_status,omitempty"`
 }
 
 type ContainerHealthEvent struct {

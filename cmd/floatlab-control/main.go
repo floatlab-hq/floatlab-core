@@ -17,6 +17,7 @@ import (
 	"github.com/floatlab/floatlab-core/pkg/config"
 	"github.com/floatlab/floatlab-core/pkg/hostclient"
 	"github.com/floatlab/floatlab-core/pkg/notify"
+	"github.com/floatlab/floatlab-core/pkg/operation"
 	floatraft "github.com/floatlab/floatlab-core/pkg/raft"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
 )
@@ -31,6 +32,9 @@ var (
 	raftBootstrap bool
 	vlogsURL      string
 	vmetricsURL   string
+	jwtSecret     string
+	jwtIssuer     string
+	jwtAudience   string
 )
 
 func main() {
@@ -49,6 +53,9 @@ func main() {
 	root.Flags().BoolVar(&raftBootstrap, "raft-bootstrap", false, "Bootstrap a new single-node Raft cluster")
 	root.Flags().StringVar(&vlogsURL, "vlogs-url", "http://localhost:9428", "VictoriaLogs base URL")
 	root.Flags().StringVar(&vmetricsURL, "vmetrics-url", "http://localhost:8428", "VictoriaMetrics base URL")
+	root.Flags().StringVar(&jwtSecret, "jwt-secret", os.Getenv("FLOATLAB_JWT_SECRET"), "HMAC secret for management API JWTs")
+	root.Flags().StringVar(&jwtIssuer, "jwt-issuer", os.Getenv("FLOATLAB_JWT_ISSUER"), "Required JWT issuer")
+	root.Flags().StringVar(&jwtAudience, "jwt-audience", os.Getenv("FLOATLAB_JWT_AUDIENCE"), "Required JWT audience")
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -108,6 +115,9 @@ func run(cmd *cobra.Command, args []string) error {
 				if err := notify.Cleanup(ctx, db); err != nil {
 					log.Warn("notify cleanup", zap.Error(err))
 				}
+				if err := operation.Cleanup(ctx, db, time.Now().UTC().AddDate(-1, 0, 0)); err != nil {
+					log.Warn("operation cleanup", zap.Error(err))
+				}
 			}
 		}
 	}()
@@ -118,7 +128,7 @@ func run(cmd *cobra.Command, args []string) error {
 	go detector.Run(ctx)
 
 	// Orchestrator: drives stack state machine from Raft + IPC events.
-	orch := orchestrator.New(store, raftNode, hosts, log)
+	orch := orchestrator.New(store, raftNode, hosts, db, log)
 	go func() {
 		if err := orch.Run(ctx); err != nil && err != context.Canceled {
 			log.Error("orchestrator exited", zap.Error(err))
@@ -129,7 +139,7 @@ func run(cmd *cobra.Command, args []string) error {
 	go orchestrator.RunScheduler(ctx, orch, db, log)
 
 	// Task worker: polls rqlite tasks table and dispatches IPC to hostd.
-	w := worker.New(db, store, hosts, log)
+	w := worker.New(db, store, hosts, raftNode, log)
 	go func() {
 		if err := w.Run(ctx); err != nil && err != context.Canceled {
 			log.Error("worker exited", zap.Error(err))
@@ -142,6 +152,9 @@ func run(cmd *cobra.Command, args []string) error {
 		RQLiteURL:   rqliteURL,
 		VLogsURL:    vlogsURL,
 		VMetricsURL: vmetricsURL,
+		JWTSecret:   jwtSecret,
+		JWTIssuer:   jwtIssuer,
+		JWTAudience: jwtAudience,
 	}, db, store, raftNode, hosts, broker, seq, log)
 
 	log.Info("floatlab-control starting",

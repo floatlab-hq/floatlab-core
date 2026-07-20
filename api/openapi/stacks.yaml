@@ -3,7 +3,25 @@ info:
   title: FloatLab Stacks API
   version: 0.1.0
 
+security:
+  - bearerAuth: []
+
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: HS256 administrator JWT. The token requires a subject and an `admin` role.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        maxLength: 255
+      description: Unique key used to safely retry this mutation.
   schemas:
     StackState:
       type: string
@@ -93,6 +111,45 @@ components:
         compose_file:
           type: string
 
+    StackUpgrade:
+      type: object
+      required: [images]
+      properties:
+        images:
+          type: object
+          minProperties: 1
+          additionalProperties:
+            type: string
+          description: Compose service names mapped to replacement image references.
+
+    Operation:
+      type: object
+      required: [operation_id, action, actor, state, checkpoint, created_at, updated_at]
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        stack_id:
+          type: string
+          format: uuid
+        action:
+          type: string
+        actor:
+          type: string
+        state:
+          type: string
+          enum: [pending, running, succeeded, failed]
+        checkpoint:
+          type: string
+        error:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
     ContainerStatus:
       type: string
       enum: [running, stopped, starting, paused, error]
@@ -162,6 +219,8 @@ paths:
       summary: Create a stack
       operationId: createStack
       tags: [stacks]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -217,17 +276,18 @@ paths:
       summary: Delete a stack
       operationId: deleteStack
       tags: [stacks]
-      description: Stack must be in Idle or Failed state. Destroys ZFS dataset if requested.
+      description: Stops the stack and removes active metadata. The project dataset and configuration are retained unless purged.
       parameters:
-        - name: destroy_data
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: purge
           in: query
           schema:
             type: boolean
             default: false
           description: Also destroy the ZFS dataset and all snapshots.
       responses:
-        '204':
-          description: Stack deleted.
+        '202':
+          description: Delete operation accepted.
         '409':
           description: Stack is not in a deletable state.
           content:
@@ -247,6 +307,8 @@ paths:
       summary: Update the compose file for a stack
       operationId: updateStackCompose
       tags: [stacks]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -276,9 +338,20 @@ paths:
           type: string
           format: uuid
     post:
-      summary: Start a stack (Idle → Starting → RunningPrimary)
+      summary: Create or update and start a stack
       operationId: startStack
       tags: [stacks]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/yaml:
+            schema: {type: string}
+          application/x-yaml:
+            schema: {type: string}
+          application/x-tar:
+            schema: {type: string, format: binary}
       responses:
         '202':
           description: Start accepted; state transitions asynchronously.
@@ -301,11 +374,61 @@ paths:
       summary: Stop a stack (RunningPrimary → Stopping → Idle)
       operationId: stopStack
       tags: [stacks]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
         '202':
           description: Stop accepted.
         '409':
           description: Stack is not in a stoppable state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /stacks/{id}/upgrade:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Upgrade selected service images with automatic rollback
+      operationId: upgradeStack
+      tags: [stacks]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StackUpgrade'
+      responses:
+        '202':
+          description: Upgrade accepted. The Location header identifies the resumable operation.
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [stack_id, state, operation_id]
+                properties:
+                  stack_id:
+                    type: string
+                    format: uuid
+                  state:
+                    $ref: '#/components/schemas/StackState'
+                  operation_id:
+                    type: string
+                    format: uuid
+        '409':
+          description: Stack is not running on its primary node.
           content:
             application/json:
               schema:
@@ -323,6 +446,8 @@ paths:
       summary: Trigger manual failover (RunningPrimary → FailingOver → RunningBackup)
       operationId: triggerFailover
       tags: [stacks]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
         '202':
           description: Failover accepted.
@@ -345,6 +470,8 @@ paths:
       summary: Restore primary (RunningBackup → Restoring → RunningPrimary)
       operationId: restoreStack
       tags: [stacks]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
         '202':
           description: Restore accepted.
@@ -400,3 +527,178 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Container'
+
+  /stacks/{id}/containers/{containerId}/terminal:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: containerId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: rows
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 4096
+          default: 24
+      - name: cols
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 4096
+          default: 80
+      - name: command
+        in: query
+        schema:
+          type: array
+          items:
+            type: string
+        style: form
+        explode: true
+    get:
+      summary: Open an interactive container terminal
+      description: Upgrades to WebSocket. Binary messages carry terminal bytes; text JSON messages with `type=resize`, `rows`, and `cols` resize the TTY.
+      operationId: openStackTerminal
+      tags: [stacks]
+      responses:
+        '101':
+          description: WebSocket terminal established.
+        '404':
+          description: Stack or container not found.
+
+  /operations/{operationId}:
+    parameters:
+      - name: operationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get durable operation progress
+      operationId: getOperation
+      tags: [operations]
+      responses:
+        '200':
+          description: Current operation state and checkpoint.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        '404':
+          description: Operation not found.
+
+  /stacks/{id}/restart:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+    post:
+      summary: Restart a running stack
+      operationId: restartStack
+      tags: [stacks]
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '202': {description: Restart operation accepted.}
+        '409': {description: Stack is not running.}
+
+  /stacks/{id}/status:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+    get:
+      summary: Get lifecycle, operation, network, and container status
+      operationId: getStackStatus
+      tags: [stacks]
+      responses:
+        '200': {description: Combined stack status.}
+
+  /stacks/{id}/config:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+    get:
+      summary: Get canonical source Compose configuration
+      operationId: getStackConfig
+      tags: [stacks]
+      responses:
+        '200':
+          description: Canonical Compose YAML.
+          content:
+            application/yaml: {schema: {type: string}}
+
+  /stacks/{id}/snapshots:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+    get:
+      summary: List stack snapshots and recovery points
+      operationId: listStackSnapshots
+      tags: [stacks]
+      responses:
+        '200': {description: Stack snapshots.}
+    post:
+      summary: Create a recursive whole-stack snapshot
+      operationId: createStackSnapshot
+      tags: [stacks]
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '202': {description: Snapshot operation accepted.}
+
+  /stacks/{id}/snapshots/{snapshotId}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      - {name: snapshotId, in: path, required: true, schema: {type: string}}
+    delete:
+      summary: Delete a snapshot or recovery point
+      operationId: deleteStackSnapshot
+      tags: [stacks]
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '202': {description: Deletion operation accepted.}
+
+  /stacks/{id}/alerts:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+    get:
+      summary: List configured alert rules and current states
+      operationId: listStackAlerts
+      tags: [stacks]
+      responses:
+        '200': {description: Alert rules and status.}
+
+  /stacks/{id}/events:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      - {name: after, in: query, schema: {type: string}}
+      - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+    get:
+      summary: List durable lifecycle events using cursor pagination
+      operationId: listStackEvents
+      tags: [stacks]
+      responses:
+        '200': {description: Event page and next cursor.}
+
+  /internal/alerts/transition:
+    post:
+      summary: Atomically update alert status and append its history event
+      operationId: transitionStackAlert
+      tags: [internal]
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rule_id, state, observed, observed_at]
+              properties:
+                rule_id: {type: string, format: uuid}
+                state: {type: string, enum: [pending, firing, resolved]}
+                observed: {type: number}
+                observed_at: {type: string, format: date-time}
+      responses:
+        '204': {description: Alert state and event committed.}

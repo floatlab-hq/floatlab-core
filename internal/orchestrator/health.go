@@ -2,8 +2,10 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/floatlab/floatlab-core/pkg/ipc"
+	"github.com/floatlab/floatlab-core/pkg/operation"
 	"github.com/floatlab/floatlab-core/pkg/run"
 	"go.uber.org/zap"
 )
@@ -23,11 +25,21 @@ func (o *Orchestrator) handleContainerState(ctx context.Context, ev ipc.Containe
 	switch ev.Status {
 	case "die", "oom":
 		if inst.State == run.StateRunningPrimary || inst.State == run.StateRunningBackup {
+			if operations, err := o.ops.Active(ctx); err == nil {
+				for _, active := range operations {
+					if active.StackID == ev.StackID && (active.Action == "stop" || active.Action == "restart" || active.Action == "delete") {
+						return
+					}
+				}
+			}
 			o.log.Warn("container died unexpectedly",
 				zap.String("stack", ev.StackID),
 				zap.String("container", ev.ContainerID),
 				zap.String("event", ev.Status))
 			o.applyEvent("", ev.StackID, run.EventFailStack)
+			details, _ := json.Marshal(map[string]string{"container_id": ev.ContainerID, "service": ev.Service, "image": ev.Image, "exit_status": ev.ExitStatus})
+			containers, _ := json.Marshal([]string{ev.ContainerID})
+			_ = operation.RecordEvent(ctx, o.db, operation.Event{StackID: ev.StackID, Type: "Crashed", Outcome: "failed", Details: details, Containers: containers})
 		}
 	}
 }

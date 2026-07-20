@@ -15,6 +15,7 @@ import (
 	"github.com/floatlab/floatlab-core/pkg/hostclient"
 	"github.com/floatlab/floatlab-core/pkg/logs"
 	"github.com/floatlab/floatlab-core/pkg/notify"
+	"github.com/floatlab/floatlab-core/pkg/operation"
 	floatraft "github.com/floatlab/floatlab-core/pkg/raft"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
 	"github.com/floatlab/floatlab-core/pkg/run"
@@ -34,14 +35,18 @@ type Server struct {
 	vlogs  *logs.Client
 	vmets  *stats.Client
 	seq    *failover.Sequence
+	ops    *operation.Store
 }
 
 type Config struct {
-	ListenAddr   string
-	RaftConfig   floatraft.Config
-	RQLiteURL    string
-	VLogsURL     string
-	VMetricsURL  string
+	ListenAddr  string
+	RaftConfig  floatraft.Config
+	RQLiteURL   string
+	VLogsURL    string
+	VMetricsURL string
+	JWTSecret   string
+	JWTIssuer   string
+	JWTAudience string
 }
 
 func NewServer(
@@ -66,6 +71,7 @@ func NewServer(
 		vlogs:  logs.NewClient(cfg.VLogsURL),
 		vmets:  stats.NewClient(cfg.VMetricsURL),
 		seq:    seq,
+		ops:    operation.NewStore(db),
 	}
 	s.router = s.buildRouter()
 	return s

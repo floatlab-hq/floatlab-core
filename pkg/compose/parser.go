@@ -17,18 +17,9 @@ const (
 // Parse loads and validates a FloatLab-annotated docker-compose YAML.
 // projectName is used as a fallback when the compose file has no "name:" key.
 func Parse(ctx context.Context, yamlContent, projectName string) (*ParsedStack, error) {
-	project, err := loader.Load(loader.ConfigDetails{
-		ConfigFiles: []loader.ConfigFile{
-			{Content: []byte(yamlContent)},
-		},
-		WorkingDir:  "/",
-		ProjectName: projectName,
-		Environment: map[string]string{},
-	}, func(o *loader.Options) {
-		o.SkipNormalization = true
-	})
+	project, err := loadProjectAt(yamlContent, projectName, "/")
 	if err != nil {
-		return nil, fmt.Errorf("compose: parse: %w", err)
+		return nil, err
 	}
 
 	ext, err := extractStackExt(project)
@@ -46,6 +37,23 @@ func Parse(ctx context.Context, yamlContent, projectName string) (*ParsedStack, 
 		ServiceVolumes: extractServiceVolumes(project),
 		ProjectName:    name,
 	}, nil
+}
+
+func loadProjectAt(yamlContent, projectName, workingDir string) (*types.Project, error) {
+	project, err := loader.LoadWithContext(context.Background(), types.ConfigDetails{
+		ConfigFiles: []types.ConfigFile{
+			{Content: []byte(yamlContent)},
+		},
+		WorkingDir:  workingDir,
+		Environment: map[string]string{},
+	}, func(o *loader.Options) {
+		o.SkipNormalization = true
+		o.SetProjectName(projectName, false)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("compose: parse: %w", err)
+	}
+	return project, nil
 }
 
 // ParseAndValidate is a convenience wrapper that parses then validates.

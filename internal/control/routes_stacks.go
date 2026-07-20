@@ -3,15 +3,22 @@ package control
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/floatlab/floatlab-core/internal/worker"
 	"github.com/floatlab/floatlab-core/pkg/compose"
 	"github.com/floatlab/floatlab-core/pkg/config"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
+	"github.com/floatlab/floatlab-core/pkg/rqlite"
 	"github.com/floatlab/floatlab-core/pkg/run"
 )
 
@@ -59,17 +66,33 @@ type containerResponse struct {
 }
 
 func registerStackRoutes(r chi.Router, s *Server) {
-	r.Get("/stacks", s.handleListStacks)
-	r.Post("/stacks", s.handleCreateStack)
-	r.Get("/stacks/{id}", s.handleGetStack)
-	r.Put("/stacks/{id}/compose", s.handleUpdateStackCompose)
-	r.Post("/stacks/{id}/start", s.handleStartStack)
-	r.Post("/stacks/{id}/stop", s.handleStopStack)
-	r.Post("/stacks/{id}/failover", s.handleStackFailover)
-	r.Post("/stacks/{id}/restore", s.handleStackRestore)
-	r.Delete("/stacks/{id}", s.handleDeleteStack)
-	r.Get("/stacks/{id}/state", s.handleGetStackState)
-	r.Get("/stacks/{id}/containers", s.handleGetStackContainers)
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireAdminJWT)
+		r.Use(s.idempotency)
+		r.Get("/stacks", s.handleListStacks)
+		r.Post("/stacks", s.handleCreateStack)
+		r.Get("/stacks/{id}", s.handleGetStack)
+		r.Put("/stacks/{id}/compose", s.handleUpdateStackCompose)
+		r.Post("/stacks/{id}/start", s.handleStartStack)
+		r.Post("/stacks/{id}/stop", s.handleStopStack)
+		r.Post("/stacks/{id}/upgrade", s.handleUpgradeStack)
+		r.Post("/stacks/{id}/restart", s.handleRestartStack)
+		r.Post("/stacks/{id}/failover", s.handleStackFailover)
+		r.Post("/stacks/{id}/restore", s.handleRestoreSnapshot)
+		r.Delete("/stacks/{id}", s.handleDeleteStack)
+		r.Get("/stacks/{id}/state", s.handleGetStackState)
+		r.Get("/stacks/{id}/containers", s.handleGetStackContainers)
+		r.Get("/stacks/{id}/status", s.handleStackStatus)
+		r.Get("/stacks/{id}/config", s.handleStackConfig)
+		r.Get("/stacks/{id}/snapshots", s.handleStackSnapshots)
+		r.Post("/stacks/{id}/snapshots", s.handleCreateStackSnapshot)
+		r.Delete("/stacks/{id}/snapshots/{snapshotId}", s.handleDeleteStackSnapshot)
+		r.Get("/stacks/{id}/alerts", s.handleStackAlerts)
+		r.Get("/stacks/{id}/events", s.handleStackEvents)
+		r.Get("/stacks/{id}/containers/{containerId}/terminal", s.handleStackTerminal)
+		r.Get("/operations/{operationId}", s.handleGetOperation)
+		r.Post("/internal/alerts/transition", s.handleAlertTransition)
+	})
 }
 
 func (s *Server) handleListStacks(w http.ResponseWriter, r *http.Request) {
@@ -109,6 +132,8 @@ type createStackRequest struct {
 	PrimaryNodeID string `json:"primary_node"`
 	BackupNodeID  string `json:"secondary_node,omitempty"`
 	ComposeFile   string `json:"compose_file"`
+	FailoverMode  string `json:"failover_mode,omitempty"`
+	AutoTrigger   string `json:"auto_trigger_after,omitempty"`
 }
 
 func (s *Server) handleCreateStack(w http.ResponseWriter, r *http.Request) {
@@ -130,13 +155,33 @@ func (s *Server) handleCreateStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	parsed, err := compose.Parse(r.Context(), req.ComposeFile, req.Name)
+	parsed, err := compose.ParseAndValidate(r.Context(), req.ComposeFile, req.Name)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "compose parse error: "+err.Error())
+		writeError(w, http.StatusBadRequest, "compose validation error: "+err.Error())
 		return
 	}
-	if err := compose.Validate(parsed); err != nil {
-		writeError(w, http.StatusBadRequest, "compose validation error: "+err.Error())
+	if parsed.Extension.PrimaryNode != req.PrimaryNodeID || parsed.Extension.SecondaryNode != req.BackupNodeID {
+		writeError(w, http.StatusBadRequest, "compose node assignments must match the request")
+		return
+	}
+	if req.FailoverMode == "" {
+		req.FailoverMode = parsed.Extension.Failover.Mode
+	}
+	if req.FailoverMode == "" {
+		req.FailoverMode = "manual"
+	}
+	if req.FailoverMode != "manual" && req.FailoverMode != "auto" {
+		writeError(w, http.StatusBadRequest, "failover_mode must be manual or auto")
+		return
+	}
+	if req.AutoTrigger == "" {
+		req.AutoTrigger = parsed.Extension.Failover.AutoTriggerAfter
+	}
+	if req.AutoTrigger == "" {
+		req.AutoTrigger = "120s"
+	}
+	if duration, err := time.ParseDuration(req.AutoTrigger); err != nil || duration <= 0 {
+		writeError(w, http.StatusBadRequest, "auto_trigger_after must be a positive duration")
 		return
 	}
 
@@ -144,13 +189,15 @@ func (s *Server) handleCreateStack(w http.ResponseWriter, r *http.Request) {
 	dataset := compose.DatasetPath(pool, req.Name)
 
 	st := &config.Stack{
-		ID:            uuid.New().String(),
-		Name:          req.Name,
-		Icon:          req.Icon,
-		PrimaryNodeID: req.PrimaryNodeID,
-		BackupNodeID:  req.BackupNodeID,
-		ComposeYAML:   req.ComposeFile,
-		ZFSDataset:    dataset,
+		ID:               uuid.New().String(),
+		Name:             req.Name,
+		Icon:             req.Icon,
+		PrimaryNodeID:    req.PrimaryNodeID,
+		BackupNodeID:     req.BackupNodeID,
+		ComposeYAML:      req.ComposeFile,
+		ZFSDataset:       dataset,
+		FailoverMode:     req.FailoverMode,
+		AutoTriggerAfter: req.AutoTrigger,
 	}
 
 	if err := s.store.CreateStack(r.Context(), st); err != nil {
@@ -195,13 +242,13 @@ func (s *Server) handleUpdateStackCompose(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	parsed, err := compose.Parse(r.Context(), body.ComposeFile, st.Name)
+	parsed, err := compose.ParseAndValidate(r.Context(), body.ComposeFile, st.Name)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "compose parse error: "+err.Error())
+		writeError(w, http.StatusBadRequest, "compose validation error: "+err.Error())
 		return
 	}
-	if err := compose.Validate(parsed); err != nil {
-		writeError(w, http.StatusBadRequest, "compose validation error: "+err.Error())
+	if parsed.Extension.PrimaryNode != st.PrimaryNodeID || parsed.Extension.SecondaryNode != st.BackupNodeID {
+		writeError(w, http.StatusBadRequest, "compose updates cannot change node assignments")
 		return
 	}
 
@@ -209,15 +256,68 @@ func (s *Server) handleUpdateStackCompose(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	st.ComposeYAML = body.ComposeFile
+	st.UpdatedAt = time.Now().UTC()
+	var state string
+	if inst, ok := s.raft.FSM().State(id); ok {
+		state = string(inst.State)
+	}
+	writeJSON(w, http.StatusOK, toStackResponse(st, state))
 }
 
 func (s *Server) handleStartStack(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	st, err := s.store.GetStack(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		s.handleCreateAndStartStack(w, r, id)
 		return
+	}
+	if r.ContentLength != 0 {
+		var source, staging string
+		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-tar") {
+			staging, err = os.MkdirTemp("/floatlab", ".staging-"+st.Name+"-")
+			if err == nil {
+				defer os.RemoveAll(staging)
+				err = compose.ExtractProject(r.Body, staging)
+			}
+			if err == nil {
+				var data []byte
+				data, err = os.ReadFile(filepath.Join(staging, "docker-compose.yml"))
+				source = string(data)
+			}
+		} else {
+			var data []byte
+			data, err = io.ReadAll(r.Body)
+			source = string(data)
+		}
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		canonical, err := compose.CanonicalSource(source, st.Name)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		workingDir := filepath.Join("/floatlab", st.Name)
+		if staging != "" {
+			workingDir = staging
+		}
+		if _, err := compose.ParseLifecycleAt(canonical, st.Name, workingDir); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if staging != "" {
+			if err := compose.CopyProject(staging, filepath.Join("/floatlab", st.Name)); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+		if err := s.store.UpdateStackCompose(r.Context(), st.ID, canonical); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		st.ComposeYAML = canonical
 	}
 
 	inst, ok := s.raft.FSM().State(id)
@@ -249,6 +349,89 @@ func (s *Server) handleStartStack(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"state": string(updated.State)})
+}
+
+func (s *Server) handleCreateAndStartStack(w http.ResponseWriter, r *http.Request, requestedName string) {
+	name, err := compose.Slug(requestedName)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var source string
+	var staging string
+	contentType := strings.Split(r.Header.Get("Content-Type"), ";")[0]
+	if contentType == "application/x-tar" {
+		if err := os.MkdirAll("/floatlab", 0755); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		staging, err = os.MkdirTemp("/floatlab", ".staging-"+name+"-")
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		defer os.RemoveAll(staging)
+		if err := compose.ExtractProject(r.Body, staging); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		data, err := os.ReadFile(filepath.Join(staging, "docker-compose.yml"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "archive must contain docker-compose.yml")
+			return
+		}
+		source = string(data)
+	} else {
+		data, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		source = string(data)
+	}
+	if source == "" {
+		writeError(w, http.StatusBadRequest, "compose project is required for a new stack")
+		return
+	}
+	source, err = compose.CanonicalSource(source, name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	workingDir := filepath.Join("/floatlab", name)
+	if staging != "" {
+		workingDir = staging
+	}
+	if _, err := compose.ParseLifecycleAt(source, name, workingDir); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	nodes, err := s.store.ListNodes(r.Context())
+	if err != nil || len(nodes) == 0 {
+		writeError(w, http.StatusServiceUnavailable, "no execution node is registered")
+		return
+	}
+	if staging != "" {
+		if _, err := s.hosts.Execute(r.Context(), nodes[0].ID, "fs.dataset.create", ipc.DatasetCreatePayload{Dataset: "floatlab/" + name, BlockSize: "32K", Compression: "lz4"}); err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		if err := compose.CopyProject(staging, filepath.Join("/floatlab", name)); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	stack := &config.Stack{ID: uuid.NewString(), Name: name, PrimaryNodeID: nodes[0].ID, ComposeYAML: source, ZFSDataset: "floatlab/" + name, FailoverMode: "manual"}
+	if err := s.store.CreateStack(r.Context(), stack); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	_ = s.db.Execute(r.Context(), []rqlite.Statement{{SQL: `UPDATE operations SET stack_id=? WHERE id=?`, Params: []interface{}{stack.ID, operationID(r.Context())}}})
+	if err := s.raft.Apply(run.StackStateChanged{StackID: stack.ID, From: run.StateIdle, To: run.StateProvisioning, Event: run.EventCreateStack, Timestamp: time.Now().UTC(), NodeID: stack.PrimaryNodeID}, 10*time.Second); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID(r.Context()), "stack_id": stack.ID, "status": "pending"})
 }
 
 func (s *Server) handleStopStack(w http.ResponseWriter, r *http.Request) {
@@ -298,27 +481,23 @@ func (s *Server) handleStopStack(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteStack(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if _, err := s.store.GetStack(r.Context(), id); err != nil {
+	stack, err := s.store.GetStack(r.Context(), id)
+	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-
-	if inst, ok := s.raft.FSM().State(id); ok {
-		switch inst.State {
-		case run.StateIdle, run.StateFailed:
-			// allowed
-		default:
-			writeError(w, http.StatusConflict,
-				"stack must be Idle or Failed to delete; current state: "+string(inst.State))
-			return
-		}
+	nodeID := stack.PrimaryNodeID
+	if instance, ok := s.raft.FSM().State(id); ok && instance.State == run.StateRunningBackup {
+		nodeID = stack.BackupNodeID
 	}
-
-	if err := s.store.DeleteStack(r.Context(), id); err != nil {
+	purge, _ := strconv.ParseBool(r.URL.Query().Get("purge"))
+	opID := operationID(r.Context())
+	payload := worker.StackDeletePayload{OperationID: opID, StackID: id, NodeID: nodeID, DatasetPath: stack.ZFSDataset, Purge: purge, Actor: actor(r)}
+	if err := worker.EnqueueTask(r.Context(), s.db, "delete-"+opID, worker.TaskStackDelete, id, payload); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": opID, "stack_id": id, "status": "pending"})
 }
 
 func (s *Server) handleGetStackState(w http.ResponseWriter, r *http.Request) {
