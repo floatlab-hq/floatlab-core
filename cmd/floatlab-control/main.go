@@ -35,6 +35,8 @@ var (
 	jwtSecret     string
 	jwtIssuer     string
 	jwtAudience   string
+	hostNodeID    string
+	hostSocket    string
 )
 
 func main() {
@@ -56,6 +58,8 @@ func main() {
 	root.Flags().StringVar(&jwtSecret, "jwt-secret", os.Getenv("FLOATLAB_JWT_SECRET"), "HMAC secret for management API JWTs")
 	root.Flags().StringVar(&jwtIssuer, "jwt-issuer", os.Getenv("FLOATLAB_JWT_ISSUER"), "Required JWT issuer")
 	root.Flags().StringVar(&jwtAudience, "jwt-audience", os.Getenv("FLOATLAB_JWT_AUDIENCE"), "Required JWT audience")
+	root.Flags().StringVar(&hostNodeID, "host-node-id", "node1", "Node ID served by the local host daemon")
+	root.Flags().StringVar(&hostSocket, "host-socket", "/run/floatlab/hostd.sock", "Local host daemon socket")
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -98,6 +102,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 	// Host client pool.
 	hosts := hostclient.NewPool(log)
+	hosts.Register(hostNodeID, hostSocket)
 	defer hosts.Close()
 
 	// Notification broker — fan-out SSE publisher.

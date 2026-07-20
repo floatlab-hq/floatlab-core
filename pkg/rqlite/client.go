@@ -27,9 +27,10 @@ func NewClient(baseURL string) *Client {
 }
 
 type QueryResult struct {
-	Columns []string        `json:"columns"`
-	Types   []string        `json:"types"`
-	Values  [][]interface{} `json:"values"`
+	Columns      []string        `json:"columns"`
+	Types        []string        `json:"types"`
+	Values       [][]interface{} `json:"values"`
+	RowsAffected int64           `json:"rows_affected"`
 }
 
 type executeResponse struct {
@@ -42,10 +43,11 @@ type executeResponse struct {
 
 type queryResponse struct {
 	Results []struct {
-		Columns []string        `json:"columns"`
-		Types   []string        `json:"types"`
-		Values  [][]interface{} `json:"values,omitempty"`
-		Error   string          `json:"error,omitempty"`
+		Columns      []string        `json:"columns"`
+		Types        []string        `json:"types"`
+		Values       [][]interface{} `json:"values,omitempty"`
+		RowsAffected int64           `json:"rows_affected,omitempty"`
+		Error        string          `json:"error,omitempty"`
 	} `json:"results"`
 }
 
@@ -78,12 +80,21 @@ func (c *Client) Execute(ctx context.Context, stmts []Statement) error {
 
 // Query runs a read statement and returns the result set.
 func (c *Client) Query(ctx context.Context, stmt Statement) (*QueryResult, error) {
+	return c.query(ctx, "/db/query?level=weak", stmt)
+}
+
+// Request runs a write statement through rqlite's unified request endpoint.
+func (c *Client) Request(ctx context.Context, stmt Statement) (*QueryResult, error) {
+	return c.query(ctx, "/db/request?transaction", stmt)
+}
+
+func (c *Client) query(ctx context.Context, path string, stmt Statement) (*QueryResult, error) {
 	payload, err := json.Marshal(stmtsToPayload([]Statement{stmt}))
 	if err != nil {
 		return nil, fmt.Errorf("rqlite: marshal: %w", err)
 	}
 
-	endpoint := c.baseURL + "/db/query?level=weak"
+	endpoint := c.baseURL + path
 	resp, err := c.doPost(ctx, endpoint, payload)
 	if err != nil {
 		return nil, err
@@ -102,9 +113,10 @@ func (c *Client) Query(ctx context.Context, stmt Statement) (*QueryResult, error
 		return nil, fmt.Errorf("rqlite: query error: %s", r.Error)
 	}
 	return &QueryResult{
-		Columns: r.Columns,
-		Types:   r.Types,
-		Values:  r.Values,
+		Columns:      r.Columns,
+		Types:        r.Types,
+		Values:       r.Values,
+		RowsAffected: r.RowsAffected,
 	}, nil
 }
 

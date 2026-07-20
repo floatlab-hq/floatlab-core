@@ -14,6 +14,8 @@ USERNAME="${USERNAME:-ubuntu}"
 RECREATE="${RECREATE:-0}"
 OS_VARIANT="${OS_VARIANT:-ubuntu24.04}"
 LIBVIRT_URI="${LIBVIRT_URI:-}"
+RUN_INTEGRATION_TESTS="${RUN_INTEGRATION_TESTS:-0}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 OS_DISK="$VM_DIR/os.qcow2"
 ZFS_DISK="$VM_DIR/${POOL_NAME}.qcow2"
@@ -241,3 +243,9 @@ echo
 echo "Inside the VM, verify with:"
 echo "  docker version"
 echo "  zpool status ${POOL_NAME}"
+
+if [[ "$RUN_INTEGRATION_TESTS" == "1" ]]; then
+  (cd "$SCRIPT_DIR/.." && FLOATLAB_VM_INTEGRATION=1 go test -count=1 -v ./integration)
+else
+  echo "  FLOATLAB_VM_INTEGRATION=1 go test -count=1 -v ./integration"
+fi

@@ -37,7 +37,7 @@ type Worker struct {
 	db       *rqlite.Client
 	store    *config.Store
 	pool     *hostclient.Pool
-	hostname string
+	workerID string
 	handlers map[string]Handler
 	log      *zap.Logger
 	raft     *raftpkg.Node
@@ -50,7 +50,7 @@ func New(db *rqlite.Client, cfgStore *config.Store, pool *hostclient.Pool, raft 
 		db:       db,
 		store:    cfgStore,
 		pool:     pool,
-		hostname: h,
+		workerID: h + "-" + uuid.NewString(),
 		handlers: make(map[string]Handler),
 		log:      log,
 		raft:     raft,
@@ -431,18 +431,24 @@ func (w *Worker) poll(ctx context.Context) error {
 			  )
 			ORDER BY created_at ASC
 			LIMIT 1
-		)
-		RETURNING id, type, payload, attempts`
+		)`
 
-	result, err := w.db.Query(ctx, rqlite.Statement{
+	claim, err := w.db.Request(ctx, rqlite.Statement{
 		SQL:    claimSQL,
-		Params: []interface{}{w.hostname, maxAttempts, backoffFactor},
+		Params: []interface{}{w.workerID, maxAttempts, backoffFactor},
 	})
 	if err != nil {
 		return fmt.Errorf("worker: claim query: %w", err)
 	}
-	if len(result.Values) == 0 {
+	if claim.RowsAffected == 0 {
 		return nil
+	}
+	result, err := w.db.Query(ctx, rqlite.Statement{SQL: `SELECT id,type,payload,attempts FROM tasks WHERE state='running' AND locked_by=? ORDER BY updated_at DESC LIMIT 1`, Params: []interface{}{w.workerID}})
+	if err != nil {
+		return fmt.Errorf("worker: read claimed task: %w", err)
+	}
+	if len(result.Values) == 0 {
+		return fmt.Errorf("worker: claimed task is missing")
 	}
 
 	row := result.Values[0]
