@@ -1,9 +1,9 @@
-openapi: 3.1.0
+openapi: 3.0.3
 info:
-  title: FloatLab Core API
+  title: FloatLab Management API
   version: 0.1.0
   description: |
-    Unified REST API for the FloatLab platform.
+    Management REST API for the FloatLab platform.
     Base URL: http://floatlab-node:8080/api/v1
     Real-time events: GET /api/v1/events (text/event-stream)
 
