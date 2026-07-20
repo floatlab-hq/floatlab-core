@@ -2,6 +2,8 @@
 set -euo pipefail
 
 VM_NAME="${VM_NAME:-floatlab-dev}"
+VM_DIR="${VM_DIR:-$HOME/.local/share/libvirt/images/$VM_NAME}"
+POOL_NAME="${POOL_NAME:-floatlab}"
 USERNAME="${USERNAME:-ubuntu}"
 LIBVIRT_URI="${LIBVIRT_URI:-}"
 SSH_KEY="${SSH_KEY:-}"
@@ -18,6 +20,9 @@ die() {
   echo "error: $*" >&2
   exit 1
 }
+
+[[ "$VM_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "invalid VM_NAME: $VM_NAME"
+[[ "$(basename "$VM_DIR")" == "$VM_NAME" ]] || die "VM_DIR must end with VM_NAME"
 
 for command in virsh ssh scp go python3 curl; do
   command -v "$command" >/dev/null || die "missing command: $command"
@@ -46,6 +51,11 @@ sudo docker rm -f floatlab-integration-rqlite >/dev/null 2>&1 || true
 sudo zfs destroy -r floatlab/api-integration 2>/dev/null || true
 REMOTE_CLEANUP
   fi
+  "${VIRSH[@]}" destroy "$VM_NAME" >/dev/null 2>&1 || true
+  "${VIRSH[@]}" undefine "$VM_NAME" --nvram >/dev/null 2>&1 || "${VIRSH[@]}" undefine "$VM_NAME" >/dev/null 2>&1 || true
+  rm -f "$VM_DIR/os.qcow2" "$VM_DIR/${POOL_NAME}.qcow2" "$VM_DIR/seed.iso" "$VM_DIR/user-data" "$VM_DIR/meta-data"
+  rmdir "$VM_DIR" 2>/dev/null || true
+  echo "Removed test VM: $VM_NAME"
 }
 trap cleanup EXIT
 
