@@ -10,6 +10,7 @@ import (
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"go.uber.org/zap"
 
+	managementapi "github.com/floatlab/floatlab-core/api/openapi"
 	"github.com/floatlab/floatlab-core/internal/failover"
 	"github.com/floatlab/floatlab-core/pkg/config"
 	"github.com/floatlab/floatlab-core/pkg/hostclient"
@@ -84,6 +85,10 @@ func (s *Server) buildRouter() *chi.Mux {
 	r.Use(requestLogger(s.log))
 	r.Use(pangolinIdentity)
 	r.Use(chimiddleware.Recoverer)
+	r.Get("/swagger", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/swagger/", http.StatusMovedPermanently)
+	})
+	r.Handle("/swagger/*", http.StripPrefix("/swagger", managementapi.Handler()))
 
 	r.Route("/api/v1", func(r chi.Router) {
 		registerHealthRoutes(r, s)

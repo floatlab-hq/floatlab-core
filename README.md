@@ -4,6 +4,37 @@ FloatLab Core
 FloatLab Core is the brain behind running your FloatLab. It contains several core components that are used
 to orchestrate your workloads.
 
+## Development VM
+
+The repository's Nix development shell provides the VM tooling. Host libvirt must be installed, running, and accessible to your user.
+
+Create and boot a fresh `floatlab-dev` VM:
+
+```bash
+nix develop -c env LIBVIRT_URI=qemu:///system scripts/create-floatlab-vm.sh
+```
+
+Start an existing VM:
+
+```bash
+nix develop -c virsh --connect qemu:///system start floatlab-dev
+```
+
+Find its IP address and connect:
+
+```bash
+nix develop -c virsh --connect qemu:///system domifaddr floatlab-dev --source lease
+ssh ubuntu@<IP>
+```
+
+Create a VM and run the uncached container API integration suite:
+
+```bash
+nix develop -c env LIBVIRT_URI=qemu:///system RUN_INTEGRATION_TESTS=1 scripts/create-floatlab-vm.sh
+```
+
+The integration suite destroys the `floatlab-dev` domain and removes its generated files when it finishes, including after a failure.
+
 ### FloatLab Raft - Distributed Consensus Algorithm
 
 The raft algorithm is used to achieve distributed locking, to ensure that only one application instance
@@ -70,4 +101,3 @@ The data here will be stored using rqlite or dqlite. See more in the [FloatLab C
 
 FLoatLab connect provides a stable and secure way for all of your FloatLab nodes to communicate with each other, including
 operating the raft protocol, replicating the configuration database, and potentially tunneling container traffic between nodes
-
