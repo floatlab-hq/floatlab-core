@@ -20,3 +20,16 @@ func TestHandler(t *testing.T) {
 		}
 	}
 }
+
+func TestManagementSpecUsesCurrentHost(t *testing.T) {
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest("GET", "/openapi.yaml", nil))
+
+	body := response.Body.String()
+	if !strings.Contains(body, "url: /api/v1") || strings.Contains(body, "floatlab-node") {
+		t.Fatalf("management API server must be relative to the current host: %q", body)
+	}
+	if !strings.Contains(body, "securitySchemes:") || !strings.Contains(body, "scheme: bearer") {
+		t.Fatalf("management API must declare bearer authentication: %q", body)
+	}
+}

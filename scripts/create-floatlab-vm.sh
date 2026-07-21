@@ -15,7 +15,10 @@ RECREATE="${RECREATE:-0}"
 OS_VARIANT="${OS_VARIANT:-ubuntu24.04}"
 LIBVIRT_URI="${LIBVIRT_URI:-}"
 RUN_INTEGRATION_TESTS="${RUN_INTEGRATION_TESTS:-0}"
+CONTROL_IMAGE="floatlab-control:local"
+SSH_KEY="${SSH_KEY:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ARTIFACT_DIR=""
 
 OS_DISK="$VM_DIR/os.qcow2"
 ZFS_DISK="$VM_DIR/${POOL_NAME}.qcow2"
@@ -43,6 +46,20 @@ have() {
 
 need_cmd() {
   have "$1" || MISSING+=("$1")
+}
+
+cleanup_artifacts() {
+  [[ -z "$ARTIFACT_DIR" ]] || rm -rf -- "$ARTIFACT_DIR"
+}
+
+build_artifacts() {
+  echo "Building management API image: $CONTROL_IMAGE"
+  docker build --platform linux/amd64 -t "$CONTROL_IMAGE" -f "$SCRIPT_DIR/../docker/floatlab-control.Dockerfile" "$SCRIPT_DIR/.."
+  docker image save -o "$ARTIFACT_DIR/floatlab-control.tar" "$CONTROL_IMAGE"
+
+  echo "Building host daemon"
+  (cd "$SCRIPT_DIR/.." && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOCACHE="${GOCACHE:-/tmp/floatlab-go-cache}" \
+    go build -o "$ARTIFACT_DIR/floatlab-hostd" ./cmd/floatlab-hostd)
 }
 
 make_seed_iso() {
@@ -80,16 +97,77 @@ download_base_image() {
 pick_ssh_key() {
   if [[ -n "${SSH_PUB_KEY:-}" ]]; then
     [[ -f "$SSH_PUB_KEY" ]] || die "SSH_PUB_KEY does not exist: $SSH_PUB_KEY"
-    return
-  fi
-
-  if [[ -f "$HOME/.ssh/id_ed25519.pub" ]]; then
+  elif [[ -f "$HOME/.ssh/id_ed25519.pub" ]]; then
     SSH_PUB_KEY="$HOME/.ssh/id_ed25519.pub"
   elif [[ -f "$HOME/.ssh/id_rsa.pub" ]]; then
     SSH_PUB_KEY="$HOME/.ssh/id_rsa.pub"
   else
     die "no SSH public key found; create one with ssh-keygen or set SSH_PUB_KEY=/path/to/key.pub"
   fi
+
+  if [[ -z "$SSH_KEY" && -f "${SSH_PUB_KEY%.pub}" ]]; then
+    SSH_KEY="${SSH_PUB_KEY%.pub}"
+  fi
+  [[ -f "$SSH_KEY" ]] || die "set SSH_KEY to the private key matching $SSH_PUB_KEY"
+}
+
+provision_vm() {
+  echo "Waiting for VM address and cloud-init..."
+  for _ in {1..150}; do
+    VM_IP="$("${VIRSH[@]}" domifaddr "$VM_NAME" --source lease 2>/dev/null | awk '/ipv4/ { sub("/.*", "", $4); print $4; exit }' || true)"
+    [[ -n "$VM_IP" ]] && break
+    sleep 2
+  done
+  [[ -n "${VM_IP:-}" ]] || die "could not find an IPv4 address for $VM_NAME"
+
+  local ssh_opts=(-i "$SSH_KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new)
+  for _ in {1..150}; do
+    ssh "${ssh_opts[@]}" "$USERNAME@$VM_IP" cloud-init status --wait >/dev/null 2>&1 && break
+    sleep 2
+  done
+  ssh "${ssh_opts[@]}" "$USERNAME@$VM_IP" cloud-init status --wait >/dev/null
+
+  echo "Installing FloatLab services..."
+  scp "${ssh_opts[@]}" \
+    "$ARTIFACT_DIR/floatlab-control.tar" \
+    "$ARTIFACT_DIR/floatlab-hostd" \
+    "$SCRIPT_DIR/../deployments/floatlab-system/docker-compose.yaml" \
+    "$SCRIPT_DIR/../deployments/floatlab-system/floatlab-hostd.service" \
+    "$SCRIPT_DIR/../deployments/floatlab-system/floatlab-system.service" \
+    "$USERNAME@$VM_IP:/tmp/"
+
+  ssh "${ssh_opts[@]}" "$USERNAME@$VM_IP" 'bash -s' <<'REMOTE'
+set -euo pipefail
+sudo install -D -m 0755 /tmp/floatlab-hostd /usr/local/bin/floatlab-hostd
+sudo install -D -m 0644 /tmp/docker-compose.yaml /opt/floatlab/docker-compose.yaml
+sudo install -D -m 0644 /tmp/floatlab-hostd.service /etc/systemd/system/floatlab-hostd.service
+sudo install -D -m 0644 /tmp/floatlab-system.service /etc/systemd/system/floatlab-system.service
+sudo docker image load -i /tmp/floatlab-control.tar >/dev/null
+rm -f /tmp/floatlab-control.tar /tmp/floatlab-hostd /tmp/docker-compose.yaml /tmp/floatlab-hostd.service /tmp/floatlab-system.service
+sudo mkdir -p /floatlab/system/{raft,rqlite,victoria-metrics,victoria-logs}
+sudo systemctl daemon-reload
+sudo systemctl enable --now floatlab-hostd.service
+for _ in {1..30}; do
+  sudo test -S /run/floatlab/hostd.sock && break
+  sleep 1
+done
+sudo test -S /run/floatlab/hostd.sock
+sudo systemctl enable --now floatlab-system.service
+for _ in {1..180}; do
+  curl -fsS http://127.0.0.1:8080/api/v1/health >/dev/null 2>&1 && break
+  sleep 1
+done
+curl -fsS http://127.0.0.1:8080/api/v1/health >/dev/null
+if ! curl -fsS http://127.0.0.1:8080/api/v1/nodes | grep -q '"id":"node1"'; then
+  curl -fsS -X POST http://127.0.0.1:8080/api/v1/nodes -H 'Content-Type: application/json' -d '{"id":"node1","name":"floatlab-dev"}' >/dev/null
+fi
+curl -fsS http://127.0.0.1:8080/api/v1/nodes/node1/health | grep -q '"status":"online"'
+control="$(sudo docker compose -f /opt/floatlab/docker-compose.yaml ps -q floatlab-control)"
+sudo docker exec "$control" test -S /run/floatlab/hostd.sock
+sudo docker exec "$control" test -S /var/run/docker.sock
+REMOTE
+
+  curl -fsS "http://$VM_IP:8080/api/v1/health" >/dev/null
 }
 
 existing_vm_state() {
@@ -131,11 +209,19 @@ MISSING=()
 need_cmd qemu-img
 need_cmd virt-install
 need_cmd virsh
+need_cmd docker
+need_cmd go
+need_cmd ssh
+need_cmd scp
+need_cmd curl
 if [[ ${#MISSING[@]} -gt 0 ]]; then
-  die "missing commands: ${MISSING[*]}. On Ubuntu/Debian install: sudo apt install qemu-utils virtinst libvirt-daemon-system libvirt-clients"
+  die "missing commands: ${MISSING[*]}. Run through nix develop; host libvirt must still be installed and accessible."
 fi
 
 pick_ssh_key
+ARTIFACT_DIR="$(mktemp -d)"
+trap cleanup_artifacts EXIT
+build_artifacts
 destroy_existing_vm
 download_base_image
 
@@ -168,6 +254,8 @@ users:
 
 package_update: true
 packages:
+  - curl
+  - docker-compose-v2
   - docker.io
   - zfsutils-linux
   - qemu-guest-agent
@@ -227,22 +315,18 @@ echo "Creating VM: $VM_NAME"
   --console pty,target_type=serial \
   --noautoconsole
 
+provision_vm
+
 echo
-echo "VM created and booting."
-echo "Wait for cloud-init to finish, then connect with the guest-agent IP:"
-if [[ -n "$LIBVIRT_URI" ]]; then
-  echo "  ssh ${USERNAME}@\$(virsh --connect ${LIBVIRT_URI} domifaddr ${VM_NAME} --source agent | awk '/ipv4/ { sub(\"/.*\", \"\", \$4); print \$4; exit }')"
-  echo "Or use the libvirt DHCP lease:"
-  echo "  ssh ${USERNAME}@\$(virsh --connect ${LIBVIRT_URI} domifaddr ${VM_NAME} --source lease | awk '/ipv4/ { sub(\"/.*\", \"\", \$4); print \$4; exit }')"
-else
-  echo "  ssh ${USERNAME}@\$(virsh domifaddr ${VM_NAME} --source agent | awk '/ipv4/ { sub(\"/.*\", \"\", \$4); print \$4; exit }')"
-  echo "Or use the libvirt DHCP lease:"
-  echo "  ssh ${USERNAME}@\$(virsh domifaddr ${VM_NAME} --source lease | awk '/ipv4/ { sub(\"/.*\", \"\", \$4); print \$4; exit }')"
-fi
+echo "VM created and FloatLab services are running."
+echo "  Management API: http://${VM_IP}:8080"
+echo "  Swagger UI:     http://${VM_IP}:8080/swagger/"
+echo "  SSH:            ssh ${USERNAME}@${VM_IP}"
 echo
 echo "Inside the VM, verify with:"
 echo "  docker version"
 echo "  zpool status ${POOL_NAME}"
+echo "  sudo systemctl status floatlab-hostd floatlab-system"
 
 if [[ "$RUN_INTEGRATION_TESTS" == "1" ]]; then
   (cd "$SCRIPT_DIR/.." && FLOATLAB_VM_INTEGRATION=1 go test -count=1 -v ./integration)

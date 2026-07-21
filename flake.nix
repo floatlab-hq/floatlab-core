@@ -23,6 +23,8 @@
             cloud-utils
             cdrkit
             curl
+            docker-client
+            go
             libvirt
             openssh
             qemu

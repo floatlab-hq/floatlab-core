@@ -83,6 +83,7 @@ scp "${SSH_OPTS[@]}" "$BUILD_DIR/floatlab-hostd" "$BUILD_DIR/floatlab-control" "
 ssh "${SSH_OPTS[@]}" "$USERNAME@$VM_IP" 'bash -s' <<'REMOTE'
 set -euo pipefail
 sudo install -m 0755 /tmp/floatlab-hostd /tmp/floatlab-control /usr/local/bin/
+sudo systemctl stop floatlab-system floatlab-hostd 2>/dev/null || true
 sudo systemctl stop floatlab-integration-control floatlab-integration-hostd 2>/dev/null || true
 sudo systemctl reset-failed floatlab-integration-control floatlab-integration-hostd 2>/dev/null || true
 sudo docker rm -f floatlab-integration-rqlite >/dev/null 2>&1 || true

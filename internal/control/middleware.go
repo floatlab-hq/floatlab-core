@@ -56,8 +56,20 @@ func (s *Server) requireAdminJWT(next http.Handler) http.Handler {
 		}
 		token, err := jwt.ParseWithClaims(strings.TrimPrefix(header, "Bearer "), claims,
 			func(*jwt.Token) (interface{}, error) { return []byte(s.cfg.JWTSecret), nil }, options...)
-		if err != nil || !token.Valid || claims.Subject == "" || !contains(claims.Roles, "admin") {
-			writeError(w, http.StatusUnauthorized, "invalid administrator token")
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "error parsing JWT token: "+err.Error())
+			return
+		}
+		if !token.Valid {
+			writeError(w, http.StatusUnauthorized, "invalid token")
+			return
+		}
+		if claims.Subject == "" {
+			writeError(w, http.StatusUnauthorized, "token missing subject")
+			return
+		}
+		if !contains(claims.Roles, "admin") {
+			writeError(w, http.StatusUnauthorized, "token missing roles")
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), keyActor, claims.Subject)))

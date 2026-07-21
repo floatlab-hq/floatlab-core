@@ -4,7 +4,7 @@ info:
   version: 0.1.0
   description: |
     Management REST API for the FloatLab platform.
-    Base URL: http://floatlab-node:8080/api/v1
+    Base URL: /api/v1 on the current host
     Real-time events: GET /api/v1/events (text/event-stream)
 
     Sub-specs:
@@ -20,8 +20,19 @@ info:
       store.yaml     — ZFS pools, datasets, snapshots, replication jobs
 
 servers:
-  - url: http://floatlab-node:8080/api/v1
+  - url: /api/v1
     description: Control plane API
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: HS256 administrator JWT. The token requires a subject and an `admin` role.
 
 tags:
   - name: stacks

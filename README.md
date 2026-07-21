@@ -14,6 +14,15 @@ Create and boot a fresh `floatlab-dev` VM:
 nix develop -c env LIBVIRT_URI=qemu:///system scripts/create-floatlab-vm.sh
 ```
 
+The command builds and loads the management API container, installs the native host daemon, and starts rqlite, VictoriaMetrics, VictoriaLogs, and the management API. The services start automatically after a VM reboot.
+
+Once provisioning finishes, the API and Swagger UI are available on the VM's host-facing IP:
+
+```text
+http://<VM-IP>:8080
+http://<VM-IP>:8080/swagger/
+```
+
 Start an existing VM:
 
 ```bash

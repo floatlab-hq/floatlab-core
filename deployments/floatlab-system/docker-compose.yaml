@@ -1,48 +1,69 @@
+name: floatlab-system
+
 services:
   rqlite:
     image: rqlite/rqlite:8.26.0
-    command: -raft-addr=rqlite:4002 -raft-adv-addr=rqlite:4002
+    command: -node-id=node1 -raft-addr=rqlite:4002 -raft-adv-addr=rqlite:4002
     volumes:
       - /floatlab/system/rqlite:/rqlite/file
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4001/readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
 
   victoria-metrics:
-    image: ${VICTORIA_METRICS_IMAGE:-victoriametrics/victoria-metrics:latest}
+    image: victoriametrics/victoria-metrics:v1.101.0
     command:
       - -storageDataPath=/victoria-metrics-data
-      - -httpListenAddr=:8428
-    ports:
-      - "8428:8428"
+      - -retentionPeriod=90d
     volumes:
-      - /floatlab/system/metrics/victoria-metrics:/victoria-metrics-data
+      - /floatlab/system/victoria-metrics:/victoria-metrics-data
     restart: unless-stopped
 
   victoria-logs:
-    image: ${VICTORIA_LOGS_IMAGE:-victoriametrics/victoria-logs:latest}
+    image: victoriametrics/victoria-logs:v0.28.0-victorialogs
     command:
       - -storageDataPath=/victoria-logs-data
-      - -httpListenAddr=:9428
-    ports:
-      - "9428:9428"
+      - -retentionPeriod=30d
     volumes:
-      - /floatlab/system/logs/victoria-logs:/victoria-logs-data
+      - /floatlab/system/victoria-logs:/victoria-logs-data
     restart: unless-stopped
 
-  floatlab-api:
-    image: ${FLOATLAB_API_IMAGE:-floatlab-api:local}
-    environment:
-      FLOATLAB_AGENT_SOCKET: /run/floatlab/agent.sock
-      FLOATLAB_RQLITE_URL: http://rqlite:4001
-      VICTORIA_METRICS_URL: http://victoria-metrics:8428
-      VICTORIA_LOGS_URL: http://victoria-logs:9428
+  floatlab-control:
+    image: floatlab-control:local
+    user: "0:0"
+    command:
+      - --listen=:8080
+      - --rqlite-url=http://rqlite:4001
+      - --raft-id=node1
+      - --raft-bind=0.0.0.0:7000
+      - --raft-advertise=floatlab-control:7000
+      - --raft-data=/var/lib/floatlab/raft
+      - --raft-bootstrap=true
+      - --vlogs-url=http://victoria-logs:9428
+      - --vmetrics-url=http://victoria-metrics:8428
+      - --host-node-id=node1
+      - --host-socket=/run/floatlab/hostd.sock
+      - --jwt-secret=floatlab-dev
     ports:
-      - "8080:8080"
+      - "0.0.0.0:8080:8080"
     volumes:
-      - /run/floatlab/agent.sock:/run/floatlab/agent.sock
+      - /run/floatlab:/run/floatlab
       - /var/run/docker.sock:/var/run/docker.sock
       - /floatlab:/floatlab
+      - /floatlab/system/raft:/var/lib/floatlab/raft
     depends_on:
-      - victoria-metrics
-      - victoria-logs
-      - rqlite
+      rqlite:
+        condition: service_healthy
+      victoria-metrics:
+        condition: service_started
+      victoria-logs:
+        condition: service_started
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/v1/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 24

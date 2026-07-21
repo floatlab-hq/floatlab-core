@@ -3,16 +3,7 @@ info:
   title: FloatLab Stacks API
   version: 0.1.0
 
-security:
-  - bearerAuth: []
-
 components:
-  securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
-      description: HS256 administrator JWT. The token requires a subject and an `admin` role.
   parameters:
     IdempotencyKey:
       name: Idempotency-Key
