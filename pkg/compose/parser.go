@@ -71,7 +71,7 @@ func ParseAndValidate(ctx context.Context, yamlContent, projectName string) (*Pa
 func extractStackExt(p *types.Project) (StackExtension, error) {
 	raw, ok := p.Extensions[stackExtKey]
 	if !ok {
-		return StackExtension{}, fmt.Errorf("compose: missing %s extension", stackExtKey)
+		return StackExtension{}, nil
 	}
 	b, err := json.Marshal(raw)
 	if err != nil {
