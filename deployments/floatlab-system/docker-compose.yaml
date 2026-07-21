@@ -34,6 +34,9 @@ services:
   floatlab-control:
     image: floatlab-control:local
     user: "0:0"
+    environment:
+      FLOATLAB_BOOTSTRAP_USER: demo
+      FLOATLAB_BOOTSTRAP_PASSWORD: floatlab
     command:
       - --listen=:8080
       - --rqlite-url=http://rqlite:4001

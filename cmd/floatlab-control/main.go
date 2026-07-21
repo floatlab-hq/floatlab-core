@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -35,6 +36,8 @@ var (
 	jwtSecret     string
 	jwtIssuer     string
 	jwtAudience   string
+	bootstrapUser string
+	bootstrapPass string
 	hostNodeID    string
 	hostSocket    string
 )
@@ -58,6 +61,8 @@ func main() {
 	root.Flags().StringVar(&jwtSecret, "jwt-secret", os.Getenv("FLOATLAB_JWT_SECRET"), "HMAC secret for management API JWTs")
 	root.Flags().StringVar(&jwtIssuer, "jwt-issuer", os.Getenv("FLOATLAB_JWT_ISSUER"), "Required JWT issuer")
 	root.Flags().StringVar(&jwtAudience, "jwt-audience", os.Getenv("FLOATLAB_JWT_AUDIENCE"), "Required JWT audience")
+	root.Flags().StringVar(&bootstrapUser, "bootstrap-user", os.Getenv("FLOATLAB_BOOTSTRAP_USER"), "Initial administrator username")
+	root.Flags().StringVar(&bootstrapPass, "bootstrap-password", os.Getenv("FLOATLAB_BOOTSTRAP_PASSWORD"), "Initial administrator password")
 	root.Flags().StringVar(&hostNodeID, "host-node-id", "node1", "Node ID served by the local host daemon")
 	root.Flags().StringVar(&hostSocket, "host-socket", "/run/floatlab/hostd.sock", "Local host daemon socket")
 
@@ -78,6 +83,14 @@ func run(cmd *cobra.Command, args []string) error {
 	if err := rqlite.Migrate(ctx, db); err != nil {
 		log.Error("rqlite migrate failed", zap.Error(err))
 		return err
+	}
+	if (bootstrapUser == "") != (bootstrapPass == "") {
+		return fmt.Errorf("bootstrap user and password must be configured together")
+	}
+	if bootstrapUser != "" {
+		if err := control.BootstrapUser(ctx, db, bootstrapUser, bootstrapPass); err != nil {
+			return err
+		}
 	}
 
 	if err := config.Migrate(ctx, db); err != nil {

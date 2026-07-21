@@ -37,6 +37,7 @@ type Server struct {
 	vmets  *stats.Client
 	seq    *failover.Sequence
 	ops    *operation.Store
+	auth   *authLimiter
 }
 
 type Config struct {
@@ -73,6 +74,7 @@ func NewServer(
 		vmets:  stats.NewClient(cfg.VMetricsURL),
 		seq:    seq,
 		ops:    operation.NewStore(db),
+		auth:   newAuthLimiter(),
 	}
 	s.router = s.buildRouter()
 	return s
@@ -91,6 +93,7 @@ func (s *Server) buildRouter() *chi.Mux {
 	r.Handle("/swagger/*", http.StripPrefix("/swagger", managementapi.Handler()))
 
 	r.Route("/api/v1", func(r chi.Router) {
+		registerAuthRoutes(r, s)
 		registerHealthRoutes(r, s)
 		registerNodeRoutes(r, s)
 		registerStackRoutes(r, s)

@@ -8,6 +8,7 @@ info:
     Real-time events: GET /api/v1/events (text/event-stream)
 
     Sub-specs:
+      auth.yaml      — Password login and JWT issuance
       stacks.yaml    — Stack lifecycle, compose, state
       nodes.yaml     — Node registration, health, IPC ping
       health.yaml    — Liveness, readiness, Raft state
@@ -35,6 +36,8 @@ components:
       description: HS256 administrator JWT. The token requires a subject and an `admin` role.
 
 tags:
+  - name: auth
+    description: Password login and JWT issuance
   - name: stacks
     description: Container stack lifecycle management
   - name: nodes
@@ -57,6 +60,9 @@ tags:
     description: ZFS pools, datasets, snapshots, replication
 
 paths:
+  /auth/token:
+    $ref: './auth.yaml#/paths/~1auth~1token'
+
   # Stack lifecycle
   /stacks:
     $ref: './stacks.yaml#/paths/~1stacks'

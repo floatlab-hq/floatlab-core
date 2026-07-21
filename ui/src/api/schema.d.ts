@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/auth/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Exchange user credentials for an administrator JWT */
+        post: operations["createAuthToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/stacks": {
         parameters: {
             query?: never;
@@ -1304,6 +1321,21 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        LoginRequest: {
+            username: string;
+            /** Format: password */
+            password: string;
+        };
+        TokenResponse: {
+            access_token: string;
+            /** @enum {string} */
+            token_type: "Bearer";
+            /** @example 86400 */
+            expires_in: number;
+        };
+        AuthError: {
+            error: string;
+        };
         /**
          * @description Current lifecycle state of the stack.
          * @enum {string}
@@ -2072,6 +2104,68 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    createAuthToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description JWT issued. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenResponse"];
+                };
+            };
+            /** @description Invalid request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description Invalid username or password. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description Too many login attempts. */
+            429: {
+                headers: {
+                    /** @description Seconds before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description Authentication is not configured or the database is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+        };
+    };
     listStacks: {
         parameters: {
             query?: never;

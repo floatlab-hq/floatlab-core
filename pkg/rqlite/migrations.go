@@ -6,6 +6,13 @@ import "context"
 // Safe to call on every startup (uses CREATE TABLE IF NOT EXISTS).
 func Migrate(ctx context.Context, c *Client) error {
 	stmts := []Statement{
+		{SQL: `CREATE TABLE IF NOT EXISTS users (
+			username      TEXT PRIMARY KEY,
+			password_hash TEXT NOT NULL,
+			roles         TEXT NOT NULL DEFAULT '["admin"]',
+			created_at    DATETIME NOT NULL,
+			updated_at    DATETIME NOT NULL
+		)`},
 		{SQL: `CREATE TABLE IF NOT EXISTS tasks (
 			id          TEXT PRIMARY KEY,
 			type        TEXT NOT NULL,

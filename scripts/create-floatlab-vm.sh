@@ -321,6 +321,7 @@ echo
 echo "VM created and FloatLab services are running."
 echo "  Management API: http://${VM_IP}:8080"
 echo "  Swagger UI:     http://${VM_IP}:8080/swagger/"
+echo "  Login:          demo / floatlab"
 echo "  SSH:            ssh ${USERNAME}@${VM_IP}"
 echo
 echo "Inside the VM, verify with:"

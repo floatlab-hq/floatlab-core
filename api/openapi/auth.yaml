@@ -1,0 +1,89 @@
+openapi: 3.0.3
+info:
+  title: FloatLab Authentication API
+  version: 0.1.0
+
+components:
+  schemas:
+    LoginRequest:
+      type: object
+      required: [username, password]
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 64
+        password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 72
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+          example: 86400
+    AuthError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+paths:
+  /auth/token:
+    post:
+      summary: Exchange user credentials for an administrator JWT
+      operationId: createAuthToken
+      tags: [auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: JWT issued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthError'
+        '401':
+          description: Invalid username or password.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthError'
+        '429':
+          description: Too many login attempts.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthError'
+        '503':
+          description: Authentication is not configured or the database is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthError'
