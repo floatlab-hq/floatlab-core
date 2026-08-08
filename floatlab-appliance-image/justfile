@@ -1,0 +1,11 @@
+build:
+    ./scripts/build-iso.sh
+
+run: build
+    ./scripts/run-libvirt.sh
+
+run-qemu: build
+    ./scripts/run-qemu.sh
+
+clean:
+    rm -rf result .test

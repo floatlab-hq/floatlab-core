@@ -1,0 +1,14 @@
+[Unit]
+Description=FloatLab management services
+Requires=docker.service floatlab-hostd.service
+After=docker.service floatlab-hostd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=10min
+ExecStart=/usr/bin/docker compose -f /opt/floatlab/docker-compose.yaml up -d --remove-orphans
+ExecStop=/usr/bin/docker compose -f /opt/floatlab/docker-compose.yaml stop
+
+[Install]
+WantedBy=multi-user.target
