@@ -20,6 +20,7 @@
       {
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
+            bun
             cloud-utils
             cdrkit
             curl

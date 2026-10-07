@@ -39,6 +39,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/stacks/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate a stack Compose document without mutating state */
+        post: operations["validateStackCompose"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/stacks/{id}": {
         parameters: {
             query?: never;
@@ -373,6 +390,46 @@ export interface paths {
         get: operations["openStackTerminal"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/stacks/{id}/containers/{containerId}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                containerId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start one container in a running stack */
+        post: operations["startStackContainer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/stacks/{id}/containers/{containerId}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                containerId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop one container in a running stack */
+        post: operations["stopStackContainer"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1379,18 +1436,42 @@ export interface components {
         };
         StackCreate: {
             name: string;
-            primary_node: string;
+            /**
+             * @deprecated
+             * @description Deprecated compatibility field; derived from x-fl-stack.primary_node.
+             */
+            primary_node?: string;
+            /**
+             * @deprecated
+             * @description Deprecated compatibility field; derived from x-fl-stack.secondary_node.
+             */
             secondary_node?: string | null;
             compose_file: string;
-            /** @default manual */
-            failover_mode: components["schemas"]["FailoverMode"];
-            /** @default 120s */
-            auto_trigger_after: string;
+            /**
+             * @deprecated
+             * @description Deprecated compatibility field; derived from x-fl-stack.failover.mode.
+             */
+            failover_mode?: components["schemas"]["FailoverMode"];
+            /**
+             * @deprecated
+             * @description Deprecated compatibility field; derived from x-fl-stack.failover.auto_trigger_after.
+             */
+            auto_trigger_after?: string;
         };
         Error: {
             status: number;
             message: string;
             code?: string;
+        };
+        ComposeValidation: {
+            /** @description Required for a new stack; ignored when stack_id is supplied. */
+            name?: string;
+            compose_file: string;
+            /**
+             * Format: uuid
+             * @description Existing stack to validate an edit for.
+             */
+            stack_id?: string;
         };
         ComposeUpdate: {
             compose_file: string;
@@ -1413,6 +1494,8 @@ export interface components {
             node_id: string;
             /** Format: uuid */
             stack_id: string;
+            /** @description Docker Compose service name. */
+            service: string;
             /**
              * Format: float
              * @description CPU usage 0–100.
@@ -2231,6 +2314,46 @@ export interface operations {
             };
         };
     };
+    validateStackCompose: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComposeValidation"];
+            };
+        };
+        responses: {
+            /** @description Compose document is valid. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Compose validation failure. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Existing stack not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     getStack: {
         parameters: {
             query?: never;
@@ -2767,6 +2890,86 @@ export interface operations {
             };
             /** @description Stack or container not found. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    startStackContainer: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Unique key used to safely retry this mutation. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: string;
+                containerId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Updated container state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Container"];
+                };
+            };
+            /** @description Stack or container not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stack is not running. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    stopStackContainer: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Unique key used to safely retry this mutation. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: string;
+                containerId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Updated container state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Container"];
+                };
+            };
+            /** @description Stack or container not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stack is not running. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -60,6 +60,8 @@ func (d *Dispatcher) register() {
 	d.srv.Handle("sys.info", d.sysInfo)
 	d.srv.Handle("sys.docker.events", d.dockerEvents)
 	d.srv.Handle("docker.list", d.dockerList)
+	d.srv.Handle("docker.start", d.dockerStart)
+	d.srv.Handle("docker.stop", d.dockerStop)
 	d.srv.Handle("docker.exec.open", d.terminalOpen)
 	d.srv.Handle("docker.exec.write", d.terminalWrite)
 	d.srv.Handle("docker.exec.resize", d.terminalResize)
@@ -554,6 +556,59 @@ func (d *Dispatcher) dockerList(ctx context.Context, raw json.RawMessage) (any, 
 		})
 	}
 	return result, nil
+}
+
+func (d *Dispatcher) dockerStart(ctx context.Context, raw json.RawMessage) (any, error) {
+	return d.dockerContainerLifecycle(ctx, raw, true)
+}
+
+func (d *Dispatcher) dockerStop(ctx context.Context, raw json.RawMessage) (any, error) {
+	return d.dockerContainerLifecycle(ctx, raw, false)
+}
+
+func (d *Dispatcher) dockerContainerLifecycle(ctx context.Context, raw json.RawMessage, start bool) (any, error) {
+	var p ipc.DockerContainerPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, err
+	}
+	if d.docker == nil {
+		return nil, fmt.Errorf("docker client not available")
+	}
+	summaries, err := d.docker.ListByStack(ctx, p.StackID)
+	if err != nil {
+		return nil, fmt.Errorf("docker.list: %w", err)
+	}
+	var container *docker.ContainerSummary
+	for i := range summaries {
+		if summaries[i].ID == p.ContainerID || summaries[i].Name == p.ContainerID {
+			container = &summaries[i]
+			break
+		}
+	}
+	if container == nil {
+		return nil, fmt.Errorf("container does not belong to stack")
+	}
+	if (start && container.State != "running") || (!start && container.State == "running") {
+		if start {
+			err = d.docker.StartContainer(ctx, container.ID)
+		} else {
+			err = d.docker.StopContainer(ctx, container.ID)
+		}
+		if err != nil {
+			return nil, err
+		}
+		summaries, err = d.docker.ListByStack(ctx, p.StackID)
+		if err != nil {
+			return nil, fmt.Errorf("docker.list: %w", err)
+		}
+		for i := range summaries {
+			if summaries[i].ID == container.ID {
+				container = &summaries[i]
+				break
+			}
+		}
+	}
+	return ipc.DockerContainerResult{Container: ipc.ContainerInfo{ID: container.ID, Name: container.Name, Image: container.Image, State: container.State, Health: container.Health, Service: container.Service, StackID: container.StackID, ExitCode: container.ExitCode}}, nil
 }
 
 func (d *Dispatcher) sysInfo(ctx context.Context, _ json.RawMessage) (any, error) {

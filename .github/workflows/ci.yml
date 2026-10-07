@@ -20,6 +20,39 @@ jobs:
           go-version: "1.22"
           cache: true
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.18.0
+
+      - name: Install TypeScript workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate shared API schema
+        run: pnpm --filter @floatlab/client generate:api && git diff --exit-code -- packages/floatlab-client/src/schema.d.ts
+
+      - name: Typecheck and test TypeScript workspace
+        run: pnpm --filter @floatlab/client typecheck && pnpm --filter floatlab-cli typecheck && pnpm --recursive test
+
+      - name: Build UI
+        run: pnpm --dir ui build
+
+      - name: Build CLI release targets
+        run: |
+          bun build --compile --define '__FLOATLAB_VERSION__="ci"' --target=bun-linux-x64-baseline cli/src/main.ts --outfile /tmp/floatlab-linux-x64
+          bun build --compile --define '__FLOATLAB_VERSION__="ci"' --target=bun-linux-arm64 cli/src/main.ts --outfile /tmp/floatlab-linux-arm64
+          bun build --compile --define '__FLOATLAB_VERSION__="ci"' --target=bun-darwin-x64-baseline cli/src/main.ts --outfile /tmp/floatlab-darwin-x64
+          bun build --compile --define '__FLOATLAB_VERSION__="ci"' --target=bun-darwin-arm64 cli/src/main.ts --outfile /tmp/floatlab-darwin-arm64
+          test "$(/tmp/floatlab-linux-x64 --version)" = ci
+
       - name: Download modules
         run: go mod download
 

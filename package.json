@@ -1,0 +1,9 @@
+{
+  "name": "floatlab",
+  "private": true,
+  "packageManager": "pnpm@11.18.0",
+  "scripts": {
+    "test": "pnpm --recursive test",
+    "build:cli": "bun build --compile cli/src/main.ts --outfile dist/floatlab"
+  }
+}

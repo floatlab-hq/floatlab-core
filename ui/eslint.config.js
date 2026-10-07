@@ -4,7 +4,7 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "src/api/schema.d.ts"] },
+  { ignores: ["dist"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   ...vue.configs["flat/recommended"],

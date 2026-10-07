@@ -1,4 +1,4 @@
-import createClient from "openapi-fetch";
-import type { paths } from "./schema";
+import { createApiClient } from "@floatlab/client";
 
-export const api = createClient<paths>({ baseUrl: "/api/v1" });
+// Browser authentication remains owned by the application session/cookie.
+export const api = createApiClient({ baseUrl: "/api/v1" });

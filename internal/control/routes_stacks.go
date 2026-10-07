@@ -68,6 +68,10 @@ type containerResponse struct {
 func registerStackRoutes(r chi.Router, s *Server) {
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireAdminJWT)
+		r.Post("/stacks/validate", s.handleValidateStack)
+	})
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireAdminJWT)
 		r.Use(s.idempotency)
 		r.Get("/stacks", s.handleListStacks)
 		r.Post("/stacks", s.handleCreateStack)
@@ -82,6 +86,8 @@ func registerStackRoutes(r chi.Router, s *Server) {
 		r.Delete("/stacks/{id}", s.handleDeleteStack)
 		r.Get("/stacks/{id}/state", s.handleGetStackState)
 		r.Get("/stacks/{id}/containers", s.handleGetStackContainers)
+		r.Post("/stacks/{id}/containers/{containerId}/start", s.handleStartStackContainer)
+		r.Post("/stacks/{id}/containers/{containerId}/stop", s.handleStopStackContainer)
 		r.Get("/stacks/{id}/status", s.handleStackStatus)
 		r.Get("/stacks/{id}/config", s.handleStackConfig)
 		r.Get("/stacks/{id}/snapshots", s.handleStackSnapshots)
@@ -127,13 +133,84 @@ func (s *Server) handleGetStack(w http.ResponseWriter, r *http.Request) {
 }
 
 type createStackRequest struct {
-	Name          string `json:"name"`
-	Icon          string `json:"icon,omitempty"`
-	PrimaryNodeID string `json:"primary_node"`
-	BackupNodeID  string `json:"secondary_node,omitempty"`
-	ComposeFile   string `json:"compose_file"`
-	FailoverMode  string `json:"failover_mode,omitempty"`
-	AutoTrigger   string `json:"auto_trigger_after,omitempty"`
+	Name          string  `json:"name"`
+	Icon          string  `json:"icon,omitempty"`
+	PrimaryNodeID *string `json:"primary_node,omitempty"`
+	BackupNodeID  *string `json:"secondary_node,omitempty"`
+	ComposeFile   string  `json:"compose_file"`
+	FailoverMode  *string `json:"failover_mode,omitempty"`
+	AutoTrigger   *string `json:"auto_trigger_after,omitempty"`
+}
+
+type validateStackRequest struct {
+	Name        string `json:"name"`
+	ComposeFile string `json:"compose_file"`
+	StackID     string `json:"stack_id"`
+}
+
+func validateCompose(r *http.Request, source, name string) (string, *compose.ParsedStack, error) {
+	canonical, err := compose.CanonicalSource(source, name)
+	if err != nil {
+		return "", nil, err
+	}
+	parsed, err := compose.ParseAndValidate(r.Context(), canonical, name)
+	if err != nil {
+		return "", nil, err
+	}
+	if _, err := compose.ParseLifecycle(canonical, name); err != nil {
+		return "", nil, err
+	}
+	return canonical, parsed, nil
+}
+
+func writeComposeValidationError(w http.ResponseWriter, err error) {
+	writeErrorCode(w, http.StatusBadRequest, "compose_validation", "compose validation error: "+err.Error())
+}
+
+func (s *Server) handleValidateStack(w http.ResponseWriter, r *http.Request) {
+	var req validateStackRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorCode(w, http.StatusBadRequest, "compose_validation", "invalid JSON: "+err.Error())
+		return
+	}
+	if req.ComposeFile == "" {
+		writeErrorCode(w, http.StatusBadRequest, "compose_validation", "compose_file is required")
+		return
+	}
+	if req.StackID != "" {
+		st, err := s.store.GetStack(r.Context(), req.StackID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		req.Name = st.Name
+		canonical, parsed, err := validateCompose(r, req.ComposeFile, req.Name)
+		if err != nil {
+			writeComposeValidationError(w, err)
+			return
+		}
+		_ = canonical
+		if parsed.Extension.PrimaryNode != st.PrimaryNodeID || parsed.Extension.SecondaryNode != st.BackupNodeID {
+			writeErrorCode(w, http.StatusBadRequest, "compose_validation", "compose updates cannot change node assignments")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if req.Name == "" {
+		writeErrorCode(w, http.StatusBadRequest, "compose_validation", "name is required")
+		return
+	}
+	name, err := compose.Slug(req.Name)
+	if err != nil {
+		writeComposeValidationError(w, err)
+		return
+	}
+	if _, _, err := validateCompose(r, req.ComposeFile, name); err != nil {
+		writeComposeValidationError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleCreateStack(w http.ResponseWriter, r *http.Request) {
@@ -146,58 +223,62 @@ func (s *Server) handleCreateStack(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if req.PrimaryNodeID == "" {
-		writeError(w, http.StatusBadRequest, "primary_node is required")
-		return
-	}
 	if req.ComposeFile == "" {
 		writeError(w, http.StatusBadRequest, "compose_file is required")
 		return
 	}
-
-	parsed, err := compose.ParseAndValidate(r.Context(), req.ComposeFile, req.Name)
+	name, err := compose.Slug(req.Name)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "compose validation error: "+err.Error())
+		writeComposeValidationError(w, err)
 		return
 	}
-	if parsed.Extension.PrimaryNode != req.PrimaryNodeID || parsed.Extension.SecondaryNode != req.BackupNodeID {
+	canonical, parsed, err := validateCompose(r, req.ComposeFile, name)
+	if err != nil {
+		writeComposeValidationError(w, err)
+		return
+	}
+	if req.PrimaryNodeID != nil && parsed.Extension.PrimaryNode != *req.PrimaryNodeID {
 		writeError(w, http.StatusBadRequest, "compose node assignments must match the request")
 		return
 	}
-	if req.FailoverMode == "" {
-		req.FailoverMode = parsed.Extension.Failover.Mode
-	}
-	if req.FailoverMode == "" {
-		req.FailoverMode = "manual"
-	}
-	if req.FailoverMode != "manual" && req.FailoverMode != "auto" {
-		writeError(w, http.StatusBadRequest, "failover_mode must be manual or auto")
+	if req.BackupNodeID != nil && parsed.Extension.SecondaryNode != *req.BackupNodeID {
+		writeError(w, http.StatusBadRequest, "compose node assignments must match the request")
 		return
 	}
-	if req.AutoTrigger == "" {
-		req.AutoTrigger = parsed.Extension.Failover.AutoTriggerAfter
+	failoverMode := parsed.Extension.Failover.Mode
+	if failoverMode == "" {
+		failoverMode = "manual"
 	}
-	if req.AutoTrigger == "" {
-		req.AutoTrigger = "120s"
+	if req.FailoverMode != nil && failoverMode != *req.FailoverMode {
+		writeError(w, http.StatusBadRequest, "compose failover settings must match the request")
+		return
 	}
-	if duration, err := time.ParseDuration(req.AutoTrigger); err != nil || duration <= 0 {
-		writeError(w, http.StatusBadRequest, "auto_trigger_after must be a positive duration")
+	autoTrigger := parsed.Extension.Failover.AutoTriggerAfter
+	if autoTrigger == "" {
+		autoTrigger = "120s"
+	}
+	if req.AutoTrigger != nil && autoTrigger != *req.AutoTrigger {
+		writeError(w, http.StatusBadRequest, "compose failover settings must match the request")
+		return
+	}
+	if duration, err := time.ParseDuration(autoTrigger); err != nil || duration <= 0 {
+		writeComposeValidationError(w, errors.New("auto_trigger_after must be a positive duration"))
 		return
 	}
 
 	pool := parsed.Extension.Storage.Pool
-	dataset := compose.DatasetPath(pool, req.Name)
+	dataset := compose.DatasetPath(pool, name)
 
 	st := &config.Stack{
 		ID:               uuid.New().String(),
-		Name:             req.Name,
+		Name:             name,
 		Icon:             req.Icon,
-		PrimaryNodeID:    req.PrimaryNodeID,
-		BackupNodeID:     req.BackupNodeID,
-		ComposeYAML:      req.ComposeFile,
+		PrimaryNodeID:    parsed.Extension.PrimaryNode,
+		BackupNodeID:     parsed.Extension.SecondaryNode,
+		ComposeYAML:      canonical,
 		ZFSDataset:       dataset,
-		FailoverMode:     req.FailoverMode,
-		AutoTriggerAfter: req.AutoTrigger,
+		FailoverMode:     failoverMode,
+		AutoTriggerAfter: autoTrigger,
 	}
 
 	if err := s.store.CreateStack(r.Context(), st); err != nil {
@@ -212,7 +293,7 @@ func (s *Server) handleCreateStack(w http.ResponseWriter, r *http.Request) {
 		To:        run.StateProvisioning,
 		Event:     run.EventCreateStack,
 		Timestamp: time.Now().UTC(),
-		NodeID:    req.PrimaryNodeID,
+		NodeID:    st.PrimaryNodeID,
 	}
 	if err := s.raft.Apply(entry, 10*time.Second); err != nil {
 		writeError(w, http.StatusInternalServerError, "raft apply failed: "+err.Error())
@@ -242,9 +323,9 @@ func (s *Server) handleUpdateStackCompose(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	parsed, err := compose.ParseAndValidate(r.Context(), body.ComposeFile, st.Name)
+	canonical, parsed, err := validateCompose(r, body.ComposeFile, st.Name)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "compose validation error: "+err.Error())
+		writeComposeValidationError(w, err)
 		return
 	}
 	if parsed.Extension.PrimaryNode != st.PrimaryNodeID || parsed.Extension.SecondaryNode != st.BackupNodeID {
@@ -252,11 +333,11 @@ func (s *Server) handleUpdateStackCompose(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := s.store.UpdateStackCompose(r.Context(), id, body.ComposeFile); err != nil {
+	if err := s.store.UpdateStackCompose(r.Context(), id, canonical); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	st.ComposeYAML = body.ComposeFile
+	st.ComposeYAML = canonical
 	st.UpdatedAt = time.Now().UTC()
 	var state string
 	if inst, ok := s.raft.FSM().State(id); ok {
@@ -518,10 +599,7 @@ func (s *Server) handleGetStackContainers(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	nodeID := st.PrimaryNodeID
-	if inst, ok := s.raft.FSM().State(id); ok && inst.State == run.StateRunningBackup {
-		nodeID = st.BackupNodeID
-	}
+	nodeID := stackNode(st, s.raft.FSM().State)
 
 	raw, err := s.hosts.Execute(r.Context(), nodeID, "docker.list", ipc.DockerListPayload{StackID: id})
 	if err != nil {
@@ -533,18 +611,89 @@ func (s *Server) handleGetStackContainers(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "parse hostd response: "+err.Error())
 		return
 	}
-	containers := make([]containerResponse, 0, len(result.Containers))
-	for _, c := range result.Containers {
-		containers = append(containers, containerResponse{
-			ID:      c.ID,
-			Name:    c.Name,
-			Image:   c.Image,
-			Status:  c.State,
-			Health:  c.Health,
-			NodeID:  nodeID,
-			StackID: id,
-			Service: c.Service,
-		})
-	}
+	containers := containerResponses(result.Containers, id, nodeID)
 	writeJSON(w, http.StatusOK, containers)
+}
+
+func stackNode(st *config.Stack, state func(string) (*run.StackInstance, bool)) string {
+	if inst, ok := state(st.ID); ok && inst.State == run.StateRunningBackup && st.BackupNodeID != "" {
+		return st.BackupNodeID
+	}
+	return st.PrimaryNodeID
+}
+
+func containerResponses(containers []ipc.ContainerInfo, stackID, nodeID string) []containerResponse {
+	result := make([]containerResponse, 0, len(containers))
+	for _, c := range containers {
+		result = append(result, containerResponse{ID: c.ID, Name: c.Name, Image: c.Image, Status: containerStatus(c.State), Health: c.Health, NodeID: nodeID, StackID: stackID, Service: c.Service})
+	}
+	return result
+}
+
+func containerStatus(state string) string {
+	switch state {
+	case "running", "paused", "starting", "error":
+		return state
+	case "created", "exited", "dead", "removing":
+		return "stopped"
+	default:
+		return "error"
+	}
+}
+
+func (s *Server) handleStartStackContainer(w http.ResponseWriter, r *http.Request) {
+	s.handleStackContainerLifecycle(w, r, "docker.start")
+}
+
+func (s *Server) handleStopStackContainer(w http.ResponseWriter, r *http.Request) {
+	s.handleStackContainerLifecycle(w, r, "docker.stop")
+}
+
+func (s *Server) handleStackContainerLifecycle(w http.ResponseWriter, r *http.Request, action string) {
+	id := chi.URLParam(r, "id")
+	st, err := s.store.GetStack(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	inst, ok := s.raft.FSM().State(id)
+	if !ok || (inst.State != run.StateRunningPrimary && inst.State != run.StateRunningBackup) {
+		writeError(w, http.StatusConflict, "stack is not running")
+		return
+	}
+	nodeID := stackNode(st, s.raft.FSM().State)
+	containerID := chi.URLParam(r, "containerId")
+	raw, err := s.hosts.Execute(r.Context(), nodeID, "docker.list", ipc.DockerListPayload{StackID: id})
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "hostd error: "+err.Error())
+		return
+	}
+	var listed ipc.DockerListResult
+	if err := json.Unmarshal(raw, &listed); err != nil {
+		writeError(w, http.StatusInternalServerError, "parse hostd response: "+err.Error())
+		return
+	}
+	var container *ipc.ContainerInfo
+	for i := range listed.Containers {
+		candidate := &listed.Containers[i]
+		if candidate.ID == containerID || candidate.Name == containerID {
+			container = candidate
+			break
+		}
+	}
+	if container == nil {
+		writeError(w, http.StatusNotFound, "container does not belong to stack")
+		return
+	}
+	raw, err = s.hosts.Execute(r.Context(), nodeID, action, ipc.DockerContainerPayload{StackID: id, ContainerID: container.ID})
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "hostd error: "+err.Error())
+		return
+	}
+	var result ipc.DockerContainerResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		writeError(w, http.StatusInternalServerError, "parse hostd response: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, containerResponses([]ipc.ContainerInfo{result.Container}, id, nodeID)[0])
 }

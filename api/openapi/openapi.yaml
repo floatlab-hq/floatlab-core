@@ -66,6 +66,8 @@ paths:
   # Stack lifecycle
   /stacks:
     $ref: './stacks.yaml#/paths/~1stacks'
+  /stacks/validate:
+    $ref: './stacks.yaml#/paths/~1stacks~1validate'
   /stacks/{id}:
     $ref: './stacks.yaml#/paths/~1stacks~1{id}'
   /stacks/{id}/compose:
@@ -100,6 +102,10 @@ paths:
     $ref: './stacks.yaml#/paths/~1stacks~1{id}~1events'
   /stacks/{id}/containers/{containerId}/terminal:
     $ref: './stacks.yaml#/paths/~1stacks~1{id}~1containers~1{containerId}~1terminal'
+  /stacks/{id}/containers/{containerId}/start:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1containers~1{containerId}~1start'
+  /stacks/{id}/containers/{containerId}/stop:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1containers~1{containerId}~1stop'
   /operations/{operationId}:
     $ref: './stacks.yaml#/paths/~1operations~1{operationId}'
   /internal/alerts/transition:

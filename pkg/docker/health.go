@@ -6,6 +6,18 @@ import (
 	dockerclient "github.com/moby/moby/client"
 )
 
+// StartContainer starts one existing container.
+func (c *Client) StartContainer(ctx context.Context, containerID string) error {
+	_, err := c.dc.ContainerStart(ctx, containerID, dockerclient.ContainerStartOptions{})
+	return err
+}
+
+// StopContainer stops one existing container.
+func (c *Client) StopContainer(ctx context.Context, containerID string) error {
+	_, err := c.dc.ContainerStop(ctx, containerID, dockerclient.ContainerStopOptions{})
+	return err
+}
+
 // ContainerSummary is a minimal, orchestrator-facing view of a running container.
 type ContainerSummary struct {
 	ID       string

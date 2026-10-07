@@ -156,6 +156,11 @@ type DockerListPayload struct {
 	StackID string `json:"stack_id"`
 }
 
+type DockerContainerPayload struct {
+	StackID     string `json:"stack_id"`
+	ContainerID string `json:"container_id"`
+}
+
 type ContainerInfo struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
@@ -169,6 +174,10 @@ type ContainerInfo struct {
 
 type DockerListResult struct {
 	Containers []ContainerInfo `json:"containers"`
+}
+
+type DockerContainerResult struct {
+	Container ContainerInfo `json:"container"`
 }
 
 type TerminalOpenPayload struct {

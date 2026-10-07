@@ -6,6 +6,9 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [vue()],
+    test: {
+      environment: "jsdom",
+    },
     server: {
       proxy: {
         "/api": env.VITE_API_PROXY_TARGET || "http://localhost:8080",

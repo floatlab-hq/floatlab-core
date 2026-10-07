@@ -4,6 +4,25 @@ FloatLab Core
 FloatLab Core is the brain behind running your FloatLab. It contains several core components that are used
 to orchestrate your workloads.
 
+## CLI
+
+Download the matching `floatlab` release binary, mark it executable, and put it on your `PATH`:
+
+```bash
+chmod +x floatlab-linux-x64
+mv floatlab-linux-x64 ~/.local/bin/floatlab
+```
+
+Set `FLOATLAB_URL` and `FLOATLAB_TOKEN` for scripts. Otherwise run `floatlab` in a terminal; it asks for the URL and credentials, then stores only the URL, token, and expiry in `~/.config/floatlab/config.json` (or `$XDG_CONFIG_HOME/floatlab/config.json`). Direct commands do not ask for lifecycle confirmation; interactive commands do.
+
+```bash
+floatlab list
+floatlab logs plex --limit 100
+floatlab                 # interactive prompt
+```
+
+The web interface exposes the same commands through the command palette: press <kbd>Alt</kbd>+<kbd>/</kbd>.
+
 ## Development VM
 
 The repository's Nix development shell provides the VM tooling. Host libvirt must be installed, running, and accessible to your user.

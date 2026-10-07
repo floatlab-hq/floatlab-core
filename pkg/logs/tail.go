@@ -1,16 +1,16 @@
 package logs
 
 import (
+	"bufio"
+	"bytes"
 	"context"
-	"io"
+	"encoding/json"
+	"fmt"
 	"net/http"
-	"time"
 )
 
-// ProxyTail proxies VictoriaLogs SSE tail to the HTTP response writer.
-// It sets the correct Content-Type and streams until ctx is done or the
-// upstream connection drops.
-func ProxyTail(ctx context.Context, c *Client, w http.ResponseWriter, query string) {
+// ProxyTail converts VictoriaLogs tail lines into documented SSE data events.
+func ProxyTail(ctx context.Context, c *Client, w http.ResponseWriter, query string, transform func(LogLine) interface{}) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -36,26 +36,25 @@ func ProxyTail(ctx context.Context, c *Client, w http.ResponseWriter, query stri
 	}
 	defer resp.Body.Close()
 
-	buf := make([]byte, 4096)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 4096), 1024*1024)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		line = bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+		if len(line) == 0 || bytes.Equal(line, []byte("[DONE]")) {
+			continue
 		}
-
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
-				return
-			}
-			flusher.Flush()
+		var entry LogLine
+		if err := json.Unmarshal(line, &entry); err != nil {
+			continue
 		}
-		if readErr != nil {
-			if readErr != io.EOF {
-				time.Sleep(500 * time.Millisecond)
-			}
+		data, err := json.Marshal(transform(entry))
+		if err != nil {
+			continue
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
 			return
 		}
+		flusher.Flush()
 	}
 }

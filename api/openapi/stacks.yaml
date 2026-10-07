@@ -77,23 +77,43 @@ components:
 
     StackCreate:
       type: object
-      required: [name, primary_node, compose_file]
+      required: [name, compose_file]
       properties:
         name:
           type: string
         primary_node:
           type: string
+          deprecated: true
+          description: Deprecated compatibility field; derived from x-fl-stack.primary_node.
         secondary_node:
           type: string
           nullable: true
+          deprecated: true
+          description: Deprecated compatibility field; derived from x-fl-stack.secondary_node.
         compose_file:
           type: string
         failover_mode:
           $ref: '#/components/schemas/FailoverMode'
-          default: manual
+          deprecated: true
+          description: Deprecated compatibility field; derived from x-fl-stack.failover.mode.
         auto_trigger_after:
           type: string
-          default: "120s"
+          deprecated: true
+          description: Deprecated compatibility field; derived from x-fl-stack.failover.auto_trigger_after.
+
+    ComposeValidation:
+      type: object
+      required: [compose_file]
+      properties:
+        name:
+          type: string
+          description: Required for a new stack; ignored when stack_id is supplied.
+        compose_file:
+          type: string
+        stack_id:
+          type: string
+          format: uuid
+          description: Existing stack to validate an edit for.
 
     ComposeUpdate:
       type: object
@@ -147,7 +167,7 @@ components:
 
     Container:
       type: object
-      required: [id, name, image, status, node_id, stack_id]
+      required: [id, name, image, status, node_id, stack_id, service]
       properties:
         id:
           type: string
@@ -165,6 +185,9 @@ components:
         stack_id:
           type: string
           format: uuid
+        service:
+          type: string
+          description: Docker Compose service name.
         cpu_pct:
           type: number
           format: float
@@ -192,6 +215,33 @@ components:
           type: string
 
 paths:
+  /stacks/validate:
+    post:
+      summary: Validate a stack Compose document without mutating state
+      operationId: validateStackCompose
+      tags: [stacks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ComposeValidation'
+      responses:
+        '204':
+          description: Compose document is valid.
+        '400':
+          description: Compose validation failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Existing stack not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /stacks:
     get:
       summary: List all stacks
@@ -564,6 +614,42 @@ paths:
           description: WebSocket terminal established.
         '404':
           description: Stack or container not found.
+
+  /stacks/{id}/containers/{containerId}/start:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      - {name: containerId, in: path, required: true, schema: {type: string}}
+    post:
+      summary: Start one container in a running stack
+      operationId: startStackContainer
+      tags: [stacks]
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '200':
+          description: Updated container state.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Container'}
+        '404': {description: Stack or container not found.}
+        '409': {description: Stack is not running.}
+
+  /stacks/{id}/containers/{containerId}/stop:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      - {name: containerId, in: path, required: true, schema: {type: string}}
+    post:
+      summary: Stop one container in a running stack
+      operationId: stopStackContainer
+      tags: [stacks]
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '200':
+          description: Updated container state.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Container'}
+        '404': {description: Stack or container not found.}
+        '409': {description: Stack is not running.}
 
   /operations/{operationId}:
     parameters:
