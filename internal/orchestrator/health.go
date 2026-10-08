@@ -32,6 +32,35 @@ func (o *Orchestrator) handleContainerState(ctx context.Context, ev ipc.Containe
 					}
 				}
 			}
+			// Docker events may arrive after a restart operation has completed.
+			// Confirm this container still exists and is stopped before failing the stack.
+			stack, err := o.store.GetStack(ctx, ev.StackID)
+			if err != nil {
+				return
+			}
+			nodeID := stack.PrimaryNodeID
+			if inst.State == run.StateRunningBackup {
+				nodeID = stack.BackupNodeID
+			}
+			raw, err := o.pool.Execute(ctx, nodeID, "docker.list", ipc.DockerListPayload{StackID: ev.StackID})
+			var current ipc.DockerListResult
+			if err == nil {
+				err = json.Unmarshal(raw, &current)
+			}
+			if err != nil {
+				o.log.Warn("could not verify container stop event", zap.String("stack", ev.StackID), zap.Error(err))
+				return
+			}
+			stopped := false
+			for _, container := range current.Containers {
+				if container.ID == ev.ContainerID {
+					stopped = container.State == "exited" || container.State == "dead" || container.State == "stopped"
+					break
+				}
+			}
+			if !stopped {
+				return
+			}
 			o.log.Warn("container died unexpectedly",
 				zap.String("stack", ev.StackID),
 				zap.String("container", ev.ContainerID),

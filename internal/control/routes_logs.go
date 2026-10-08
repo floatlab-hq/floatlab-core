@@ -85,19 +85,35 @@ func (s *Server) handleLogSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogAudit(w http.ResponseWriter, r *http.Request) {
-	limit, err := logLimit(r, 50, 1000)
+	limit, err := logLimit(r, 100, 1000)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	end := time.Now().UTC()
-	start := end.Add(-24 * time.Hour)
-	lines, err := s.vlogs.Query(r.Context(), `app:"floatlab-control" | kind:"audit"`, start, end, limit)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "audit query failed: "+err.Error())
-		return
+	query := `SELECT id,actor,type AS action,'stack' AS resource_type,coalesce(stack_id,'') AS resource_id,occurred_at AS ts,outcome,details FROM lifecycle_events WHERE 1=1`
+	args := []interface{}{}
+	if value := r.URL.Query().Get("actor"); value != "" {
+		query += " AND actor=?"
+		args = append(args, value)
 	}
-	writeJSON(w, http.StatusOK, toAPILines(lines))
+	if value := r.URL.Query().Get("action"); value != "" {
+		query += " AND substr(type,1,length(?))=?"
+		args = append(args, value, value)
+	}
+	if value := r.URL.Query().Get("resource_id"); value != "" {
+		query += " AND stack_id=?"
+		args = append(args, value)
+	}
+	if value := r.URL.Query().Get("since"); value != "" {
+		if _, err := time.Parse(time.RFC3339Nano, value); err != nil {
+			writeError(w, 400, "invalid since timestamp")
+			return
+		}
+		query += " AND julianday(occurred_at)>=julianday(?)"
+		args = append(args, value)
+	}
+	args = append(args, limit)
+	s.writeObjects(w, r, query+" ORDER BY occurred_at DESC LIMIT ?", args...)
 }
 
 func (s *Server) handleStackLogs(w http.ResponseWriter, r *http.Request) {

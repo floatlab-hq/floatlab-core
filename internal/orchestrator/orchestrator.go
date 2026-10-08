@@ -37,8 +37,9 @@ type Orchestrator struct {
 	log   *zap.Logger
 
 	mu         sync.Mutex
-	nodeEvents map[string]struct{} // tracks which nodes we've subscribed to
-	merged     chan ipc.Event      // fanin from all node IPC event channels
+	dispatched map[string]time.Time // last lifecycle transition dispatched for each stack
+	nodeEvents map[string]struct{}  // tracks which nodes we've subscribed to
+	merged     chan ipc.Event       // fanin from all node IPC event channels
 	ops        *operation.Store
 	db         *rqlite.Client
 }
@@ -57,6 +58,7 @@ func New(
 		sm:         run.New(),
 		log:        log,
 		nodeEvents: make(map[string]struct{}),
+		dispatched: make(map[string]time.Time),
 		merged:     make(chan ipc.Event, 256),
 		ops:        operation.NewStore(db),
 		db:         db,
@@ -65,15 +67,30 @@ func New(
 
 // Run starts the orchestrator event loop. It blocks until ctx is cancelled.
 func (o *Orchestrator) Run(ctx context.Context) error {
-	o.resume(ctx)
+	// Raft replays historical entries during startup. Subscribe only after the
+	// leader's committed history is applied, then resume durable pending work.
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for !o.raft.IsLeader() || o.raft.Barrier(5*time.Second) != nil {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 	configChanges := o.store.Watch()
 	stateChanges, unsub := o.raft.FSM().Subscribe()
 	defer unsub()
+	o.resume(ctx)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case leader := <-o.raft.LeadershipChanges():
+			if leader && o.raft.Barrier(5*time.Second) == nil {
+				o.resume(ctx)
+			}
 		case ev := <-configChanges:
 			o.handleConfigChange(ctx, ev)
 		case entry, ok := <-stateChanges:
@@ -98,14 +115,7 @@ func (o *Orchestrator) resume(ctx context.Context) {
 		if !ok {
 			continue
 		}
-		switch instance.State {
-		case run.StateProvisioning:
-			go o.doProvision(ctx, op.StackID)
-		case run.StateStarting:
-			go o.doStart(ctx, op.StackID)
-		case run.StateStopping:
-			go o.doStop(ctx, op.StackID)
-		}
+		o.handleStateChange(ctx, run.StackStateChanged{StackID: op.StackID, To: instance.State, Timestamp: instance.UpdatedAt})
 	}
 }
 
@@ -139,6 +149,17 @@ func (o *Orchestrator) handleConfigChange(ctx context.Context, ev config.ChangeE
 }
 
 func (o *Orchestrator) handleStateChange(ctx context.Context, entry run.StackStateChanged) {
+	if !o.raft.IsLeader() {
+		return
+	}
+	current, ok := o.raft.FSM().State(entry.StackID)
+	if !ok || current.State != entry.To || !current.UpdatedAt.Equal(entry.Timestamp) {
+		return
+	}
+	if previous, ok := o.dispatched[entry.StackID]; ok && previous.Equal(entry.Timestamp) {
+		return
+	}
+	o.dispatched[entry.StackID] = entry.Timestamp
 	switch entry.To {
 	case run.StateProvisioning:
 		go o.doProvision(ctx, entry.StackID)

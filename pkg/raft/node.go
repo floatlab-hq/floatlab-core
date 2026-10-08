@@ -2,15 +2,17 @@ package raft
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
+	"github.com/floatlab/floatlab-core/pkg/run"
 	hraft "github.com/hashicorp/raft"
 	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
-	"github.com/floatlab/floatlab-core/pkg/run"
 	bbolt "go.etcd.io/bbolt"
 	"go.uber.org/zap"
 )
@@ -23,17 +25,21 @@ const (
 )
 
 type Node struct {
-	raft *hraft.Raft
-	fsm  *FSM
-	log  *zap.Logger
+	raft                  *hraft.Raft
+	fsm                   *FSM
+	log                   *zap.Logger
+	transport             *hraft.NetworkTransport
+	logStore, stableStore *raftboltdb.BoltStore
+	shutdownOnce          sync.Once
+	shutdownErr           error
 }
 
 type Config struct {
-	NodeID    string // unique identifier for this peer
-	BindAddr  string // TCP address for Raft transport, e.g. "0.0.0.0:7000"
+	NodeID        string // unique identifier for this peer
+	BindAddr      string // TCP address for Raft transport, e.g. "0.0.0.0:7000"
 	AdvertiseAddr string // externally reachable Raft address
-	DataDir   string // directory for BoltDB log + stable store + snapshots
-	Bootstrap bool   // true only for the very first node in a new cluster
+	DataDir       string // directory for BoltDB log + stable store + snapshots
+	Bootstrap     bool   // true only for the very first node in a new cluster
 }
 
 func NewNode(cfg Config, log *zap.Logger) (*Node, error) {
@@ -55,6 +61,12 @@ func NewNode(cfg Config, log *zap.Logger) (*Node, error) {
 		return nil, fmt.Errorf("raft: log store: %w", err)
 	}
 
+	owned := true
+	defer func() {
+		if owned {
+			_ = logStore.Close()
+		}
+	}()
 	stableStore, err := raftboltdb.New(raftboltdb.Options{
 		Path:        filepath.Join(cfg.DataDir, "raft-stable.bolt"),
 		BoltOptions: boltOpts,
@@ -63,6 +75,11 @@ func NewNode(cfg Config, log *zap.Logger) (*Node, error) {
 		return nil, fmt.Errorf("raft: stable store: %w", err)
 	}
 
+	defer func() {
+		if owned {
+			_ = stableStore.Close()
+		}
+	}()
 	snapshotStore, err := hraft.NewFileSnapshotStore(cfg.DataDir, 2, nil)
 	if err != nil {
 		return nil, fmt.Errorf("raft: snapshot store: %w", err)
@@ -77,6 +94,11 @@ func NewNode(cfg Config, log *zap.Logger) (*Node, error) {
 		return nil, fmt.Errorf("raft: transport: %w", err)
 	}
 
+	defer func() {
+		if owned {
+			_ = transport.Close()
+		}
+	}()
 	fsm := NewFSM()
 	r, err := hraft.NewRaft(raftCfg, fsm, logStore, stableStore, snapshotStore, transport)
 	if err != nil {
@@ -95,7 +117,8 @@ func NewNode(cfg Config, log *zap.Logger) (*Node, error) {
 		r.BootstrapCluster(configuration)
 	}
 
-	return &Node{raft: r, fsm: fsm, log: log}, nil
+	owned = false
+	return &Node{raft: r, fsm: fsm, log: log, transport: transport, logStore: logStore, stableStore: stableStore}, nil
 }
 
 // Apply commits a StackStateChanged entry to the Raft log.
@@ -127,5 +150,27 @@ func (n *Node) Stats() map[string]string { return n.raft.Stats() }
 
 func (n *Node) FSM() *FSM { return n.fsm }
 
-func (n *Node) Shutdown() error { return n.raft.Shutdown().Error() }
+func (n *Node) Shutdown() error {
+	n.shutdownOnce.Do(func() {
+		n.shutdownErr = errors.Join(n.raft.Shutdown().Error(), n.transport.Close(), n.logStore.Close(), n.stableStore.Close())
+	})
+	return n.shutdownErr
+}
 
+// Peers returns the configured Raft server addresses.
+func (n *Node) Peers() []string {
+	future := n.raft.GetConfiguration()
+	if future.Error() != nil {
+		return []string{}
+	}
+	peers := make([]string, 0, len(future.Configuration().Servers))
+	for _, server := range future.Configuration().Servers {
+		peers = append(peers, string(server.Address))
+	}
+	return peers
+}
+
+// Barrier waits until all preceding committed log entries have been applied.
+func (n *Node) Barrier(timeout time.Duration) error { return n.raft.Barrier(timeout).Error() }
+
+func (n *Node) LeadershipChanges() <-chan bool { return n.raft.LeaderCh() }

@@ -214,3 +214,24 @@ func waitForSocket(t *testing.T, socket string) {
 	}
 	t.Fatalf("IPC socket was not created: %s", socket)
 }
+
+func TestStackStateResponseUsesDocumentedField(t *testing.T) {
+	node := testRaftNode(t)
+	if err := node.Apply(run.StackStateChanged{StackID: "stack-state", From: run.StateIdle, To: run.StateRunningPrimary, Event: run.EventStartStack, Timestamp: time.Now().UTC()}, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{raft: node}
+	request := httptest.NewRequest("GET", "/api/v1/stacks/stack-state/state", nil)
+	route := chi.NewRouteContext()
+	route.URLParams.Add("id", "stack-state")
+	request = request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, route))
+	response := httptest.NewRecorder()
+	s.handleGetStackState(response, request)
+	var body map[string]interface{}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != 200 || body["state"] != "RunningPrimary" || body["ID"] != "stack-state" {
+		t.Fatalf("state response: %d %s", response.Code, response.Body.String())
+	}
+}

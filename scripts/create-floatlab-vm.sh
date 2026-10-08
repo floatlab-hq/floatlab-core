@@ -158,10 +158,11 @@ for _ in {1..180}; do
   sleep 1
 done
 curl -fsS http://127.0.0.1:8080/api/v1/health >/dev/null
-if ! curl -fsS http://127.0.0.1:8080/api/v1/nodes | grep -q '"id":"node1"'; then
-  curl -fsS -X POST http://127.0.0.1:8080/api/v1/nodes -H 'Content-Type: application/json' -d '{"id":"node1","name":"floatlab-dev"}' >/dev/null
+token="$(curl -fsS http://127.0.0.1:8080/api/v1/auth/token -H 'Content-Type: application/json' -d '{"username":"demo","password":"floatlab"}' | jq -er .access_token)"
+if ! curl -fsS -H "Authorization: Bearer $token" http://127.0.0.1:8080/api/v1/nodes | grep -q '"id":"node1"'; then
+  curl -fsS -X POST -H "Authorization: Bearer $token" -H 'Idempotency-Key: register-node1' http://127.0.0.1:8080/api/v1/nodes -H 'Content-Type: application/json' -d '{"id":"node1","name":"floatlab-dev","hostname":"floatlab-dev","role":"primary","zfs_pool":"floatlab"}' >/dev/null
 fi
-curl -fsS http://127.0.0.1:8080/api/v1/nodes/node1/health | grep -q '"status":"online"'
+curl -fsS -H "Authorization: Bearer $token" http://127.0.0.1:8080/api/v1/nodes/node1/health | grep -q '"status":"reachable"'
 control="$(sudo docker compose -f /opt/floatlab/docker-compose.yaml ps -q floatlab-control)"
 sudo docker exec "$control" test -S /run/floatlab/hostd.sock
 sudo docker exec "$control" test -S /var/run/docker.sock
@@ -254,6 +255,7 @@ users:
 
 package_update: true
 packages:
+  - jq
   - curl
   - docker-compose-v2
   - docker.io

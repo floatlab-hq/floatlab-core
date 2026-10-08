@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // ZFSStore manages ZFS datasets, snapshots, and pool health via os/exec.
@@ -31,6 +32,7 @@ type DatasetParams struct {
 }
 
 type DatasetInfo struct {
+	CreatedAt  string
 	Name       string
 	Used       int64
 	Available  int64
@@ -39,6 +41,7 @@ type DatasetInfo struct {
 }
 
 type SnapshotInfo struct {
+	CreateTXG int64
 	Name      string
 	Dataset   string
 	Used      int64
@@ -66,11 +69,11 @@ type PoolStatus struct {
 }
 
 type VDevInfo struct {
-	Name   string
-	State  string
-	Read   int64
-	Write  int64
-	CkSum  int64
+	Name  string
+	State string
+	Read  int64
+	Write int64
+	CkSum int64
 }
 
 type PoolSummary struct {
@@ -125,7 +128,7 @@ func (s *zfsStore) DatasetDestroy(ctx context.Context, dataset string, recursive
 }
 
 func (s *zfsStore) DatasetList(ctx context.Context, parent string) ([]DatasetInfo, error) {
-	out, err := run(ctx, "zfs", "list", "-H", "-p", "-o", "name,used,avail,quota,mountpoint", "-r", parent)
+	out, err := run(ctx, "zfs", "list", "-H", "-p", "-o", "name,used,avail,quota,mountpoint,creation", "-r", parent)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +138,7 @@ func (s *zfsStore) DatasetList(ctx context.Context, parent string) ([]DatasetInf
 			continue
 		}
 		parts := strings.Fields(line)
-		if len(parts) < 5 {
+		if len(parts) < 6 {
 			continue
 		}
 		result = append(result, DatasetInfo{
@@ -144,6 +147,7 @@ func (s *zfsStore) DatasetList(ctx context.Context, parent string) ([]DatasetInf
 			Available:  parseInt64(parts[2]),
 			Quota:      parseInt64(parts[3]),
 			Mountpoint: parts[4],
+			CreatedAt:  time.Unix(parseInt64(parts[5]), 0).UTC().Format(time.RFC3339),
 		})
 	}
 	return result, nil
@@ -160,7 +164,7 @@ func (s *zfsStore) SnapshotDestroy(ctx context.Context, dataset, name string) er
 }
 
 func (s *zfsStore) SnapshotList(ctx context.Context, dataset string) ([]SnapshotInfo, error) {
-	out, err := run(ctx, "zfs", "list", "-H", "-p", "-t", "snapshot", "-o", "name,used,creation", "-r", dataset)
+	out, err := run(ctx, "zfs", "list", "-H", "-p", "-t", "snapshot", "-o", "name,used,creation,createtxg", "-r", dataset)
 	if err != nil {
 		return nil, err
 	}
@@ -170,14 +174,15 @@ func (s *zfsStore) SnapshotList(ctx context.Context, dataset string) ([]Snapshot
 			continue
 		}
 		parts := strings.Fields(line)
-		if len(parts) < 3 {
+		if len(parts) < 4 {
 			continue
 		}
 		nameparts := strings.SplitN(parts[0], "@", 2)
 		snap := SnapshotInfo{
+			CreateTXG: parseInt64(parts[3]),
 			Dataset:   nameparts[0],
 			Used:      parseInt64(parts[1]),
-			CreatedAt: parts[2],
+			CreatedAt: time.Unix(parseInt64(parts[2]), 0).UTC().Format(time.RFC3339),
 		}
 		if len(nameparts) == 2 {
 			snap.Name = nameparts[1]

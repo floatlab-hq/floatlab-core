@@ -2,15 +2,15 @@ package control
 
 import (
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
-	"go.uber.org/zap"
 
 	"github.com/floatlab/floatlab-core/pkg/stats"
 )
 
 func registerStatsRoutes(r chi.Router, s *Server) {
-	r.Post("/stats/webhook", s.handleStatsWebhook)
 	r.Get("/stats/query", s.handleStatsQuery)
 	r.Get("/stats/nodes/{node_id}", s.handleNodeStats)
 	r.Get("/stats/stacks/{stack_id}", s.handleStackStats)
@@ -44,9 +44,12 @@ func (s *Server) handleStatsWebhook(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStatsQuery(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	query := q.Get("q")
+	query := q.Get("query")
 	if query == "" {
-		writeError(w, http.StatusBadRequest, "q parameter required")
+		query = q.Get("q")
+	}
+	if query == "" {
+		writeError(w, http.StatusBadRequest, "query parameter required")
 		return
 	}
 	window := q.Get("range")
@@ -54,43 +57,71 @@ func (s *Server) handleStatsQuery(w http.ResponseWriter, r *http.Request) {
 		window = "1h"
 	}
 	start, end, step := stats.RangeWindow(window)
+	if raw := q.Get("start"); raw != "" {
+		parsed, err := parseMetricTime(raw)
+		if err != nil {
+			writeError(w, 400, "invalid start timestamp")
+			return
+		}
+		start = parsed
+	}
+	if raw := q.Get("end"); raw != "" {
+		parsed, err := parseMetricTime(raw)
+		if err != nil {
+			writeError(w, 400, "invalid end timestamp")
+			return
+		}
+		end = parsed
+	}
+	if start.After(end) {
+		writeError(w, 400, "start must not be after end")
+		return
+	}
+	if raw := q.Get("step"); raw != "" {
+		duration, err := time.ParseDuration(raw)
+		if err != nil || duration <= 0 {
+			writeError(w, 400, "invalid step")
+			return
+		}
+		step = raw
+	}
 	series, err := s.vmets.QueryRange(r.Context(), query, start, end, step)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "metrics query failed: "+err.Error())
 		return
 	}
 	// Return raw VictoriaMetrics series for ad-hoc queries.
-	writeJSON(w, http.StatusOK, series)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"query": query, "series": publicMetricSeries(query, series)})
 }
 
 func (s *Server) handleNodeStats(w http.ResponseWriter, r *http.Request) {
 	nodeID := chi.URLParam(r, "node_id")
+	if _, err := s.store.GetNode(r.Context(), nodeID); err != nil {
+		writeError(w, 404, "node not found")
+		return
+	}
 	window := r.URL.Query().Get("range")
 	if window == "" {
 		window = "1h"
 	}
 	start, end, step := stats.RangeWindow(window)
-
-	queries := []struct{ label, unit, query string }{
-		{"cpu", "%", `100 - (avg by(node_id)(rate(node_cpu_seconds_total{mode="idle",node_id="` + nodeID + `"}[5m])) * 100)`},
-		{"memory", "bytes", `node_memory_MemTotal_bytes{node_id="` + nodeID + `"} - node_memory_MemAvailable_bytes{node_id="` + nodeID + `"}`},
-	}
-
-	result := make([]metricSeries, 0, len(queries))
-	for _, mq := range queries {
-		series, err := s.vmets.QueryRange(r.Context(), mq.query, start, end, step)
+	result := map[string]interface{}{}
+	for name, query := range map[string]string{
+		"cpu_usage_percent":  `100 - (avg by(node_id)(rate(node_cpu_seconds_total{mode="idle",node_id="` + nodeID + `"}[5m])) * 100)`,
+		"memory_used_bytes":  `node_memory_MemTotal_bytes{node_id="` + nodeID + `"} - node_memory_MemAvailable_bytes{node_id="` + nodeID + `"}`,
+		"memory_total_bytes": `node_memory_MemTotal_bytes{node_id="` + nodeID + `"}`,
+	} {
+		series, err := s.vmets.QueryRange(r.Context(), query, start, end, step)
 		if err != nil {
-			s.log.Warn("stats: node query", zap.String("metric", mq.label), zap.Error(err))
-			result = append(result, metricSeries{Label: mq.label, Unit: mq.unit, Points: []metricPoint{}})
-			continue
+			writeError(w, 502, "metrics query failed")
+			return
 		}
-		if len(series) == 0 {
-			result = append(result, metricSeries{Label: mq.label, Unit: mq.unit, Points: []metricPoint{}})
-			continue
+		public := publicMetricSeries(name, series)
+		if len(public) > 0 {
+			result[name] = public[0]
 		}
-		result = append(result, toMetricSeries(mq.label, mq.unit, series[0]))
 	}
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, 200, map[string]interface{}{"node_id": nodeID, "range": window, "series": result})
 }
 
 func (s *Server) handleStackStats(w http.ResponseWriter, r *http.Request) {
@@ -128,16 +159,50 @@ func (s *Server) handleStackStats(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStorageStats(w http.ResponseWriter, r *http.Request) {
 	nodeID := chi.URLParam(r, "node_id")
+	if _, err := s.store.GetNode(r.Context(), nodeID); err != nil {
+		writeError(w, 404, "node not found")
+		return
+	}
 	window := r.URL.Query().Get("range")
 	if window == "" {
 		window = "1h"
 	}
 	start, end, step := stats.RangeWindow(window)
-	series, err := s.vmets.QueryRange(r.Context(),
-		`zfs_pool_free_bytes{node_id="`+nodeID+`"}`, start, end, step)
-	if err != nil || len(series) == 0 {
-		writeJSON(w, http.StatusOK, []metricSeries{})
+	series, err := s.vmets.QueryRange(r.Context(), `zfs_pool_free_bytes{node_id="`+nodeID+`"}`, start, end, step)
+	if err != nil {
+		writeError(w, 502, "metrics query failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, []metricSeries{toMetricSeries("zfs_free", "bytes", series[0])})
+	result := map[string]interface{}{}
+	public := publicMetricSeries("zfs_pool_free_bytes", series)
+	if len(public) > 0 {
+		result["zfs_pool_free_bytes"] = public[0]
+	}
+	writeJSON(w, 200, map[string]interface{}{"node_id": nodeID, "range": window, "series": result})
+}
+
+func publicMetricSeries(name string, series []stats.Series) []map[string]interface{} {
+	result := make([]map[string]interface{}, 0, len(series))
+	for _, s := range series {
+		points := make([]map[string]interface{}, 0, len(s.Points))
+		for _, point := range s.Points {
+			points = append(points, map[string]interface{}{"ts": point.Time.UnixMilli(), "value": point.Value})
+		}
+		label := name
+		if metric := s.Labels["__name__"]; metric != "" {
+			label = metric
+		}
+		labels := s.Labels
+		if labels == nil {
+			labels = map[string]string{}
+		}
+		result = append(result, map[string]interface{}{"name": label, "labels": labels, "points": points})
+	}
+	return result
+}
+func parseMetricTime(value string) (time.Time, error) {
+	if timestamp, err := strconv.ParseFloat(value, 64); err == nil {
+		return time.Unix(int64(timestamp), int64((timestamp-float64(int64(timestamp)))*1e9)).UTC(), nil
+	}
+	return time.Parse(time.RFC3339Nano, value)
 }

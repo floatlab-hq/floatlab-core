@@ -120,22 +120,16 @@ func (s *Server) handleRestoreSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	var request struct {
-		SnapshotID string `json:"snapshot_id"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.SnapshotID == "" {
-		writeError(w, http.StatusBadRequest, "snapshot_id is required")
-		return
-	}
-	recovery, err := s.db.Query(r.Context(), rqlite.Statement{SQL: `SELECT compose_yaml FROM recovery_points WHERE stack_id=? AND snapshot_id=? AND deleted_at IS NULL`, Params: []interface{}{id, request.SnapshotID}})
+	snapshotID := chi.URLParam(r, "snapshotId")
+	recovery, err := s.db.Query(r.Context(), rqlite.Statement{SQL: `SELECT compose_yaml FROM recovery_points WHERE stack_id=? AND snapshot_id=? AND deleted_at IS NULL`, Params: []interface{}{id, snapshotID}})
 	if err != nil || len(recovery.Values) == 0 {
 		writeError(w, http.StatusNotFound, "snapshot recovery metadata not found")
 		return
 	}
 	restoredCompose, _ := recovery.Values[0][0].(string)
 	instance, ok := s.raft.FSM().State(id)
-	if !ok {
-		writeError(w, http.StatusConflict, "stack has no lifecycle state")
+	if !ok || (instance.State != run.StateIdle && instance.State != run.StateRunningPrimary && instance.State != run.StateRunningBackup) {
+		writeError(w, http.StatusConflict, "stack must be idle or running before snapshot recovery")
 		return
 	}
 	wasRunning := instance.State == run.StateRunningPrimary || instance.State == run.StateRunningBackup
@@ -154,7 +148,7 @@ func (s *Server) handleRestoreSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	opID := operationID(r.Context())
-	payload := worker.StackRestorePayload{OperationID: opID, StackID: id, NodeID: nodeID, DatasetPath: stack.ZFSDataset, Snapshot: request.SnapshotID, ComposeFile: runtime, SourceCompose: restoredCompose, HealthTimeout: spec.HealthTimeout.String(), WasRunning: wasRunning, Actor: actor(r)}
+	payload := worker.StackRestorePayload{OperationID: opID, StackID: id, NodeID: nodeID, DatasetPath: stack.ZFSDataset, Snapshot: snapshotID, ComposeFile: runtime, SourceCompose: restoredCompose, HealthTimeout: spec.HealthTimeout.String(), WasRunning: wasRunning, Actor: actor(r)}
 	if err := worker.EnqueueTask(r.Context(), s.db, "restore-"+opID, worker.TaskStackRestore, id, payload); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

@@ -159,3 +159,21 @@ The opt-in test requires Bun, Go, Nix with flakes enabled, libvirt, KVM, and acc
 To test an already provisioned development VM with the updated services, add `API_URL=http://<VM-IP>:8080` and `VM_SSH=ubuntu@<VM-IP>`; SSH must support noninteractive authentication and passwordless sudo. This mode never creates or destroys the VM. The suite creates and removes only its own stack, pool, and bridge (if absent). Its test subnet is selected from unused `/24` ranges in `10.254.240.0/20`.
 
 Hostd forwards metrics and logs for FloatLab containers every five seconds to the local VictoriaMetrics and VictoriaLogs endpoints. Set `FLOATLAB_NODE_ID`, `FLOATLAB_VMETRICS_URL`, and `FLOATLAB_VLOGS_URL` in its environment for another deployment. The core Compose files expose these endpoints only on loopback. Log polling currently captures at most 1000 lines and 1 MiB per container per pass; higher-volume workloads need continuous log forwarding.
+
+### Complete single-node workload suite
+
+Enter the development shell, install workspace dependencies, and run:
+
+```bash
+nix develop -c scripts/test-workloads.sh
+```
+
+This command requires Go, Bun, pnpm, Nix, libvirt, `virt-install`, KVM, and image-pull access. It performs two consecutive full passes, each using one uniquely named disposable appliance. All API and CLI scenarios within a pass share that appliance. The command creates a temporary libvirt storage pool unless `LIBVIRT_POOL` selects an existing writable pool. Reports and logs are written to `/tmp/floatlab-workload-reports`; override with `FLOATLAB_REPORT_DIR`. `FLOATLAB_KEEP_VM=1` preserves appliances for debugging.
+
+An existing **dedicated test appliance** can be selected with `API_URL` and `VM_SSH`; SSH must be noninteractive with passwordless sudo. A local libvirt appliance can instead use `API_URL` and `VM_NAME` through its existing QEMU guest agent. The suite restarts `floatlab-control` and `floatlab-hostd`, requires the standard `floatlab-system` Compose project and `floatlab-hostd.service`, and removes only its fixture resources. It does not create or destroy that appliance. Do not point the suite at a shared deployment.
+
+Coverage is measured by management HTTP method/path, using executed scenarios that pass their assertions, documented response statuses, and JSON contracts. The full suite fails if a required scenario skips or an endpoint lacks qualifying evidence. Real multi-node replication, failover, failback, abort and step-history success are reported as deferred; their single-node safety rejections are exercised. Ordinary `go test` skips VM tests and does **not** establish complete endpoint coverage.
+
+The suite exercises actual workload networking, data persistence, snapshot recovery of data and Compose, failed health-check upgrade rollback, dataset rollback with newer snapshots, independent SSE subscribers, alert ingestion, notification state changes, and service restart recovery. Fast SQL integration and migration tests use Python 3's SQLite behind the rqlite HTTP protocol; appliance tests use real rqlite.
+
+Snapshot recovery is now `POST /api/v1/stacks/{id}/snapshots/{snapshotId}/restore`. `POST /api/v1/stacks/{id}/restore` performs failback to the primary. Clients of the old snapshot recovery path must migrate. Management requests require an administrator token, except login, public health routes, and the internal metrics webhook; deployments must restrict webhook ingress to trusted alert producers.

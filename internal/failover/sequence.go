@@ -3,6 +3,7 @@ package failover
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -18,6 +19,8 @@ import (
 
 // Sequence executes the 6-step failover and the reverse failback.
 type Sequence struct {
+	mu     sync.Mutex
+	active map[string]context.CancelFunc
 	db     *rqlite.Client
 	store  *config.Store
 	raft   *floatraft.Node
@@ -27,12 +30,22 @@ type Sequence struct {
 }
 
 func NewSequence(db *rqlite.Client, store *config.Store, raft *floatraft.Node, hosts *hostclient.Pool, broker *notify.Broker, log *zap.Logger) *Sequence {
-	return &Sequence{db: db, store: store, raft: raft, hosts: hosts, broker: broker, log: log}
+	return &Sequence{db: db, store: store, raft: raft, hosts: hosts, broker: broker, log: log, active: make(map[string]context.CancelFunc)}
 }
 
 // Execute runs the 6-step failover for stackID.
 // Primary must be confirmed unreachable by the caller before calling this.
 func (s *Sequence) Execute(ctx context.Context, stackID string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	s.mu.Lock()
+	if _, exists := s.active[stackID]; exists {
+		s.mu.Unlock()
+		cancel()
+		return fmt.Errorf("failover already active")
+	}
+	s.active[stackID] = cancel
+	s.mu.Unlock()
+	defer func() { cancel(); s.mu.Lock(); delete(s.active, stackID); s.mu.Unlock() }()
 	log := s.log.With(zap.String("stack", stackID))
 
 	stack, err := s.store.GetStack(ctx, stackID)
@@ -40,66 +53,64 @@ func (s *Sequence) Execute(ctx context.Context, stackID string) error {
 		return fmt.Errorf("failover: get stack: %w", err)
 	}
 
-	// Step 1: Raft — transition to FailingOver.
-	if err := s.raft.Apply(run.StackStateChanged{
-		StackID:   stackID,
-		From:      run.StateRunningPrimary,
-		To:        run.StateFailingOver,
-		Event:     run.EventFailoverStart,
-		Timestamp: time.Now().UTC(),
-	}, 5*time.Second); err != nil {
-		return fmt.Errorf("failover: raft FailingOver: %w", err)
+	sequenceID := fmt.Sprint(time.Now().UnixNano())
+	step := func(number int, name string, action func() error) error {
+		started := time.Now().UTC().Format(time.RFC3339Nano)
+		if err := s.db.Execute(ctx, []rqlite.Statement{{SQL: `INSERT INTO failover_steps(stack_id,sequence_id,step,name,state,started_at) VALUES(?,?,?,?,'running',?)`, Params: []interface{}{stackID, sequenceID, number, name, started}}}); err != nil {
+			return err
+		}
+		err := action()
+		state, detail := "complete", ""
+		if err != nil {
+			state, detail = "failed", err.Error()
+		}
+		// Cancellation must not prevent recording the final outcome.
+		recordCtx, recordCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer recordCancel()
+		recordErr := s.db.Execute(recordCtx, []rqlite.Statement{{SQL: `UPDATE failover_steps SET state=?,completed_at=?,detail=? WHERE stack_id=? AND sequence_id=? AND step=?`, Params: []interface{}{state, time.Now().UTC().Format(time.RFC3339Nano), detail, stackID, sequenceID, number}}})
+		if err != nil {
+			return err
+		}
+		return recordErr
 	}
-	log.Info("failover: step 1/6: raft FailingOver applied")
-
-	// Step 2: Attempt final ZFS sync to secondary (30s deadline).
-	syncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	s.attemptFinalSync(syncCtx, stack)
-	cancel()
-	log.Info("failover: step 2/6: final sync attempted")
-
-	// Step 3: IP takeover — add primary's stack addresses to secondary.
-	if err := s.takeoverIPs(ctx, stack); err != nil {
-		log.Warn("failover: step 3/6: IP takeover partial", zap.Error(err))
-	} else {
-		log.Info("failover: step 3/6: IP takeover complete")
+	if err := step(1, "raft-quorum", func() error {
+		return s.raft.Apply(run.StackStateChanged{StackID: stackID, From: run.StateRunningPrimary, To: run.StateFailingOver, Event: run.EventFailoverStart, Timestamp: time.Now().UTC()}, 5*time.Second)
+	}); err != nil {
+		return err
 	}
-
-	// Step 4: Start containers on secondary.
-	if err := s.startOnSecondary(ctx, stack); err != nil {
-		// Roll Raft to Failed so orchestrator doesn't get stuck.
-		_ = s.raft.Apply(run.StackStateChanged{
-			StackID:   stackID,
-			From:      run.StateFailingOver,
-			To:        run.StateFailed,
-			Event:     run.EventFailoverFailed,
-			Timestamp: time.Now().UTC(),
-		}, 5*time.Second)
-		return fmt.Errorf("failover: step 4/6: start on secondary: %w", err)
+	fail := func(err error) error {
+		_ = s.raft.Apply(run.StackStateChanged{StackID: stackID, From: run.StateFailingOver, To: run.StateFailed, Event: run.EventFailoverFailed, Timestamp: time.Now().UTC()}, 5*time.Second)
+		return err
 	}
-	log.Info("failover: step 4/6: containers started on secondary")
-
-	// Step 5: Raft — transition to RunningBackup.
-	if err := s.raft.Apply(run.StackStateChanged{
-		StackID:   stackID,
-		From:      run.StateFailingOver,
-		To:        run.StateRunningBackup,
-		Event:     run.EventFailoverDone,
-		Timestamp: time.Now().UTC(),
-	}, 5*time.Second); err != nil {
-		return fmt.Errorf("failover: raft RunningBackup: %w", err)
+	if err := step(2, "zfs-sync", func() error {
+		syncCtx, syncCancel := context.WithTimeout(ctx, 30*time.Second)
+		defer syncCancel()
+		return s.attemptFinalSync(syncCtx, stack)
+	}); err != nil {
+		log.Warn("failover: final sync failed; using replicated data", zap.Error(err))
 	}
-	log.Info("failover: step 5/6: raft RunningBackup applied")
-
-	// Step 6: Publish notification.
-	_ = notify.Create(ctx, s.db, s.broker, &notify.Notification{
-		StackID:  stackID,
-		Kind:     "failover",
-		Severity: "warning",
-		Title:    fmt.Sprintf("Failover complete: %s", stack.Name),
-		Body:     fmt.Sprintf("Stack is now running on secondary node %s.", stack.BackupNodeID),
-	})
-	log.Info("failover: step 6/6: notification published")
+	// Received snapshots are already accessible; no promotion is performed.
+	if err := s.db.Execute(ctx, []rqlite.Statement{{SQL: `INSERT INTO failover_steps(stack_id,sequence_id,step,name,state,detail) VALUES(?,?,3,'snapshot-promote','skipped','received dataset requires no promotion')`, Params: []interface{}{stackID, sequenceID}}}); err != nil {
+		return fail(err)
+	}
+	s.mu.Lock()
+	delete(s.active, stackID)
+	s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
+	if err := step(4, "ip-takeover", func() error { return s.takeoverIPs(ctx, stack) }); err != nil {
+		return fail(err)
+	}
+	if err := step(5, "compose-up", func() error { return s.startOnSecondary(ctx, stack) }); err != nil {
+		return fail(err)
+	}
+	if err := step(6, "raft-apply", func() error {
+		return s.raft.Apply(run.StackStateChanged{StackID: stackID, From: run.StateFailingOver, To: run.StateRunningBackup, Event: run.EventFailoverDone, Timestamp: time.Now().UTC()}, 5*time.Second)
+	}); err != nil {
+		return fail(err)
+	}
+	_ = notify.Create(ctx, s.db, s.broker, &notify.Notification{StackID: stackID, Kind: "failover", Severity: "warning", Title: fmt.Sprintf("Failover complete: %s", stack.Name), Body: fmt.Sprintf("Stack is now running on secondary node %s.", stack.BackupNodeID)})
 
 	return nil
 }
@@ -133,7 +144,7 @@ func (s *Sequence) Restore(ctx context.Context, stackID string) error {
 
 	// Sync back to primary.
 	syncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	s.attemptFinalSync(syncCtx, stack)
+	_ = s.attemptFinalSync(syncCtx, stack)
 	cancel()
 	log.Info("failover: restore: step 3/4: final sync attempted")
 
@@ -170,9 +181,9 @@ func (s *Sequence) Restore(ctx context.Context, stackID string) error {
 	return nil
 }
 
-func (s *Sequence) attemptFinalSync(ctx context.Context, stack *config.Stack) {
+func (s *Sequence) attemptFinalSync(ctx context.Context, stack *config.Stack) error {
 	if stack.BackupNodeID == "" {
-		return
+		return fmt.Errorf("secondary node required")
 	}
 	dataset := stack.ZFSDataset
 	snapshot := fmt.Sprintf("fsrepl-final-%s", time.Now().UTC().Format("20060102-150405"))
@@ -182,8 +193,7 @@ func (s *Sequence) attemptFinalSync(ctx context.Context, stack *config.Stack) {
 		Dataset: dataset,
 		Name:    snapshot,
 	}); err != nil {
-		s.log.Warn("failover: final sync: create snapshot failed", zap.Error(err))
-		return
+		return fmt.Errorf("create final snapshot: %w", err)
 	}
 
 	// Send to secondary.
@@ -193,8 +203,9 @@ func (s *Sequence) attemptFinalSync(ctx context.Context, stack *config.Stack) {
 		DestHost: stack.BackupNodeID,
 		DestPort: 9696,
 	}); err != nil {
-		s.log.Warn("failover: final sync: send failed", zap.Error(err))
+		return fmt.Errorf("send final snapshot: %w", err)
 	}
+	return nil
 }
 
 func (s *Sequence) takeoverIPs(ctx context.Context, stack *config.Stack) error {
@@ -217,7 +228,7 @@ func (s *Sequence) takeoverIPs(ctx context.Context, stack *config.Stack) error {
 			Interface: "eth0",
 			Address:   addr,
 		}); err != nil {
-			s.log.Warn("failover: IP takeover: add addr failed", zap.String("addr", addr), zap.Error(err))
+			return fmt.Errorf("takeover %s: %w", addr, err)
 		}
 	}
 	return nil
@@ -239,4 +250,15 @@ func (s *Sequence) startOnPrimary(ctx context.Context, stack *config.Stack) erro
 		ComposeFile: stack.ComposeYAML,
 	})
 	return err
+}
+
+// Abort cancels a sequence; its worker records the final failure state.
+func (s *Sequence) Abort(stackID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cancel, ok := s.active[stackID]
+	if ok {
+		cancel()
+	}
+	return ok
 }

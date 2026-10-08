@@ -82,7 +82,8 @@ func registerStackRoutes(r chi.Router, s *Server) {
 		r.Post("/stacks/{id}/upgrade", s.handleUpgradeStack)
 		r.Post("/stacks/{id}/restart", s.handleRestartStack)
 		r.Post("/stacks/{id}/failover", s.handleStackFailover)
-		r.Post("/stacks/{id}/restore", s.handleRestoreSnapshot)
+		r.Post("/stacks/{id}/restore", s.handleStackRestore)
+		r.Post("/stacks/{id}/snapshots/{snapshotId}/restore", s.handleRestoreSnapshot)
 		r.Delete("/stacks/{id}", s.handleDeleteStack)
 		r.Get("/stacks/{id}/state", s.handleGetStackState)
 		r.Get("/stacks/{id}/containers", s.handleGetStackContainers)
@@ -589,7 +590,10 @@ func (s *Server) handleGetStackState(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no FSM state for stack "+id)
 		return
 	}
-	writeJSON(w, http.StatusOK, inst)
+	writeJSON(w, http.StatusOK, struct {
+		*run.StackInstance
+		State run.State `json:"state"`
+	}{StackInstance: inst, State: inst.State})
 }
 
 func (s *Server) handleGetStackContainers(w http.ResponseWriter, r *http.Request) {

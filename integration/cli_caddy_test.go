@@ -117,6 +117,9 @@ func TestCLICaddy(t *testing.T) {
 	if err := c.doJSON("POST", "/api/v1/settings/network-pools", c.token, "application/json", bytes.NewReader(poolBody), &pool, name+"-pool-create"); err != nil {
 		t.Fatal(err)
 	}
+	if err := c.doJSON("PUT", "/api/v1/settings/network-pools/"+pool.ID, c.token, "application/json", bytes.NewReader(poolBody), &pool, name+"-pool-update"); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		if pool.ID == "" {
 			return
@@ -215,7 +218,7 @@ func TestCLICaddy(t *testing.T) {
 		t.Fatalf("allocations=%+v error=%v", allocated, err)
 	}
 	t.Log("verify service DNS, host access, and published port binding")
-	if output := mustCLI("exec", name, "probe", "--", "wget", "-qO-", "http://caddy/"+marker); output != marker {
+	if output := mustCLI("exec", name, "probe", "--", "wget", "-T", "5", "-qO-", "http://caddy/"+marker); output != marker {
 		t.Fatalf("service DNS HTTP: %q", output)
 	}
 	hostOutput, err := guestCommand(root, "curl --fail --silent --show-error http://"+status.StackIP+":8088/"+marker)
@@ -271,6 +274,22 @@ func TestCLICaddy(t *testing.T) {
 	output := mustCLI("stats", name)
 	if !strings.Contains(output, "mem") || !strings.Contains(output, "bytes") {
 		t.Fatalf("stats output: %s", output)
+	}
+	if os.Getenv("FLOATLAB_WORKLOAD_INTEGRATION") == "1" {
+		t.Log("verify HTTP and service DNS after independent control and host service restarts")
+		c.assertServiceRestarts(stackID, func(_ string) {
+			waitFor(t, 30*time.Second, func() error {
+				output, err := guestCommand(root, "curl --max-time 5 --fail --silent --show-error http://"+status.StackIP+":8088/"+marker)
+				if err != nil || output != marker {
+					return fmt.Errorf("HTTP after service restart: %q %v", output, err)
+				}
+				stdout, stderr, code := cli("exec", name, "probe", "--", "wget", "-T", "5", "-qO-", "http://caddy/"+marker)
+				if code != 0 || stdout != marker {
+					return fmt.Errorf("DNS after service restart: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+				}
+				return nil
+			})
+		})
 	}
 	t.Log("delete through the CLI and verify networking cleanup")
 	mustCLI("delete", name, "--purge")

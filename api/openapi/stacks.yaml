@@ -831,3 +831,27 @@ paths:
           description: Stack not found.
         '502':
           description: Execution, ownership, capture limit, or host communication failure.
+
+  /stacks/{id}/snapshots/{snapshotId}/restore:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+      - {name: snapshotId, in: path, required: true, schema: {type: string}}
+    post:
+      operationId: restoreStackSnapshot
+      summary: Recover stack data and compose configuration from a snapshot
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Stack recovery queued; follow operation_id until completion.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [operation_id, stack_id, status]
+                properties:
+                  operation_id: {type: string}
+                  stack_id: {type: string}
+                  status: {type: string}
+        '404': {description: Stack or snapshot recovery metadata not found.}
+        '409': {description: Stack cannot be recovered in its current lifecycle state.}

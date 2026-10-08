@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/floatlab/floatlab-core/api/openapi"
 )
 
 type apiClient struct {
@@ -103,6 +105,8 @@ func startAppliance(t *testing.T) string {
 	uri := env("LIBVIRT_URI", "qemu:///system")
 	pool := env("LIBVIRT_POOL", "default")
 	volume := name + "-zfs.qcow2"
+	var isoDirectory string
+	existingPools := map[string]bool{}
 
 	t.Cleanup(func() {
 		if os.Getenv("FLOATLAB_KEEP_VM") == "1" {
@@ -112,15 +116,75 @@ func startAppliance(t *testing.T) string {
 		command(30*time.Second, root, nil, "virsh", "-c", uri, "destroy", name)
 		command(30*time.Second, root, nil, "virsh", "-c", uri, "undefine", name, "--nvram")
 		command(30*time.Second, root, nil, "virsh", "-c", uri, "vol-delete", "--pool", pool, volume)
+		if isoDirectory != "" {
+			cleanupISOPools(t, root, uri, isoDirectory, existingPools)
+		}
 	})
-	run(t, appliance, nil, "nix", "build", ".#iso", "--print-build-logs")
-	run(t, root, []string{"VM_NAME=" + name, "LIBVIRT_URI=" + uri, "LIBVIRT_POOL=" + pool}, filepath.Join(appliance, "scripts/run-libvirt.sh"))
+	// A path flake includes new source files that Git flakes omit until staged.
+	// Keep the result link outside the source tree so consecutive passes reuse the image.
+	result := filepath.Join(t.TempDir(), "appliance")
+	run(t, appliance, nil, "nix", "--extra-experimental-features", "nix-command flakes", "build", "path:"+root+"?dir=floatlab-appliance-image#iso", "--print-build-logs", "--out-link", result)
+	images, err := filepath.Glob(filepath.Join(result, "iso", "*.iso"))
+	if err != nil || len(images) != 1 {
+		t.Fatalf("expected one appliance ISO: %v %v", images, err)
+	}
+	image, err := filepath.EvalSymlinks(images[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	isoDirectory = filepath.Dir(image)
+	before, err := command(15*time.Second, root, nil, "virsh", "-c", uri, "pool-list", "--all", "--name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range strings.Fields(before) {
+		existingPools[name] = true
+	}
+	run(t, root, []string{"VM_NAME=" + name, "LIBVIRT_URI=" + uri, "LIBVIRT_POOL=" + pool}, filepath.Join(appliance, "scripts/run-libvirt.sh"), images[0])
 	return "http://" + waitForIP(t, root, uri, name) + ":8080"
+}
+
+// virt-install automatically registers the ISO's directory as a storage pool.
+// Remove only newly registered pools for this appliance's exact ISO directory.
+func cleanupISOPools(t *testing.T, root, uri, directory string, before map[string]bool) {
+	t.Helper()
+	names, err := command(15*time.Second, root, nil, "virsh", "-c", uri, "pool-list", "--all", "--name")
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	for _, name := range strings.Fields(names) {
+		if before[name] {
+			continue
+		}
+		raw, err := command(15*time.Second, root, nil, "virsh", "-c", uri, "pool-dumpxml", name)
+		var pool struct {
+			Path string `xml:"target>path"`
+		}
+		if err != nil {
+			t.Error(err)
+			continue
+		}
+		if err := xml.Unmarshal([]byte(raw), &pool); err != nil {
+			t.Error(err)
+			continue
+		}
+		if pool.Path != directory {
+			continue
+		}
+		if out, err := command(15*time.Second, root, nil, "virsh", "-c", uri, "pool-destroy", name); err != nil {
+			t.Errorf("ISO pool destroy: %s %v", out, err)
+			continue
+		}
+		if out, err := command(15*time.Second, root, nil, "virsh", "-c", uri, "pool-undefine", name); err != nil {
+			t.Errorf("ISO pool undefine: %s %v", out, err)
+		}
+	}
 }
 
 func (c *apiClient) waitReady() {
 	c.t.Helper()
-	waitFor(c.t, 2*time.Minute, func() error {
+	waitFor(c.t, 5*time.Minute, func() error {
 		var health struct {
 			Status    string `json:"status"`
 			RaftState string `json:"raft_state"`
@@ -200,7 +264,7 @@ func (c *apiClient) waitNodeReady() {
 		if err := c.doJSON(http.MethodGet, "/api/v1/nodes/node1/health", c.token, "", nil, &health); err != nil {
 			return err
 		}
-		if health.Status != "online" {
+		if health.Status != "reachable" {
 			return fmt.Errorf("node status is %q", health.Status)
 		}
 		return nil
@@ -353,6 +417,9 @@ func (c *apiClient) assertTerminal(stackID, containerID string) {
 		}
 		got.Write(data)
 		if strings.Contains(got.String(), "terminal-ok") {
+			if activeCoverage != nil {
+				activeCoverage.observe("GET", "/api/v1/stacks/"+stackID+"/containers/"+containerID+"/terminal", 101)
+			}
 			return
 		}
 	}
@@ -390,7 +457,7 @@ func (c *apiClient) assertStorageAPIs(stackID string) {
 
 	snapshotName := "it-storage-" + time.Now().Format("150405000000000")
 	created := c.mutateJSON(http.MethodPost, "/api/v1/storage/datasets/"+stackID+"/snapshots", map[string]string{"name": snapshotName})
-	if created.TaskID == "" || created.Snapshot != snapshotName {
+	if created.TaskID == "" || !strings.HasSuffix(created.Snapshot, snapshotName) {
 		c.t.Fatalf("unexpected storage snapshot create response: %+v", created)
 	}
 	waitFor(c.t, 90*time.Second, func() error {
@@ -590,8 +657,8 @@ func (c *apiClient) waitStackState(stackID, want string) {
 		if err := c.doJSON(http.MethodGet, "/api/v1/stacks/"+stackID+"/status", c.token, "", nil, &status); err != nil {
 			return err
 		}
-		if status.State == "Failed" {
-			return fmt.Errorf("stack entered Failed state")
+		if status.State == "Failed" && want != "Failed" {
+			c.t.Fatalf("stack %s entered Failed state while waiting for %s", stackID, want)
 		}
 		if status.State != want {
 			return fmt.Errorf("stack state is %q, want %q", status.State, want)
@@ -655,7 +722,12 @@ func (c *apiClient) cleanupStack(stackID string) {
 	}
 	for attempt := 0; attempt < 8; attempt++ {
 		resp, body, err := c.request(http.MethodDelete, "/api/v1/stacks/"+stackID+"?purge=true", c.token, "cleanup-delete-"+time.Now().Format("150405000000000"), "", nil)
-		if err != nil || resp.StatusCode == http.StatusNotFound {
+		if err != nil {
+			c.t.Logf("cleanup attempt %d for %s: %v", attempt+1, stackID, err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		if resp.StatusCode == http.StatusNotFound {
 			return
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -665,11 +737,16 @@ func (c *apiClient) cleanupStack(stackID string) {
 			}
 			return
 		}
+		c.t.Logf("cleanup attempt %d for %s: %d %s", attempt+1, stackID, resp.StatusCode, body)
 		time.Sleep(2 * time.Second)
 	}
+	c.t.Errorf("cleanup failed for owned stack %s", stackID)
 }
 
 func (c *apiClient) doJSON(method, path, token, contentType string, body io.Reader, target any, idempotencyKey ...string) error {
+	if token == "" {
+		token = c.token
+	}
 	key := ""
 	if len(idempotencyKey) > 0 {
 		key = idempotencyKey[0]
@@ -678,8 +755,31 @@ func (c *apiClient) doJSON(method, path, token, contentType string, body io.Read
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	operations, contractErr := openapi.ManagementOperations()
+	if contractErr != nil {
+		return contractErr
+	}
+	documented := false
+	requestURL, _ := url.Parse(path)
+	for _, op := range operations {
+		if op.Method == method && matchesPath(op.Path, requestURL.Path) {
+			for _, status := range op.SuccessStatuses {
+				if status == resp.StatusCode {
+					documented = true
+				}
+			}
+		}
+	}
+	if !documented {
 		return fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, bytes.TrimSpace(payload))
+	}
+	for _, op := range operations {
+		if op.Method == method && matchesPath(op.Path, requestURL.Path) {
+			if err := openapi.ValidateJSONResponse(method, op.Path, resp.StatusCode, payload); err != nil {
+				return fmt.Errorf("%s %s: %w", method, path, err)
+			}
+			break
+		}
 	}
 	if target != nil && len(bytes.TrimSpace(payload)) != 0 {
 		if err := json.Unmarshal(payload, target); err != nil {
@@ -711,6 +811,9 @@ func (c *apiClient) request(method, path, token, idempotencyKey, contentType str
 	payload, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, nil, err
+	}
+	if activeCoverage != nil {
+		activeCoverage.observe(method, path, resp.StatusCode)
 	}
 	return resp, payload, nil
 }

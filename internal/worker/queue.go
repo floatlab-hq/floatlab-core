@@ -68,6 +68,7 @@ func (w *Worker) registerHandlers() {
 	w.handlers[TaskStackRestart] = w.handleStackRestart
 	w.handlers[TaskStackDelete] = w.handleStackDelete
 	w.handlers[TaskStackRestore] = w.handleStackRestore
+	w.handlers[TaskDatasetRollback] = w.handleDatasetRollback
 }
 
 // Run polls for pending tasks on the configured interval until ctx is cancelled.
@@ -114,19 +115,40 @@ func (w *Worker) handleStackUpgrade(ctx context.Context, raw json.RawMessage) er
 		return err
 	}
 	snapshot := "pre-upgrade-" + p.OperationID
+	snapshotCreated := false
 	fail := func(cause error) error {
 		_ = w.applyStackEvent(p.StackID, p.NodeID, run.EventUpdateFailed)
-		_ = w.restoreDatasets(ctx, p.NodeID, p.DatasetPath, snapshot, p.OperationID)
-		_ = w.store.UpdateStackCompose(ctx, p.StackID, p.OldCompose)
-		_, _ = w.pool.Execute(ctx, p.NodeID, "compose.source.write", ipc.ComposeSourcePayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: p.OldCompose})
-		_, rollbackErr := w.pool.Execute(ctx, p.NodeID, "compose.up", ipc.ComposeUpPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: oldRuntime})
-		if rollbackErr == nil {
-			_ = w.applyStackEvent(p.StackID, p.NodeID, run.EventRollbackDone)
-		} else {
-			_ = w.applyStackEvent(p.StackID, p.NodeID, run.EventRollbackFailed)
+		rollback := func() error {
+			if snapshotCreated {
+				if _, err := w.pool.Execute(ctx, p.NodeID, "compose.down", ipc.ComposeDownPayload{StackID: p.StackID, DatasetPath: p.DatasetPath}); err != nil {
+					return err
+				}
+				if err := w.restoreDatasets(ctx, p.NodeID, p.DatasetPath, snapshot, p.OperationID); err != nil {
+					return err
+				}
+			}
+			if err := w.store.UpdateStackCompose(ctx, p.StackID, p.OldCompose); err != nil {
+				return err
+			}
+			if _, err := w.pool.Execute(ctx, p.NodeID, "compose.source.write", ipc.ComposeSourcePayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: p.OldCompose}); err != nil {
+				return err
+			}
+			if _, err := w.pool.Execute(ctx, p.NodeID, "compose.up", ipc.ComposeUpPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: oldRuntime}); err != nil {
+				return err
+			}
+			return w.waitHealthy(ctx, p.NodeID, p.StackID, timeout(p.HealthTimeout))
 		}
-		_ = w.ops.Update(context.Background(), p.OperationID, "failed", "rolled-back", cause.Error())
-		_ = operation.RecordEvent(context.Background(), w.db, operation.Event{StackID: p.StackID, Type: "Upgrade", Outcome: "failed-rolled-back", OperationID: p.OperationID, Actor: p.Actor, Error: cause.Error()})
+		checkpoint, outcome, message := "rolled-back", "failed-rolled-back", cause.Error()
+		if rollbackErr := rollback(); rollbackErr != nil {
+			checkpoint = "rollback-failed"
+			outcome = "failed-rollback-failed"
+			message += "; rollback: " + rollbackErr.Error()
+			_ = w.applyStackEvent(p.StackID, p.NodeID, run.EventRollbackFailed)
+		} else {
+			_ = w.applyStackEvent(p.StackID, p.NodeID, run.EventRollbackDone)
+		}
+		_ = w.ops.Update(context.Background(), p.OperationID, "failed", checkpoint, message)
+		_ = operation.RecordEvent(context.Background(), w.db, operation.Event{StackID: p.StackID, Type: "Upgrade", Outcome: outcome, OperationID: p.OperationID, Actor: p.Actor, Error: message})
 		return nil
 	}
 	_ = w.ops.Update(ctx, p.OperationID, "running", "pulling-images", "")
@@ -137,6 +159,7 @@ func (w *Worker) handleStackUpgrade(ctx context.Context, raw json.RawMessage) er
 	if _, err := w.pool.Execute(ctx, p.NodeID, "fs.snapshot.create", ipc.SnapshotCreatePayload{Dataset: p.DatasetPath, Name: snapshot, Recursive: true}); err != nil {
 		return fail(err)
 	}
+	snapshotCreated = true
 	now := time.Now().UTC()
 	_ = w.db.Execute(ctx, []rqlite.Statement{
 		{SQL: `INSERT OR IGNORE INTO stack_snapshots(id,stack_id,operation_id,zfs_name,kind,created_at) VALUES(?,?,?,?,?,?)`, Params: []interface{}{uuid.NewString(), p.StackID, p.OperationID, snapshot, "pre-upgrade", now}},
@@ -614,4 +637,22 @@ func EnqueueTask(ctx context.Context, db *rqlite.Client, id, taskType, stackID s
 		      VALUES (?, ?, ?, ?, 'pending', 0, datetime('now'), datetime('now'))`,
 		Params: []interface{}{id, taskType, stackID, p},
 	}})
+}
+
+func (w *Worker) handleDatasetRollback(ctx context.Context, raw json.RawMessage) error {
+	var p DatasetRollbackPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return err
+	}
+	if w.operationDone(ctx, p.OperationID) {
+		return nil
+	}
+	instance, ok := w.raft.FSM().State(p.StackID)
+	if !ok || instance.State != run.StateIdle {
+		return fmt.Errorf("dataset rollback requires Idle stack")
+	}
+	if _, err := w.pool.Execute(ctx, p.NodeID, "fs.snapshot.rollback", ipc.SnapshotRollbackPayload{Dataset: p.Dataset, Name: p.Name, DestroyNewer: p.DestroyNewer}); err != nil {
+		return err
+	}
+	return w.ops.Update(ctx, p.OperationID, "succeeded", "succeeded", "")
 }

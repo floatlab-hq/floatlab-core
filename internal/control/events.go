@@ -15,11 +15,8 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
+	// ResponseController follows middleware Unwrap methods to the actual writer.
+	flusher := http.NewResponseController(w)
 
 	ch, unsub := s.broker.Subscribe()
 	defer unsub()
@@ -28,7 +25,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	defer ticker.Stop()
 
 	_, _ = w.Write([]byte(": connected\n\n"))
-	flusher.Flush()
+	if err := flusher.Flush(); err != nil {
+		return
+	}
 
 	for {
 		select {
@@ -40,11 +39,15 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, ev.Payload)
-			flusher.Flush()
+			if err := flusher.Flush(); err != nil {
+				return
+			}
 
 		case <-ticker.C:
 			_, _ = w.Write([]byte(": keepalive\n\n"))
-			flusher.Flush()
+			if err := flusher.Flush(); err != nil {
+				return
+			}
 		}
 	}
 }

@@ -223,3 +223,34 @@ paths:
     $ref: './store.yaml#/paths/~1storage~1replication~1{stack_id}~1trigger'
   /storage/faults:
     $ref: './store.yaml#/paths/~1storage~1faults'
+
+  /events:
+    get:
+      operationId: streamEvents
+      summary: Subscribe to lifecycle and notification events
+      responses:
+        '200':
+          description: Server-sent events; each subscriber receives its own stream.
+          content:
+            text/event-stream:
+              schema: {type: string}
+  /stats/webhook:
+    post:
+      operationId: receiveMetricsAlerts
+      summary: Receive internal vmalert Alertmanager alerts
+      security: []
+      description: Internal webhook; deployments must restrict ingress to trusted alert producers.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [alerts]
+              properties:
+                alerts: {type: array, items: {type: object}}
+      responses:
+        '200': {description: Alerts processed.}
+        '400': {description: Invalid JSON.}
+  /stacks/{id}/snapshots/{snapshotId}/restore:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1snapshots~1{snapshotId}~1restore'

@@ -24,20 +24,21 @@ import (
 )
 
 type Server struct {
-	cfg    *Config
-	router *chi.Mux
-	log    *zap.Logger
-	db     *rqlite.Client
-	store  *config.Store
-	raft   *floatraft.Node
-	hosts  *hostclient.Pool
-	sm     run.StateMachine
-	broker *notify.Broker
-	vlogs  *logs.Client
-	vmets  *stats.Client
-	seq    *failover.Sequence
-	ops    *operation.Store
-	auth   *authLimiter
+	startedAt time.Time
+	cfg       *Config
+	router    *chi.Mux
+	log       *zap.Logger
+	db        *rqlite.Client
+	store     *config.Store
+	raft      *floatraft.Node
+	hosts     *hostclient.Pool
+	sm        run.StateMachine
+	broker    *notify.Broker
+	vlogs     *logs.Client
+	vmets     *stats.Client
+	seq       *failover.Sequence
+	ops       *operation.Store
+	auth      *authLimiter
 }
 
 type Config struct {
@@ -62,19 +63,20 @@ func NewServer(
 	log *zap.Logger,
 ) *Server {
 	s := &Server{
-		cfg:    cfg,
-		log:    log,
-		db:     db,
-		store:  store,
-		raft:   raftNode,
-		hosts:  hosts,
-		sm:     run.New(),
-		broker: broker,
-		vlogs:  logs.NewClient(cfg.VLogsURL),
-		vmets:  stats.NewClient(cfg.VMetricsURL),
-		seq:    seq,
-		ops:    operation.NewStore(db),
-		auth:   newAuthLimiter(),
+		startedAt: time.Now(),
+		cfg:       cfg,
+		log:       log,
+		db:        db,
+		store:     store,
+		raft:      raftNode,
+		hosts:     hosts,
+		sm:        run.New(),
+		broker:    broker,
+		vlogs:     logs.NewClient(cfg.VLogsURL),
+		vmets:     stats.NewClient(cfg.VMetricsURL),
+		seq:       seq,
+		ops:       operation.NewStore(db),
+		auth:      newAuthLimiter(),
 	}
 	s.router = s.buildRouter()
 	return s
@@ -95,15 +97,17 @@ func (s *Server) buildRouter() *chi.Mux {
 	r.Route("/api/v1", func(r chi.Router) {
 		registerAuthRoutes(r, s)
 		registerHealthRoutes(r, s)
-		registerNodeRoutes(r, s)
+		r.Group(func(r chi.Router) { r.Use(s.requireAdminJWT); r.Use(s.idempotency); registerNodeRoutes(r, s) })
 		registerStackRoutes(r, s)
 		registerStorageRoutes(r, s)
 		registerFailoverRoutes(r, s)
 		registerNetworkRoutes(r, s)
-		registerLogRoutes(r, s)
-		registerStatsRoutes(r, s)
-		registerNotifyRoutes(r, s)
-		registerEventRoutes(r, s)
+		r.Group(func(r chi.Router) { r.Use(s.requireAdminJWT); registerLogRoutes(r, s) })
+		r.Post("/stats/webhook", s.handleStatsWebhook)
+		r.Group(func(r chi.Router) { r.Use(s.requireAdminJWT); registerStatsRoutes(r, s) })
+		r.Group(func(r chi.Router) { r.Use(s.requireAdminJWT); r.Use(s.idempotency); registerNotifyRoutes(r, s) })
+		r.Group(func(r chi.Router) { r.Use(s.requireAdminJWT); registerEventRoutes(r, s) })
+		registerConfigRoutes(r, s)
 	})
 
 	return r

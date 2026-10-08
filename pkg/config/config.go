@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
+	"github.com/google/uuid"
 )
 
 // Store provides CRUD operations for all FloatLab configuration entities,
@@ -52,10 +52,22 @@ func (s *Store) CreateNode(ctx context.Context, n *Node) error {
 	}
 	n.CreatedAt = time.Now().UTC()
 	n.UpdatedAt = n.CreatedAt
+	if n.Hostname == "" {
+		n.Hostname = n.Name
+	}
+	if n.Role == "" {
+		n.Role = "secondary"
+	}
+	if n.ZFSPool == "" {
+		n.ZFSPool = "floatlab"
+	}
+	if n.Addresses == nil {
+		n.Addresses = []NodeAddress{}
+	}
 	addrsJSON, _ := json.Marshal(n.Addresses)
 	err := s.db.Execute(ctx, []rqlite.Statement{{
-		SQL:    `INSERT INTO nodes(id, cluster_uuid, name, addresses, created_at, updated_at) VALUES(?,?,?,?,?,?)`,
-		Params: []interface{}{n.ID, n.ClusterUUID, n.Name, string(addrsJSON), n.CreatedAt, n.UpdatedAt},
+		SQL:    `INSERT INTO nodes(id, cluster_uuid, name, addresses, created_at, updated_at,hostname,role,zfs_pool) VALUES(?,?,?,?,?,?,?,?,?)`,
+		Params: []interface{}{n.ID, n.ClusterUUID, n.Name, string(addrsJSON), n.CreatedAt, n.UpdatedAt, n.Hostname, n.Role, n.ZFSPool},
 	}})
 	if err != nil {
 		return fmt.Errorf("config: create node: %w", err)
@@ -66,7 +78,7 @@ func (s *Store) CreateNode(ctx context.Context, n *Node) error {
 
 func (s *Store) GetNode(ctx context.Context, id string) (*Node, error) {
 	res, err := s.db.Query(ctx, rqlite.Statement{
-		SQL:    `SELECT id, cluster_uuid, name, addresses, created_at, updated_at FROM nodes WHERE id=?`,
+		SQL:    `SELECT id, cluster_uuid, name, addresses, created_at, updated_at,hostname,role,zfs_pool FROM nodes WHERE id=?`,
 		Params: []interface{}{id},
 	})
 	if err != nil {
@@ -80,7 +92,7 @@ func (s *Store) GetNode(ctx context.Context, id string) (*Node, error) {
 
 func (s *Store) ListNodes(ctx context.Context) ([]*Node, error) {
 	res, err := s.db.Query(ctx, rqlite.Statement{
-		SQL: `SELECT id, cluster_uuid, name, addresses, created_at, updated_at FROM nodes ORDER BY name`,
+		SQL: `SELECT id, cluster_uuid, name, addresses, created_at, updated_at,hostname,role,zfs_pool FROM nodes ORDER BY name`,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("config: list nodes: %w", err)
@@ -100,8 +112,8 @@ func (s *Store) UpdateNode(ctx context.Context, n *Node) error {
 	n.UpdatedAt = time.Now().UTC()
 	addrsJSON, _ := json.Marshal(n.Addresses)
 	err := s.db.Execute(ctx, []rqlite.Statement{{
-		SQL:    `UPDATE nodes SET cluster_uuid=?, name=?, addresses=?, updated_at=? WHERE id=?`,
-		Params: []interface{}{n.ClusterUUID, n.Name, string(addrsJSON), n.UpdatedAt, n.ID},
+		SQL:    `UPDATE nodes SET cluster_uuid=?, name=?, addresses=?, updated_at=?,hostname=?,role=?,zfs_pool=? WHERE id=?`,
+		Params: []interface{}{n.ClusterUUID, n.Name, string(addrsJSON), n.UpdatedAt, n.Hostname, n.Role, n.ZFSPool, n.ID},
 	}})
 	if err != nil {
 		return fmt.Errorf("config: update node: %w", err)
@@ -228,6 +240,18 @@ func scanNode(row []interface{}) (*Node, error) {
 	}
 	if t, ok := row[5].(string); ok {
 		n.UpdatedAt, _ = time.Parse(time.RFC3339, t)
+	}
+	if len(row) > 8 {
+		n.Hostname, _ = row[6].(string)
+		n.Role, _ = row[7].(string)
+		n.ZFSPool, _ = row[8].(string)
+	}
+	if n.Hostname == "" {
+		n.Hostname = n.Name
+	}
+	n.Status = "unknown"
+	if n.Addresses == nil {
+		n.Addresses = []NodeAddress{}
 	}
 	return n, nil
 }

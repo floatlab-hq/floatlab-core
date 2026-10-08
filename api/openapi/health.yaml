@@ -70,6 +70,7 @@ components:
 paths:
   /health:
     get:
+      security: []
       summary: Basic liveness check
       operationId: getHealth
       tags: [health]
@@ -84,6 +85,7 @@ paths:
 
   /health/ready:
     get:
+      security: []
       summary: Readiness check — all critical dependencies
       operationId: getReadiness
       tags: [health]
@@ -106,6 +108,7 @@ paths:
 
   /health/raft:
     get:
+      security: []
       summary: Raft consensus state
       operationId: getRaftHealth
       tags: [health]

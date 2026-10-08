@@ -58,6 +58,7 @@ func (d *Dispatcher) register() {
 	d.srv.Handle("fs.dataset.promote", d.datasetPromote)
 	d.srv.Handle("fs.snapshot.create", d.snapshotCreate)
 	d.srv.Handle("fs.snapshot.destroy", d.snapshotDestroy)
+	d.srv.Handle("fs.snapshot.rollback", d.snapshotRollback)
 	d.srv.Handle("fs.repl.send", d.replSend)
 	d.srv.Handle("fs.repl.recv", d.replRecv)
 	d.srv.Handle("fs.repl.status", d.replStatus)
@@ -670,6 +671,17 @@ func (d *Dispatcher) poolList(ctx context.Context, _ json.RawMessage) (any, erro
 			Available: p.Available,
 		})
 	}
+	for i := range result.Pools {
+		datasets, err := d.zfs.DatasetList(ctx, result.Pools[i].Name)
+		if err == nil {
+			for _, dataset := range datasets {
+				if dataset.Name == result.Pools[i].Name {
+					result.Pools[i].CreatedAt = dataset.CreatedAt
+					break
+				}
+			}
+		}
+	}
 	return result, nil
 }
 
@@ -706,6 +718,7 @@ func (d *Dispatcher) snapshotList(ctx context.Context, raw json.RawMessage) (any
 	result := ipc.SnapshotListResult{Snapshots: make([]ipc.SnapshotInfoResult, 0, len(snaps))}
 	for _, s := range snaps {
 		result.Snapshots = append(result.Snapshots, ipc.SnapshotInfoResult{
+			CreateTXG: s.CreateTXG,
 			Name:      s.Name,
 			Dataset:   s.Dataset,
 			Used:      s.Used,
@@ -732,6 +745,7 @@ func (d *Dispatcher) datasetList(ctx context.Context, raw json.RawMessage) (any,
 			Available:  ds.Available,
 			Quota:      ds.Quota,
 			Mountpoint: ds.Mountpoint,
+			CreatedAt:  ds.CreatedAt,
 		})
 	}
 	return result, nil
@@ -797,4 +811,21 @@ func writeFile(path string, data []byte, perm uint32) error {
 	defer f.Close()
 	_, err = f.Write(data)
 	return err
+}
+
+func (d *Dispatcher) snapshotRollback(ctx context.Context, raw json.RawMessage) (any, error) {
+	var p ipc.SnapshotRollbackPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, err
+	}
+	if !validDataset(p.Dataset) || !validSnapshot(p.Dataset+"@"+p.Name) {
+		return nil, fmt.Errorf("invalid snapshot target")
+	}
+	args := []string{"rollback"}
+	if p.DestroyNewer {
+		args = append(args, "-r")
+	}
+	args = append(args, p.Dataset+"@"+p.Name)
+	_, err := runShell(ctx, "zfs", args...)
+	return map[string]bool{"restored": err == nil}, err
 }

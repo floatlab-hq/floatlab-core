@@ -259,6 +259,7 @@ type SysInfoResult struct {
 // ZFS list result types — used by fs.pool.list, fs.pool.health, fs.snapshot.list, fs.dataset.list
 
 type PoolSummaryResult struct {
+	CreatedAt string `json:"created_at"`
 	Name      string `json:"name"`
 	Health    string `json:"health"`
 	Used      int64  `json:"used"`
@@ -290,6 +291,7 @@ type SnapshotListPayload struct {
 }
 
 type SnapshotInfoResult struct {
+	CreateTXG int64  `json:"create_txg,omitempty"`
 	Name      string `json:"name"`
 	Dataset   string `json:"dataset"`
 	Used      int64  `json:"used"`
@@ -305,6 +307,7 @@ type DatasetListPayload struct {
 }
 
 type DatasetInfoResult struct {
+	CreatedAt  string `json:"created_at"`
 	Name       string `json:"name"`
 	Used       int64  `json:"used"`
 	Available  int64  `json:"available"`
@@ -326,4 +329,11 @@ type ExecResult struct {
 	Stdout   string `json:"stdout"`
 	Stderr   string `json:"stderr"`
 	ExitCode int    `json:"exit_code"`
+}
+
+// SnapshotRollbackPayload rolls back one dataset without destroying clones.
+type SnapshotRollbackPayload struct {
+	Dataset      string `json:"dataset"`
+	Name         string `json:"name"`
+	DestroyNewer bool   `json:"destroy_newer"`
 }

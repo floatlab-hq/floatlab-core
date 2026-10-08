@@ -3,6 +3,9 @@ package control
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,7 +15,6 @@ import (
 
 	"github.com/floatlab/floatlab-core/internal/worker"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
-	"github.com/floatlab/floatlab-core/pkg/rqlite"
 	"github.com/floatlab/floatlab-core/pkg/store"
 )
 
@@ -22,6 +24,8 @@ func registerStorageRoutes(r chi.Router, s *Server) {
 		r.Use(s.idempotency)
 		r.Get("/storage/pools", s.handleListPools)
 		r.Get("/storage/pools/{node_id}/{pool}", s.handleGetPool)
+		r.Get("/storage/datasets", s.handleListDatasets)
+		r.Post("/storage/datasets/{stack_id}/snapshots/{name}/restore", s.handleRollbackDataset)
 		r.Get("/storage/datasets/{stack_id}", s.handleGetStackDataset)
 		r.Get("/storage/datasets/{stack_id}/snapshots", s.handleListSnapshots)
 		r.Post("/storage/datasets/{stack_id}/snapshots", s.handleCreateSnapshot)
@@ -34,6 +38,7 @@ func registerStorageRoutes(r chi.Router, s *Server) {
 
 // poolResponse maps to the frontend ZfsPool type.
 type poolResponse struct {
+	CreatedAt  string         `json:"created_at"`
 	NodeID     string         `json:"node_id"`
 	Name       string         `json:"name"`
 	State      string         `json:"state"`
@@ -83,6 +88,7 @@ func (s *Server) handleListPools(w http.ResponseWriter, r *http.Request) {
 				}
 				results = append(results, poolResponse{
 					NodeID:     nodeID,
+					CreatedAt:  p.CreatedAt,
 					Name:       p.Name,
 					State:      p.Health,
 					SizeBytes:  p.Used + p.Available,
@@ -121,9 +127,27 @@ func (s *Server) handleGetPool(w http.ResponseWriter, r *http.Request) {
 
 	vdevs := make([]vdevResponse, 0, len(result.VDevs))
 	for _, v := range result.VDevs {
-		vdevs = append(vdevs, vdevResponse{Name: v.Name, State: v.State})
+		vdevs = append(vdevs, vdevResponse{Name: v.Name, State: v.State, Type: "disk"})
+	}
+	rawPools, err := s.hosts.Execute(r.Context(), nodeID, "fs.pool.list", struct{}{})
+	if err != nil {
+		writeError(w, 502, err.Error())
+		return
+	}
+	var pools ipc.PoolListResult
+	if err := json.Unmarshal(rawPools, &pools); err != nil {
+		writeError(w, 502, err.Error())
+		return
+	}
+	var summary ipc.PoolSummaryResult
+	for _, item := range pools.Pools {
+		if item.Name == pool {
+			summary = item
+			break
+		}
 	}
 	writeJSON(w, http.StatusOK, poolResponse{
+		CreatedAt: summary.CreatedAt, SizeBytes: summary.Used + summary.Available, AllocBytes: summary.Used, FreeBytes: summary.Available,
 		NodeID: nodeID,
 		Name:   result.Name,
 		State:  result.Health,
@@ -134,12 +158,16 @@ func (s *Server) handleGetPool(w http.ResponseWriter, r *http.Request) {
 
 // datasetResponse maps to the frontend ZfsDataset type.
 type datasetResponse struct {
-	StackID    string `json:"stack_id"`
-	Name       string `json:"name"`
-	UsedBytes  int64  `json:"used_bytes"`
-	AvailBytes int64  `json:"avail_bytes"`
-	QuotaBytes *int64 `json:"quota_bytes"`
-	Mountpoint string `json:"mount_point"`
+	Pool            string `json:"pool"`
+	NodeID          string `json:"node_id"`
+	CreatedAt       string `json:"created_at"`
+	MountpointAlias string `json:"mountpoint"`
+	StackID         string `json:"stack_id"`
+	Name            string `json:"name"`
+	UsedBytes       int64  `json:"used_bytes"`
+	AvailBytes      int64  `json:"avail_bytes"`
+	QuotaBytes      *int64 `json:"quota_bytes"`
+	Mountpoint      string `json:"mount_point"`
 }
 
 func (s *Server) handleGetStackDataset(w http.ResponseWriter, r *http.Request) {
@@ -171,7 +199,8 @@ func (s *Server) handleGetStackDataset(w http.ResponseWriter, r *http.Request) {
 				quota = &q
 			}
 			writeJSON(w, http.StatusOK, datasetResponse{
-				StackID:    stackID,
+				StackID: stackID,
+				Pool:    strings.SplitN(ds.Name, "/", 2)[0], NodeID: nodeID, CreatedAt: ds.CreatedAt, MountpointAlias: ds.Mountpoint,
 				Name:       ds.Name,
 				UsedBytes:  ds.Used,
 				AvailBytes: ds.Available,
@@ -186,6 +215,9 @@ func (s *Server) handleGetStackDataset(w http.ResponseWriter, r *http.Request) {
 
 // snapshotResponse maps to the frontend Snapshot type.
 type snapshotResponse struct {
+	NodeID          string `json:"node_id"`
+	UsedBytes       int64  `json:"used_bytes"`
+	Kind            string `json:"kind"`
 	StackID         string `json:"stack_id"`
 	Dataset         string `json:"dataset"`
 	Name            string `json:"name"`
@@ -215,16 +247,34 @@ func (s *Server) handleListSnapshots(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	limit, err := boundedLimit(r, 50, 500)
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	kind := r.URL.Query().Get("kind")
+	if kind != "" && kind != "user" && kind != "scheduled" && kind != "replication" {
+		writeError(w, 400, "invalid snapshot kind")
+		return
+	}
 	snaps := make([]snapshotResponse, 0, len(result.Snapshots))
 	for _, sn := range result.Snapshots {
+		if kind != "" && string(store.ClassifySnapshot(sn.Name)) != kind {
+			continue
+		}
 		snaps = append(snaps, snapshotResponse{
-			StackID:   stackID,
+			StackID: stackID,
+			NodeID:  nodeID, UsedBytes: sn.Used, Kind: string(store.ClassifySnapshot(sn.Name)),
 			Dataset:   sn.Dataset,
 			Name:      sn.Name,
 			Type:      string(store.ClassifySnapshot(sn.Name)),
 			CreatedAt: sn.CreatedAt,
 			SizeBytes: sn.Used,
 		})
+	}
+	sort.Slice(snaps, func(i, j int) bool { return snaps[i].CreatedAt > snaps[j].CreatedAt })
+	if len(snaps) > limit {
+		snaps = snaps[:limit]
 	}
 	writeJSON(w, http.StatusOK, snaps)
 }
@@ -238,18 +288,43 @@ func (s *Server) handleCreateSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Name string `json:"name"`
+		Name      string `json:"name"`
+		Label     string `json:"label"`
+		Recursive bool   `json:"recursive"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if body.Name == "" {
-		body.Name = store.UserSnapshotName("manual")
+	if body.Label != "" {
+		body.Name = body.Label
+	}
+	if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]*$`).MatchString(body.Name) {
+		writeError(w, 400, "a valid snapshot label is required")
+		return
 	}
 
 	taskID := uuid.New().String()
+	opID := operationID(r.Context())
+	snapshot := store.UserSnapshotName(body.Name)
+	raw, err := s.hosts.Execute(r.Context(), st.PrimaryNodeID, "fs.snapshot.list", ipc.SnapshotListPayload{Dataset: st.ZFSDataset})
+	if err != nil {
+		writeError(w, 502, err.Error())
+		return
+	}
+	var listed ipc.SnapshotListResult
+	if err := json.Unmarshal(raw, &listed); err != nil {
+		writeError(w, 502, err.Error())
+		return
+	}
+	for _, sn := range listed.Snapshots {
+		if sn.Name == snapshot && sn.Dataset == st.ZFSDataset {
+			writeError(w, 409, "snapshot already exists")
+			return
+		}
+	}
 	payload := worker.SnapshotCreatePayload{
+		OperationID: opID, StackID: stackID, Name: snapshot, Recursive: body.Recursive,
 		Dataset:  st.ZFSDataset,
 		NodeID:   st.PrimaryNodeID,
 		SnapType: "user",
@@ -260,7 +335,7 @@ func (s *Server) handleCreateSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"task_id": taskID, "snapshot": body.Name})
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{"task_id": taskID, "snapshot": snapshot, "operation_id": opID, "name": snapshot, "dataset": st.ZFSDataset, "node_id": st.PrimaryNodeID, "stack_id": stackID, "used_bytes": 0, "created_at": time.Now().UTC().Format(time.RFC3339Nano), "kind": "user", "state": "pending"})
 }
 
 func (s *Server) handleDeleteSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -273,8 +348,40 @@ func (s *Server) handleDeleteSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	raw, err := s.hosts.Execute(r.Context(), st.PrimaryNodeID, "fs.snapshot.list", ipc.SnapshotListPayload{Dataset: st.ZFSDataset})
+	if err != nil {
+		writeError(w, 502, err.Error())
+		return
+	}
+	var listed ipc.SnapshotListResult
+	if err := json.Unmarshal(raw, &listed); err != nil {
+		writeError(w, 502, err.Error())
+		return
+	}
+	found := false
+	for _, snapshot := range listed.Snapshots {
+		if snapshot.Name == snapName && snapshot.Dataset == st.ZFSDataset {
+			found = true
+		}
+	}
+	if !found {
+		writeError(w, 404, "snapshot not found")
+		return
+	}
+	if strings.HasPrefix(snapName, "fsrepl-") {
+		jobs, err := s.queryObjects(r, `SELECT id FROM tasks WHERE stack_id=? AND type='repl.trigger' AND state IN ('pending','running')`, stackID)
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		if len(jobs) > 0 {
+			writeError(w, 409, "snapshot is in use by replication")
+			return
+		}
+	}
 	taskID := uuid.New().String()
 	payload := worker.SnapshotDeletePayload{
+		OperationID: operationID(r.Context()), StackID: stackID,
 		Dataset:  st.ZFSDataset,
 		NodeID:   st.PrimaryNodeID,
 		Snapshot: snapName,
@@ -283,7 +390,7 @@ func (s *Server) handleDeleteSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
+	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID(r.Context()), "task_id": taskID})
 }
 
 func (s *Server) handleTriggerReplication(w http.ResponseWriter, r *http.Request) {
@@ -293,7 +400,7 @@ func (s *Server) handleTriggerReplication(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	if st.BackupNodeID == "" {
+	if st.BackupNodeID == "" || st.BackupNodeID == st.PrimaryNodeID {
 		writeError(w, http.StatusBadRequest, "stack has no secondary node configured")
 		return
 	}
@@ -337,72 +444,49 @@ func (s *Server) handleTriggerReplication(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleListReplication(w http.ResponseWriter, r *http.Request) {
-	// Return pending/running replication tasks from the task queue.
-	result, err := s.db.Query(r.Context(), rqlite.Statement{
-		SQL: `SELECT id, stack_id, state, created_at, updated_at, error FROM tasks
-		      WHERE type = 'repl.trigger' ORDER BY created_at DESC LIMIT 100`,
-	})
+	limit, err := boundedLimit(r, 20, 200)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, 400, err.Error())
 		return
 	}
-
-	type replJob struct {
-		ID          string  `json:"id"`
-		StackID     string  `json:"stack_id"`
-		SourceNode  string  `json:"source_node"`
-		DestNode    string  `json:"dest_node"`
-		State       string  `json:"state"`
-		BytesSent   int64   `json:"bytes_sent"`
-		BytesTotal  int64   `json:"bytes_total"`
-		StartedAt   string  `json:"started_at"`
-		CompletedAt *string `json:"completed_at"`
-		Error       *string `json:"error"`
+	query := `SELECT t.id,t.stack_id,coalesce(s.primary_node_id,'') AS source_node_id,coalesce(s.backup_node_id,'') AS dest_node_id,CASE t.state WHEN 'pending' THEN 'idle' WHEN 'done' THEN 'complete' ELSE t.state END AS state,t.created_at,t.created_at AS started_at,CASE WHEN t.state IN ('done','failed') THEN t.updated_at END AS completed_at,nullif(t.error,'') AS error FROM tasks t LEFT JOIN stacks s ON s.id=t.stack_id WHERE t.type='repl.trigger'`
+	args := []interface{}{}
+	if id := r.URL.Query().Get("stack_id"); id != "" {
+		query += " AND t.stack_id=?"
+		args = append(args, id)
 	}
-
-	jobs := make([]replJob, 0, len(result.Values))
-	for _, row := range result.Values {
-		job := replJob{}
-		job.ID, _ = row[0].(string)
-		job.StackID, _ = row[1].(string)
-		job.State, _ = row[2].(string)
-		job.StartedAt, _ = row[3].(string)
-		if errStr, ok := row[5].(string); ok && errStr != "" {
-			job.Error = &errStr
+	if state := r.URL.Query().Get("state"); state != "" {
+		switch state {
+		case "idle":
+			state = "pending"
+		case "complete":
+			state = "done"
+		case "running", "failed":
+		default:
+			writeError(w, 400, "invalid replication state")
+			return
 		}
-		jobs = append(jobs, job)
+		query += " AND t.state=?"
+		args = append(args, state)
 	}
-	writeJSON(w, http.StatusOK, jobs)
+	args = append(args, limit)
+	s.writeObjects(w, r, query+" ORDER BY t.created_at DESC LIMIT ?", args...)
 }
 
 func (s *Server) handleListFaults(w http.ResponseWriter, r *http.Request) {
-	// Return active ZFS fault alerts.
-	result, err := s.db.Query(r.Context(), rqlite.Statement{
-		SQL: `SELECT id, node_id, severity, message, created_at FROM alerts
-		      WHERE kind = 'zfs_fault' AND state = 'active' ORDER BY created_at DESC`,
-	})
+	include, err := optionalBool(r.URL.Query().Get("include_cleared"))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, 400, "invalid include_cleared")
 		return
 	}
-
-	type fault struct {
-		ID        string `json:"id"`
-		NodeID    string `json:"node_id"`
-		Severity  string `json:"severity"`
-		Message   string `json:"message"`
-		CreatedAt string `json:"created_at"`
+	query := `SELECT id,node_id,'floatlab' AS pool,severity,message,created_at AS detected_at,resolved_at AS cleared_at,created_at FROM alerts WHERE kind='zfs_fault'`
+	args := []interface{}{}
+	if !include {
+		query += " AND state='active'"
 	}
-
-	faults := make([]fault, 0, len(result.Values))
-	for _, row := range result.Values {
-		f := fault{}
-		f.ID, _ = row[0].(string)
-		f.NodeID, _ = row[1].(string)
-		f.Severity, _ = row[2].(string)
-		f.Message, _ = row[3].(string)
-		f.CreatedAt, _ = row[4].(string)
-		faults = append(faults, f)
+	if id := r.URL.Query().Get("node_id"); id != "" {
+		query += " AND node_id=?"
+		args = append(args, id)
 	}
-	writeJSON(w, http.StatusOK, faults)
+	s.writeObjects(w, r, query+" ORDER BY created_at DESC", args...)
 }

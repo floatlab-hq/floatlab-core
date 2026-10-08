@@ -254,6 +254,7 @@ paths:
       responses:
         '204':
           description: Reservation released.
+        '409': {description: Managed workload addresses must be released through stack deletion.}
         '404':
           description: Reservation not found.
           content:

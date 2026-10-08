@@ -14,7 +14,7 @@ let
 
   startStack = pkgs.writeShellApplication {
     name = "floatlab-start-core-stack";
-    runtimeInputs = [ pkgs.curl pkgs.docker pkgs.docker-compose pkgs.coreutils pkgs.gnugrep ];
+    runtimeInputs = [ pkgs.curl pkgs.docker pkgs.docker-compose pkgs.coreutils pkgs.gnugrep pkgs.jq ];
     text = ''
       set -euo pipefail
       for _ in $(seq 1 30); do
@@ -32,12 +32,13 @@ let
         sleep 1
       done
       curl -fsS http://127.0.0.1:8080/api/v1/health >/dev/null
-      if ! curl -fsS http://127.0.0.1:8080/api/v1/nodes | grep -q '"id":"node1"'; then
-        curl -fsS -X POST http://127.0.0.1:8080/api/v1/nodes \
+      token="$(curl -fsS http://127.0.0.1:8080/api/v1/auth/token -H 'Content-Type: application/json' -d '{"username":"demo","password":"floatlab"}' | jq -er .access_token)"
+      if ! curl -fsS -H "Authorization: Bearer $token" http://127.0.0.1:8080/api/v1/nodes | grep -q '"id":"node1"'; then
+        curl -fsS -X POST -H "Authorization: Bearer $token" -H 'Idempotency-Key: register-node1' http://127.0.0.1:8080/api/v1/nodes \
           -H 'Content-Type: application/json' \
-          -d '{"id":"node1","name":"floatlab"}' >/dev/null
+          -d '{"id":"node1","name":"floatlab","hostname":"floatlab","role":"primary","zfs_pool":"floatlab"}' >/dev/null
       fi
-      curl -fsS http://127.0.0.1:8080/api/v1/nodes/node1/health | grep -q '"status":"online"'
+      curl -fsS -H "Authorization: Bearer $token" http://127.0.0.1:8080/api/v1/nodes/node1/health | grep -q '"status":"reachable"'
     '';
   };
 in {
@@ -76,6 +77,8 @@ in {
       ExecStart = "${startStack}/bin/floatlab-start-core-stack";
       ExecStop = "${pkgs.docker-compose}/bin/docker-compose -f /floatlab/system/docker-compose.yml down";
       TimeoutStartSec = "10min";
+      Restart = "on-failure";
+      RestartSec = "10s";
     };
   };
 }

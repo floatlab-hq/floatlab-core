@@ -3,6 +3,10 @@ package config
 import "time"
 
 type Node struct {
+	Hostname    string        `json:"hostname"`
+	Status      string        `json:"status"`
+	Role        string        `json:"role"`
+	ZFSPool     string        `json:"zfs_pool"`
 	ID          string        `json:"id"`
 	ClusterUUID string        `json:"cluster_uuid"`
 	Name        string        `json:"name"`
@@ -12,6 +16,7 @@ type Node struct {
 }
 
 type NodeAddress struct {
+	Interface string `json:"interface"`
 	Type      string `json:"type"` // "LAN-6", "WAN-6", "Overlay-6"
 	Address   string `json:"address"`
 	Netmask   string `json:"netmask"`

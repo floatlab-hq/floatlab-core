@@ -4,13 +4,14 @@ import "encoding/json"
 
 // Task type constants match the tasks.type column in rqlite.
 const (
-	TaskSnapshotCreate = "snapshot.create"
-	TaskSnapshotDelete = "snapshot.delete"
-	TaskReplTrigger    = "repl.trigger"
-	TaskStackUpgrade   = "stack.upgrade"
-	TaskStackRestart   = "stack.restart"
-	TaskStackDelete    = "stack.delete"
-	TaskStackRestore   = "stack.restore"
+	TaskSnapshotCreate  = "snapshot.create"
+	TaskSnapshotDelete  = "snapshot.delete"
+	TaskReplTrigger     = "repl.trigger"
+	TaskStackUpgrade    = "stack.upgrade"
+	TaskStackRestart    = "stack.restart"
+	TaskStackDelete     = "stack.delete"
+	TaskDatasetRollback = "dataset.rollback"
+	TaskStackRestore    = "stack.restore"
 )
 
 // SnapshotCreatePayload is stored in tasks.payload for snapshot.create tasks.
@@ -94,4 +95,13 @@ type StackRestorePayload struct {
 func marshalPayload(v interface{}) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+type DatasetRollbackPayload struct {
+	OperationID  string `json:"operation_id"`
+	StackID      string `json:"stack_id"`
+	NodeID       string `json:"node_id"`
+	Dataset      string `json:"dataset"`
+	Name         string `json:"name"`
+	DestroyNewer bool   `json:"destroy_newer"`
 }

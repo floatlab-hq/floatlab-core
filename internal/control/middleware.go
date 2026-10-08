@@ -192,7 +192,7 @@ func (s *Server) idempotency(next http.Handler) http.Handler {
 			}
 		}
 		_ = s.db.Execute(context.Background(), []rqlite.Statement{
-			{SQL: `UPDATE operations SET state=?, checkpoint=?, updated_at=? WHERE id=?`, Params: []interface{}{state, state, time.Now().UTC(), op.ID}},
+			{SQL: `UPDATE operations SET state=?, checkpoint=?, updated_at=? WHERE id=? AND state='pending'`, Params: []interface{}{state, state, time.Now().UTC(), op.ID}},
 			{SQL: `UPDATE idempotency_keys SET status=?, response=? WHERE actor=? AND key=?`, Params: []interface{}{recorder.status, string(response), actor, key}},
 		})
 		for name, values := range recorder.header {
