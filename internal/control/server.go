@@ -102,6 +102,7 @@ func (s *Server) buildRouter() *chi.Mux {
 		registerStorageRoutes(r, s)
 		registerFailoverRoutes(r, s)
 		registerNetworkRoutes(r, s)
+		registerHostNetworkRoutes(r, s)
 		r.Group(func(r chi.Router) { r.Use(s.requireAdminJWT); registerLogRoutes(r, s) })
 		r.Post("/stats/webhook", s.handleStatsWebhook)
 		r.Group(func(r chi.Router) { r.Use(s.requireAdminJWT); registerStatsRoutes(r, s) })

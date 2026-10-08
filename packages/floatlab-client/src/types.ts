@@ -54,3 +54,21 @@ export interface FloatLabApi {
   createSnapshot(id: string, idempotencyKey: string): Promise<unknown>;
   listSnapshots(id: string): Promise<Record<string, unknown>[]>;
 }
+
+export type HostNetworkConfig = components["schemas"]["HostNetworkConfig"];
+export type HostNetworkStatus = components["schemas"]["HostNetworkStatus"];
+export type HostNetworkChange = components["schemas"]["HostNetworkChange"];
+export type NetworkPool = components["schemas"]["NetworkPool"];
+export type NetworkPoolWrite = components["schemas"]["NetworkPoolWrite"];
+
+export interface HostNetworkApi {
+  getHostNetwork(nodeId: string): Promise<HostNetworkStatus>;
+  applyHostNetwork(nodeId: string, revision: string, config: HostNetworkConfig, idempotencyKey: string): Promise<HostNetworkChange>;
+  getHostNetworkChange(nodeId: string, changeId: string): Promise<HostNetworkChange>;
+  confirmHostNetworkChange(nodeId: string, changeId: string): Promise<HostNetworkChange>;
+  rollbackHostNetworkChange(nodeId: string, changeId: string): Promise<HostNetworkChange>;
+  listNetworkPools(): Promise<NetworkPool[]>;
+  createNetworkPool(pool: NetworkPoolWrite, idempotencyKey: string): Promise<NetworkPool>;
+  updateNetworkPool(id: string, pool: NetworkPoolWrite, idempotencyKey: string): Promise<NetworkPool>;
+  deleteNetworkPool(id: string, idempotencyKey: string): Promise<void>;
+}

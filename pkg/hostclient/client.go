@@ -3,6 +3,7 @@ package hostclient
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -47,7 +48,12 @@ func (p *Pool) Execute(ctx context.Context, nodeID, command string, payload any)
 	}
 	result, err := c.Execute(ctx, command, payload)
 	if err != nil {
-		// Drop the connection on error; next call will reconnect.
+		// A remote validation/conflict error does not break the IPC transport.
+		var remote *ipc.RPCError
+		if errors.As(err, &remote) {
+			return nil, fmt.Errorf("hostclient: execute %s on %s: %w", command, nodeID, err)
+		}
+		// Drop failed transports; next call will reconnect.
 		p.mu.Lock()
 		_ = c.Close()
 		delete(p.clients, nodeID)

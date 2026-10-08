@@ -3,6 +3,7 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -130,6 +131,10 @@ func (s *Server) dispatch(ctx context.Context, c *Conn, id string, cmd Command) 
 
 	if err != nil {
 		rErr := &RPCError{Code: "cmd.error", Message: err.Error()}
+		var typed *RPCError
+		if errors.As(err, &typed) {
+			rErr = typed
+		}
 		b, _ := json.Marshal(Response{ID: id, OK: false, Error: rErr})
 		resp.Payload = json.RawMessage(b)
 	} else {

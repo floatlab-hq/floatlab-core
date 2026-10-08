@@ -2,10 +2,10 @@
 {
   systemd.services.floatlab-hostd = {
     description = "FloatLab host daemon";
-    path = with pkgs; [ coreutils docker inetutils iproute2 openssh zfs ];
+    path = with pkgs; [ coreutils docker inetutils iproute2 openssh zfs systemd ethtool ];
     wantedBy = [ "multi-user.target" ];
-    requires = [ "docker.service" "floatlab-datasets.service" ];
-    after = [ "docker.service" "floatlab-datasets.service" ];
+    requires = [ "floatlab-network-config.service" "floatlab-datasets.service" ];
+    after = [ "floatlab-network-config.service" "floatlab-datasets.service" ];
     before = [ "floatlab-core-stack.service" ];
     serviceConfig = {
       ExecStart = "${floatlab-binaries}/bin/floatlab-hostd";

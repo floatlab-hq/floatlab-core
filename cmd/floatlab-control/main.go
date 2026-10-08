@@ -13,6 +13,7 @@ import (
 
 	"github.com/floatlab/floatlab-core/internal/control"
 	"github.com/floatlab/floatlab-core/internal/failover"
+	"github.com/floatlab/floatlab-core/internal/ipam"
 	"github.com/floatlab/floatlab-core/internal/orchestrator"
 	"github.com/floatlab/floatlab-core/internal/worker"
 	"github.com/floatlab/floatlab-core/pkg/config"
@@ -118,6 +119,27 @@ func run(cmd *cobra.Command, args []string) error {
 	hosts.Register(hostNodeID, hostSocket)
 	defer hosts.Close()
 
+	if err := ipam.MigratePools(ctx, db, hosts); err != nil {
+		log.Warn("network pool migration incomplete", zap.Error(err))
+	}
+	if err := ipam.RestoreNodeServices(ctx, db, hosts, hostNodeID); err != nil {
+		log.Warn("service address restoration incomplete", zap.Error(err))
+	}
+	// Retry ownership reconciliation after DHCP startup or hostd reconnection.
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := ipam.RestoreNodeServices(ctx, db, hosts, hostNodeID); err != nil {
+					log.Debug("service address reconciliation deferred", zap.Error(err))
+				}
+			}
+		}
+	}()
 	// Notification broker — fan-out SSE publisher.
 	broker := notify.NewBroker()
 

@@ -42,10 +42,6 @@ let
         /floatlab/system/victoria-metrics \
         /floatlab/system/victoria-logs
 
-      # Persist networkd configuration without attempting to mutate NixOS /etc.
-      # /run is the supported runtime configuration tier for systemd-networkd.
-      mountpoint -q /run/systemd/network || \
-        mount --bind /floatlab/system/etc/systemd/network /run/systemd/network
     '';
   };
 in {

@@ -17,7 +17,8 @@
           filter = path: type:
             pkgs.lib.cleanSourceFilter path type
             && !pkgs.lib.hasPrefix (toString ./.) (toString path)
-            && !pkgs.lib.hasPrefix (toString ../integration) (toString path);
+            && !pkgs.lib.hasPrefix (toString ../integration) (toString path)
+            && builtins.baseNameOf path != "node_modules";
         };
         subPackages = [ "cmd/floatlab-hostd" "cmd/floatlab-control" ];
         vendorHash = "sha256-H4NtzJzlurs58QjcEqEnJMx+avNiYcyGT3m4u58QZFs=";
@@ -41,6 +42,8 @@
         inherit floatlab-binaries floatlab-control-image;
         default = self.packages.${system}.iso;
       };
+
+      checks.${system}.host-network = import ./tests/network.nix { inherit pkgs floatlab-binaries; };
 
       devShells.${system}.default = pkgs.mkShell {
         packages = with pkgs; [ just qemu_kvm libvirt virt-manager coreutils jq ];

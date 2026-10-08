@@ -25,6 +25,10 @@ func (s *Server) handleCreateNetworkPool(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	pool.ID = ""
+	if err := ipam.ValidateHosts(r.Context(), s.db, s.hosts, pool); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
 	if err := ipam.SavePool(r.Context(), s.db, &pool); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
@@ -56,6 +60,23 @@ func (s *Server) handleUpdateNetworkPool(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	pool.ID, pool.CreatedAt = id, existing.CreatedAt
+	if err := ipam.ValidateHosts(r.Context(), s.db, s.hosts, pool); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	for _, node := range existing.NodeIDs {
+		if !contains(pool.NodeIDs, node) {
+			status, err := ipam.HostStatus(r.Context(), s.hosts, node)
+			if err != nil {
+				networkError(w, err)
+				return
+			}
+			if status.Change != nil || status.Config.DefaultPoolID == id {
+				writeError(w, http.StatusConflict, "pool is still a host default")
+				return
+			}
+		}
+	}
 	if err := ipam.SavePool(r.Context(), s.db, &pool); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
@@ -64,6 +85,27 @@ func (s *Server) handleUpdateNetworkPool(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleDeleteNetworkPool(w http.ResponseWriter, r *http.Request) {
+	pools, err := ipam.ListPools(r.Context(), s.db)
+	if err != nil {
+		networkError(w, err)
+		return
+	}
+	id := chi.URLParam(r, "id")
+	for _, pool := range pools {
+		if pool.ID == id {
+			for _, node := range pool.NodeIDs {
+				status, err := ipam.HostStatus(r.Context(), s.hosts, node)
+				if err != nil {
+					networkError(w, err)
+					return
+				}
+				if status.Change != nil || status.Config.DefaultPoolID == id {
+					writeError(w, http.StatusConflict, "pool is referenced by host settings or a pending change")
+					return
+				}
+			}
+		}
+	}
 	if err := ipam.DeletePool(r.Context(), s.db, chi.URLParam(r, "id")); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return

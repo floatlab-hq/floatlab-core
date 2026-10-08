@@ -1,0 +1,331 @@
+openapi: 3.0.3
+info:
+  title: FloatLab Host Network API
+  version: 1.0.0
+components:
+  schemas:
+    HostNetworkIPv4:
+      type: object
+      required:
+      - mode
+      additionalProperties: false
+      properties:
+        mode:
+          type: string
+          enum:
+          - dhcp
+          - static
+        address:
+          type: string
+          format: ipv4
+        netmask:
+          type: string
+          format: ipv4
+        gateway:
+          type: string
+          format: ipv4
+    HostNetworkBond:
+      type: object
+      required:
+      - name
+      - mode
+      - members
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          pattern: ^[a-zA-Z][a-zA-Z0-9_-]{0,14}$
+        mode:
+          type: string
+          enum:
+          - 802.3ad
+        members:
+          type: array
+          minItems: 2
+          uniqueItems: true
+          items:
+            type: string
+            description: Permanent Ethernet MAC address
+    HostNetworkConfig:
+      type: object
+      required:
+      - version
+      - excluded_macs
+      - bonds
+      - ipv4
+      - dns_servers
+      additionalProperties: false
+      properties:
+        version:
+          type: integer
+          enum:
+          - 1
+        excluded_macs:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+        bonds:
+          type: array
+          items:
+            $ref: '#/components/schemas/HostNetworkBond'
+        ipv4:
+          $ref: '#/components/schemas/HostNetworkIPv4'
+        dns_servers:
+          type: array
+          description: 'Fresh-install default: 1.1.1.1 and 8.8.8.8. Empty allows DHCP
+            DNS.'
+          items:
+            type: string
+        default_pool_id:
+          type: string
+    HostNetworkChange:
+      type: object
+      required:
+      - id
+      - state
+      - deadline
+      - candidate
+      - previous
+      properties:
+        id:
+          type: string
+          format: uuid
+        state:
+          type: string
+          enum:
+          - applying
+          - awaiting_confirmation
+          - confirmed
+          - rolled_back
+          - failed
+        deadline:
+          type: string
+          format: date-time
+          description: Set when rollback is armed, before the first mutation.
+        error:
+          type: string
+        candidate:
+          $ref: '#/components/schemas/HostNetworkConfig'
+        previous:
+          $ref: '#/components/schemas/HostNetworkConfig'
+    HostNetworkAdapter:
+      type: object
+      required:
+      - name
+      - mac
+      - permanent_mac
+      - eligible
+      - up
+      properties:
+        name:
+          type: string
+        mac:
+          type: string
+        permanent_mac:
+          type: string
+        eligible:
+          type: boolean
+        up:
+          type: boolean
+        master:
+          type: string
+    HostNetworkLive:
+      type: object
+      required:
+      - adapters
+      - addresses
+      - primary_addresses
+      - gateways
+      - dns_servers
+      - bridge_mac
+      properties:
+        adapters:
+          type: array
+          items:
+            $ref: '#/components/schemas/HostNetworkAdapter'
+        addresses:
+          type: array
+          items:
+            type: string
+        primary_addresses:
+          type: array
+          items:
+            type: string
+        gateways:
+          type: array
+          items:
+            type: string
+        dns_servers:
+          type: array
+          items:
+            type: string
+        bridge_mac:
+          type: string
+    HostNetworkStatus:
+      type: object
+      required:
+      - config
+      - revision
+      - live
+      properties:
+        config:
+          $ref: '#/components/schemas/HostNetworkConfig'
+        revision:
+          type: string
+        live:
+          $ref: '#/components/schemas/HostNetworkLive'
+        change:
+          $ref: '#/components/schemas/HostNetworkChange'
+    HostNetworkUpdate:
+      type: object
+      required:
+      - revision
+      - config
+      additionalProperties: false
+      properties:
+        revision:
+          type: string
+        config:
+          $ref: '#/components/schemas/HostNetworkConfig'
+paths:
+  /nodes/{id}/settings/network:
+    parameters:
+    - &id006
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      operationId: getHostNetwork
+      summary: Read confirmed and effective host network settings
+      responses:
+        '200':
+          description: Host network status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HostNetworkStatus'
+        '400': &id001
+          description: Invalid request.
+        '401': &id002
+          description: Administrator bearer token required.
+        '404': &id003
+          description: Change not found.
+        '409': &id004
+          description: Stale revision, competing change, or expired confirmation.
+        '503': &id005
+          description: Host daemon unavailable or execution failed.
+      security:
+      - bearerAuth: []
+      tags:
+      - network
+    put:
+      operationId: applyHostNetwork
+      summary: Apply network settings with a 60-second confirmation deadline
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HostNetworkUpdate'
+      responses:
+        '202':
+          description: Accepted; poll the change to obtain the armed deadline.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HostNetworkChange'
+        '400': *id001
+        '401': *id002
+        '404': *id003
+        '409': *id004
+        '503': *id005
+      security:
+      - bearerAuth: []
+      tags:
+      - network
+  /nodes/{id}/settings/network/changes/{change}:
+    parameters:
+    - *id006
+    - &id007
+      name: change
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    get:
+      operationId: getHostNetworkChange
+      summary: Read a host network transaction
+      responses:
+        '200':
+          description: Transaction status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HostNetworkChange'
+        '400': *id001
+        '401': *id002
+        '404': *id003
+        '409': *id004
+        '503': *id005
+      security:
+      - bearerAuth: []
+      tags:
+      - network
+  /nodes/{id}/settings/network/changes/{change}/confirm:
+    parameters:
+    - *id006
+    - *id007
+    post:
+      operationId: confirmHostNetworkChange
+      summary: Confirm a host network transaction
+      responses:
+        '200':
+          description: Transaction status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HostNetworkChange'
+        '400': *id001
+        '401': *id002
+        '404': *id003
+        '409': *id004
+        '503': *id005
+      security:
+      - bearerAuth: []
+      tags:
+      - network
+  /nodes/{id}/settings/network/changes/{change}/rollback:
+    parameters:
+    - *id006
+    - *id007
+    post:
+      operationId: rollbackHostNetworkChange
+      summary: Rollback a host network transaction
+      responses:
+        '200':
+          description: Transaction status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HostNetworkChange'
+        '400': *id001
+        '401': *id002
+        '404': *id003
+        '409': *id004
+        '503': *id005
+      security:
+      - bearerAuth: []
+      tags:
+      - network

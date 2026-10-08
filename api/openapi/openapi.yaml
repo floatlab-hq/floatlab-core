@@ -143,6 +143,14 @@ paths:
     $ref: './failover.yaml#/paths/~1failover~1{stack_id}~1log'
 
   # Network
+  /nodes/{id}/settings/network:
+    $ref: './host-network.yaml#/paths/~1nodes~1{id}~1settings~1network'
+  /nodes/{id}/settings/network/changes/{change}:
+    $ref: './host-network.yaml#/paths/~1nodes~1{id}~1settings~1network~1changes~1{change}'
+  /nodes/{id}/settings/network/changes/{change}/confirm:
+    $ref: './host-network.yaml#/paths/~1nodes~1{id}~1settings~1network~1changes~1{change}~1confirm'
+  /nodes/{id}/settings/network/changes/{change}/rollback:
+    $ref: './host-network.yaml#/paths/~1nodes~1{id}~1settings~1network~1changes~1{change}~1rollback'
   /network/pools:
     $ref: './network.yaml#/paths/~1network~1pools'
   /settings/network-pools:

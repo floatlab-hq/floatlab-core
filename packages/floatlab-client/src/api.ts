@@ -1,4 +1,4 @@
-import type { Container, ExecResult, FloatLabApi, LogLine, Node, Stack, StackMetricSeries } from "./types";
+import type { Container, ExecResult, FloatLabApi, HostNetworkApi, HostNetworkStatus, HostNetworkChange, NetworkPool, LogLine, Node, Stack, StackMetricSeries } from "./types";
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) { super(message); }
@@ -15,7 +15,7 @@ export function normalizeApiUrl(url: string): string {
   return parsed.toString().replace(/\/$/, "");
 }
 
-export function createApiClient(options: ApiClientOptions): FloatLabApi {
+export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNetworkApi {
   const baseUrl = normalizeApiUrl(options.baseUrl);
   const send = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
     const headers = new Headers(init.headers);
@@ -41,7 +41,18 @@ export function createApiClient(options: ApiClientOptions): FloatLabApi {
     for (const [key, value] of Object.entries(values)) if (value !== undefined && value !== "") params.set(key, String(value));
     const text = params.toString(); return text ? `?${text}` : "";
   };
+  const hostNetworkPath = (node: string) => `/nodes/${encodeURIComponent(node)}/settings/network`;
+  const changePath = (node: string, change: string) => `${hostNetworkPath(node)}/changes/${encodeURIComponent(change)}`;
   return {
+    getHostNetwork: (node) => send<HostNetworkStatus>(hostNetworkPath(node)),
+    applyHostNetwork: (node, revision, config, key) => mutation<HostNetworkChange>(hostNetworkPath(node), "PUT", key, { revision, config }),
+    getHostNetworkChange: (node, change) => send<HostNetworkChange>(changePath(node, change)),
+    confirmHostNetworkChange: (node, change) => send<HostNetworkChange>(`${changePath(node, change)}/confirm`, { method: "POST" }),
+    rollbackHostNetworkChange: (node, change) => send<HostNetworkChange>(`${changePath(node, change)}/rollback`, { method: "POST" }),
+    listNetworkPools: () => send<NetworkPool[]>("/settings/network-pools"),
+    createNetworkPool: (pool, key) => mutation<NetworkPool>("/settings/network-pools", "POST", key, pool),
+    updateNetworkPool: (id, pool, key) => mutation<NetworkPool>(`/settings/network-pools/${encodeURIComponent(id)}`, "PUT", key, pool),
+    deleteNetworkPool: (id, key) => mutation<void>(`/settings/network-pools/${encodeURIComponent(id)}`, "DELETE", key),
     listStacks: () => send<Stack[]>("/stacks"), getStack: (id) => send<Stack>(`/stacks/${encodeURIComponent(id)}`),
     getStackConfig: async (id) => {
       let response: Response;

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/floatlab/floatlab-core/internal/hostnetwork"
 	"github.com/floatlab/floatlab-core/pkg/docker"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
 	"github.com/floatlab/floatlab-core/pkg/store"
@@ -23,6 +24,7 @@ import (
 // Dispatcher registers all IPC command handlers on the IPC server.
 // Each handler is a thin wrapper that shells out or calls a system API.
 type Dispatcher struct {
+	network   *hostnetwork.Manager
 	srv       *ipc.Server
 	log       *zap.Logger
 	docker    *docker.Client // nil if Docker daemon is unavailable at startup
@@ -32,10 +34,11 @@ type Dispatcher struct {
 }
 
 func newDispatcher(srv *ipc.Server, dc *docker.Client, log *zap.Logger) *Dispatcher {
-	return &Dispatcher{srv: srv, log: log, docker: dc, zfs: store.New(), terminals: make(map[string]*docker.Terminal)}
+	return &Dispatcher{network: hostnetwork.New(hostnetwork.ConfigPath, hostnetwork.Linux{}), srv: srv, log: log, docker: dc, zfs: store.New(), terminals: make(map[string]*docker.Terminal)}
 }
 
 func (d *Dispatcher) register() {
+	d.registerNetwork()
 	d.srv.Handle("docker.exec.run", func(ctx context.Context, raw json.RawMessage) (any, error) {
 		if d.docker == nil {
 			return nil, fmt.Errorf("docker client not available")
