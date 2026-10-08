@@ -116,45 +116,119 @@ components:
 
     NetworkPool:
       type: object
-      required: [id, name, cidr, start_ip, end_ip, is_default]
+      required:
+      - id
+      - name
+      - cidr
+      - start_ip
+      - end_ip
+      - node_ids
+      - membership_resolved
       properties:
-        id: {type: string, format: uuid}
-        name: {type: string}
-        cidr: {type: string, example: 192.0.2.0/24}
-        start_ip: {type: string, example: 192.0.2.10}
-        end_ip: {type: string, example: 192.0.2.200}
-        is_default: {type: boolean}
+        id:
+          type: string
+        name: &id001
+          type: string
+        cidr: &id002
+          type: string
+        start_ip: &id003
+          type: string
+        end_ip: &id004
+          type: string
+        node_ids: &id005
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+        membership_resolved:
+          type: boolean
+          readOnly: true
+        is_default:
+          type: boolean
+          deprecated: true
+          readOnly: true
+          description: Legacy migration flag. Host defaults are stored in host network
+            settings.
+    NetworkPoolWrite:
+      type: object
+      required:
+      - name
+      - cidr
+      - start_ip
+      - end_ip
+      - node_ids
+      properties:
+        name: *id001
+        cidr: *id002
+        start_ip: *id003
+        end_ip: *id004
+        node_ids: *id005
 
 paths:
   /settings/network-pools:
     get:
-      summary: List managed IPv4 network pools
+      summary: List managed IPv4 pools and explicit host membership
       operationId: listNetworkPools
       responses:
-        '200': {description: Network pools.}
+        '200':
+          description: Network pools.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NetworkPool'
     post:
-      summary: Create a managed IPv4 network pool
+      summary: Create a managed IPv4 pool
       operationId: createNetworkPool
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NetworkPoolWrite'
       responses:
-        '201': {description: Network pool created.}
-        '409': {description: Invalid or overlapping pool.}
-
+        '201':
+          description: Pool created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NetworkPool'
+        '409':
+          description: Invalid membership, subnet or overlapping addresses.
   /settings/network-pools/{id}:
     parameters:
-      - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
     put:
-      summary: Update a managed IPv4 network pool
+      summary: Update an IPv4 pool and membership
       operationId: updateNetworkPool
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NetworkPoolWrite'
       responses:
-        '200': {description: Network pool updated.}
-        '409': {description: Update conflicts with a pool or active allocation.}
+        '200':
+          description: Pool updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NetworkPool'
+        '409':
+          description: Pool, membership or allocation conflict.
     delete:
-      summary: Delete an unused network pool
+      summary: Delete an unused pool
       operationId: deleteNetworkPool
       responses:
-        '204': {description: Network pool deleted.}
-        '409': {description: Pool has active allocations.}
-
+        '204':
+          description: Pool deleted.
+        '409':
+          description: Pool has allocations or is referenced by host settings.
   /network/pools:
     get:
       summary: List all IPv6 prefix pools

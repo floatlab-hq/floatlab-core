@@ -41,6 +41,10 @@ func (s *Server) Run(ctx context.Context) error {
 		return fmt.Errorf("hostd: mkdir /run/floatlab: %w", err)
 	}
 
+	if err := s.dispatcher.network.Initialize(ctx); err != nil {
+		return fmt.Errorf("hostd: network startup: %w", err)
+	}
+	go s.dispatcher.network.Watch(ctx, s.log)
 	// Register all command handlers on the IPC server.
 	s.dispatcher.register()
 	if s.dispatcher.docker != nil {

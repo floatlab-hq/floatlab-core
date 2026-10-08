@@ -1,7 +1,8 @@
 [Unit]
 Description=FloatLab host daemon
-Requires=docker.service
-After=docker.service
+Requires=systemd-networkd.service systemd-resolved.service
+After=systemd-networkd.service systemd-resolved.service
+Before=network-online.target
 
 [Service]
 ExecStart=/usr/local/bin/floatlab-hostd

@@ -102,6 +102,8 @@ func Migrate(ctx context.Context, c *Client) error {
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL
 		)`},
+		{SQL: `CREATE TABLE IF NOT EXISTS network_pool_nodes (pool_id TEXT NOT NULL, node_id TEXT NOT NULL, PRIMARY KEY(pool_id,node_id))`},
+		{SQL: `CREATE TABLE IF NOT EXISTS network_pool_scope (pool_id TEXT PRIMARY KEY, resolved INTEGER NOT NULL DEFAULT 0)`},
 		{SQL: `CREATE UNIQUE INDEX IF NOT EXISTS idx_network_pools_default ON network_pools(is_default) WHERE is_default=1`},
 		{SQL: `CREATE TABLE IF NOT EXISTS network_allocations (
 			id         TEXT PRIMARY KEY,

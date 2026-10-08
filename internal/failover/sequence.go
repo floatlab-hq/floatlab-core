@@ -3,11 +3,14 @@ package failover
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
 
+	"github.com/floatlab/floatlab-core/internal/ipam"
+	"github.com/floatlab/floatlab-core/pkg/compose"
 	"github.com/floatlab/floatlab-core/pkg/config"
 	"github.com/floatlab/floatlab-core/pkg/hostclient"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
@@ -53,6 +56,9 @@ func (s *Sequence) Execute(ctx context.Context, stackID string) error {
 		return fmt.Errorf("failover: get stack: %w", err)
 	}
 
+	if err := ipam.CheckStackDestination(ctx, s.db, s.hosts, stackID, stack.BackupNodeID); err != nil {
+		return err
+	}
 	sequenceID := fmt.Sprint(time.Now().UnixNano())
 	step := func(number int, name string, action func() error) error {
 		started := time.Now().UTC().Format(time.RFC3339Nano)
@@ -124,6 +130,10 @@ func (s *Sequence) Restore(ctx context.Context, stackID string) error {
 		return fmt.Errorf("failover: restore: get stack: %w", err)
 	}
 
+	if err := ipam.CheckStackDestination(ctx, s.db, s.hosts, stackID, stack.PrimaryNodeID); err != nil {
+		return err
+	}
+
 	if err := s.raft.Apply(run.StackStateChanged{
 		StackID:   stackID,
 		From:      run.StateRunningBackup,
@@ -148,6 +158,19 @@ func (s *Sequence) Restore(ctx context.Context, stackID string) error {
 	cancel()
 	log.Info("failover: restore: step 3/4: final sync attempted")
 
+	if service, ok, err := ipam.StackService(ctx, s.db, stackID); err != nil {
+		return err
+	} else if ok {
+		if err = s.setActiveNode(ctx, stackID, stack.PrimaryNodeID); err != nil {
+			return err
+		}
+		if _, err = s.hosts.Execute(ctx, stack.BackupNodeID, "net.service.del", service); err != nil {
+			return err
+		}
+		if _, err = s.hosts.Execute(ctx, stack.PrimaryNodeID, "net.service.add", service); err != nil {
+			return err
+		}
+	}
 	// Start on primary.
 	if err := s.startOnPrimary(ctx, stack); err != nil {
 		_ = s.raft.Apply(run.StackStateChanged{
@@ -212,6 +235,19 @@ func (s *Sequence) takeoverIPs(ctx context.Context, stack *config.Stack) error {
 	if stack.BackupNodeID == "" {
 		return nil
 	}
+	service, ok, err := ipam.StackService(ctx, s.db, stack.ID)
+	if err != nil {
+		return err
+	}
+	if ok {
+		if err = s.setActiveNode(ctx, stack.ID, stack.BackupNodeID); err != nil {
+			return err
+		}
+		if _, err = s.hosts.Execute(ctx, stack.BackupNodeID, "net.service.add", service); err != nil {
+			return err
+		}
+		return nil
+	}
 	res, err := s.db.Query(ctx, rqlite.Statement{
 		SQL:    `SELECT address FROM ip_reservations WHERE stack_id = ?`,
 		Params: []interface{}{stack.ID},
@@ -235,19 +271,27 @@ func (s *Sequence) takeoverIPs(ctx context.Context, stack *config.Stack) error {
 }
 
 func (s *Sequence) startOnSecondary(ctx context.Context, stack *config.Stack) error {
-	_, err := s.hosts.Execute(ctx, stack.BackupNodeID, "compose.up", ipc.ComposeUpPayload{
+	runtime, err := s.runtimeCompose(ctx, stack)
+	if err != nil {
+		return err
+	}
+	_, err = s.hosts.Execute(ctx, stack.BackupNodeID, "compose.up", ipc.ComposeUpPayload{
 		StackID:     stack.ID,
 		DatasetPath: stack.ZFSDataset,
-		ComposeFile: stack.ComposeYAML,
+		ComposeFile: runtime,
 	})
 	return err
 }
 
 func (s *Sequence) startOnPrimary(ctx context.Context, stack *config.Stack) error {
-	_, err := s.hosts.Execute(ctx, stack.PrimaryNodeID, "compose.up", ipc.ComposeUpPayload{
+	runtime, err := s.runtimeCompose(ctx, stack)
+	if err != nil {
+		return err
+	}
+	_, err = s.hosts.Execute(ctx, stack.PrimaryNodeID, "compose.up", ipc.ComposeUpPayload{
 		StackID:     stack.ID,
 		DatasetPath: stack.ZFSDataset,
-		ComposeFile: stack.ComposeYAML,
+		ComposeFile: runtime,
 	})
 	return err
 }
@@ -261,4 +305,19 @@ func (s *Sequence) Abort(stackID string) bool {
 		cancel()
 	}
 	return ok
+}
+
+func (s *Sequence) setActiveNode(ctx context.Context, stackID, node string) error {
+	return s.db.Execute(ctx, []rqlite.Statement{{SQL: `UPDATE stack_runtime SET active_node_id=?,updated_at=? WHERE stack_id=?`, Params: []interface{}{node, time.Now().UTC(), stackID}}})
+}
+func (s *Sequence) runtimeCompose(ctx context.Context, stack *config.Stack) (string, error) {
+	service, ok, err := ipam.StackService(ctx, s.db, stack.ID)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return stack.ComposeYAML, nil
+	}
+	ip, _, _ := strings.Cut(service.Address, "/")
+	return compose.RuntimeYAML(stack.ComposeYAML, stack.Name, ip)
 }

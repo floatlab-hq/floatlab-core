@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/floatlab/floatlab-core/internal/hostnetwork"
 	"github.com/floatlab/floatlab-core/internal/ipam"
 	"github.com/floatlab/floatlab-core/pkg/compose"
 	"github.com/floatlab/floatlab-core/pkg/config"
@@ -333,32 +334,40 @@ func (o *Orchestrator) provisionNetwork(ctx context.Context, stack *config.Stack
 	if err != nil {
 		return err
 	}
-	var selected *ipam.Pool
-	for i := range pools {
-		if pools[i].Name == spec.NetworkPool || (spec.NetworkPool == "" && pools[i].Default) {
-			selected = &pools[i]
-			break
-		}
+	status, err := ipam.HostStatus(ctx, o.pool, stack.PrimaryNodeID)
+	if err != nil {
+		return err
 	}
-	if selected == nil {
-		return fmt.Errorf("orchestrator: no matching network pool")
+	selected, err := ipam.SelectPool(pools, spec.NetworkPool, status.Config.DefaultPoolID, stack.PrimaryNodeID)
+	if err != nil {
+		return err
+	}
+	if err := ipam.Eligible(ctx, o.pool, *selected, stack.PrimaryNodeID); err != nil {
+		return err
 	}
 	address, err := ipam.AllocateIPv4(ctx, o.db, *selected, stack.ID)
 	if err != nil {
 		return err
 	}
 	prefix, _ := netip.ParsePrefix(selected.CIDR)
-	host, peer := lifecycleVeth("flh", stack.ID), lifecycleVeth("flp", stack.ID)
-	if _, err := o.pool.Execute(ctx, stack.PrimaryNodeID, "net.veth.ensure", ipc.VethPayload{StackID: stack.ID, HostName: host, PeerName: peer, Address: address + "/" + strconv.Itoa(prefix.Bits()), Bridge: "floatlab-lan"}); err != nil {
+	if err := o.db.Execute(ctx, []rqlite.Statement{{SQL: `INSERT INTO stack_runtime(stack_id,stack_ip,network_pool,active_node_id,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(stack_id) DO UPDATE SET stack_ip=excluded.stack_ip,network_pool=excluded.network_pool,active_node_id=excluded.active_node_id,updated_at=excluded.updated_at`, Params: []interface{}{stack.ID, address, selected.ID, stack.PrimaryNodeID, time.Now().UTC()}}}); err != nil {
 		_ = ipam.ReleaseIPv4(ctx, o.db, stack.ID)
+		return err
+	}
+	service := hostnetwork.Service{StackID: stack.ID, PoolID: selected.ID, Address: address + "/" + strconv.Itoa(prefix.Bits())}
+	if _, err := o.pool.Execute(ctx, stack.PrimaryNodeID, "net.service.add", service); err != nil {
+		if _, cleanupErr := o.pool.Execute(ctx, stack.PrimaryNodeID, "net.service.del", service); cleanupErr == nil {
+			_ = ipam.ReleaseIPv4(ctx, o.db, stack.ID)
+		}
 		return err
 	}
 	if err := ipam.ActivateIPv4(ctx, o.db, stack.ID); err != nil {
-		_, _ = o.pool.Execute(ctx, stack.PrimaryNodeID, "net.veth.delete", ipc.VethPayload{StackID: stack.ID, HostName: host})
-		_ = ipam.ReleaseIPv4(ctx, o.db, stack.ID)
+		if _, cleanupErr := o.pool.Execute(ctx, stack.PrimaryNodeID, "net.service.del", service); cleanupErr == nil {
+			_ = ipam.ReleaseIPv4(ctx, o.db, stack.ID)
+		}
 		return err
 	}
-	return o.db.Execute(ctx, []rqlite.Statement{{SQL: `INSERT INTO stack_runtime(stack_id,stack_ip,network_pool,active_node_id,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(stack_id) DO UPDATE SET stack_ip=excluded.stack_ip,network_pool=excluded.network_pool,active_node_id=excluded.active_node_id,updated_at=excluded.updated_at`, Params: []interface{}{stack.ID, address, selected.ID, stack.PrimaryNodeID, time.Now().UTC()}}})
+	return nil
 }
 
 func (o *Orchestrator) syncAlerts(ctx context.Context, stackID string, alerts []compose.LifecycleAlert) error {

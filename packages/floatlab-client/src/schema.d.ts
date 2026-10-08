@@ -712,6 +712,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/nodes/{id}/settings/network": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** Read confirmed and effective host network settings */
+        get: operations["getHostNetwork"];
+        /** Apply network settings with a 60-second confirmation deadline */
+        put: operations["applyHostNetwork"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{id}/settings/network/changes/{change}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                change: string;
+            };
+            cookie?: never;
+        };
+        /** Read a host network transaction */
+        get: operations["getHostNetworkChange"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{id}/settings/network/changes/{change}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                change: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm a host network transaction */
+        post: operations["confirmHostNetworkChange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{id}/settings/network/changes/{change}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                change: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rollback a host network transaction */
+        post: operations["rollbackHostNetworkChange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/network/pools": {
         parameters: {
             query?: never;
@@ -737,10 +817,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List managed IPv4 network pools */
+        /** List managed IPv4 pools and explicit host membership */
         get: operations["listNetworkPools"];
         put?: never;
-        /** Create a managed IPv4 network pool */
+        /** Create a managed IPv4 pool */
         post: operations["createNetworkPool"];
         delete?: never;
         options?: never;
@@ -758,10 +838,10 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Update a managed IPv4 network pool */
+        /** Update an IPv4 pool and membership */
         put: operations["updateNetworkPool"];
         post?: never;
-        /** Delete an unused network pool */
+        /** Delete an unused pool */
         delete: operations["deleteNetworkPool"];
         options?: never;
         head?: never;
@@ -1753,6 +1833,72 @@ export interface components {
             /** @description Human-readable outcome or error detail. */
             detail?: string | null;
         };
+        HostNetworkBond: {
+            name: string;
+            /** @enum {string} */
+            mode: "802.3ad";
+            members: string[];
+        };
+        HostNetworkIPv4: {
+            /** @enum {string} */
+            mode: "dhcp" | "static";
+            /** Format: ipv4 */
+            address?: string;
+            /** Format: ipv4 */
+            netmask?: string;
+            /** Format: ipv4 */
+            gateway?: string;
+        };
+        HostNetworkConfig: {
+            /** @enum {integer} */
+            version: 1;
+            excluded_macs: string[];
+            bonds: components["schemas"]["HostNetworkBond"][];
+            ipv4: components["schemas"]["HostNetworkIPv4"];
+            /** @description Fresh-install default: 1.1.1.1 and 8.8.8.8. Empty allows DHCP DNS. */
+            dns_servers: string[];
+            default_pool_id?: string;
+        };
+        HostNetworkAdapter: {
+            name: string;
+            mac: string;
+            permanent_mac: string;
+            eligible: boolean;
+            up: boolean;
+            master?: string;
+        };
+        HostNetworkLive: {
+            adapters: components["schemas"]["HostNetworkAdapter"][];
+            addresses: string[];
+            primary_addresses: string[];
+            gateways: string[];
+            dns_servers: string[];
+            bridge_mac: string;
+        };
+        HostNetworkChange: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            state: "applying" | "awaiting_confirmation" | "confirmed" | "rolled_back" | "failed";
+            /**
+             * Format: date-time
+             * @description Set when rollback is armed, before the first mutation.
+             */
+            deadline: string;
+            error?: string;
+            candidate: components["schemas"]["HostNetworkConfig"];
+            previous: components["schemas"]["HostNetworkConfig"];
+        };
+        HostNetworkStatus: {
+            config: components["schemas"]["HostNetworkConfig"];
+            revision: string;
+            live: components["schemas"]["HostNetworkLive"];
+            change?: components["schemas"]["HostNetworkChange"];
+        };
+        HostNetworkUpdate: {
+            revision: string;
+            config: components["schemas"]["HostNetworkConfig"];
+        };
         PrefixPool: {
             /** Format: uuid */
             id: string;
@@ -1784,6 +1930,27 @@ export interface components {
             prefix: string;
             /** Format: uuid */
             stack_id?: string | null;
+        };
+        NetworkPool: {
+            id: string;
+            name: string;
+            cidr: string;
+            start_ip: string;
+            end_ip: string;
+            node_ids: string[];
+            readonly membership_resolved: boolean;
+            /**
+             * @deprecated
+             * @description Legacy migration flag. Host defaults are stored in host network settings.
+             */
+            readonly is_default?: boolean;
+        };
+        NetworkPoolWrite: {
+            name: string;
+            cidr: string;
+            start_ip: string;
+            end_ip: string;
+            node_ids: string[];
         };
         IpReservation: {
             /** Format: uuid */
@@ -3553,6 +3720,300 @@ export interface operations {
             };
         };
     };
+    getHostNetwork: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Host network status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HostNetworkStatus"];
+                };
+            };
+            /** @description Invalid request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Administrator bearer token required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Change not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stale revision, competing change, or expired confirmation. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Host daemon unavailable or execution failed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    applyHostNetwork: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HostNetworkUpdate"];
+            };
+        };
+        responses: {
+            /** @description Accepted; poll the change to obtain the armed deadline. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HostNetworkChange"];
+                };
+            };
+            /** @description Invalid request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Administrator bearer token required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Change not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stale revision, competing change, or expired confirmation. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Host daemon unavailable or execution failed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getHostNetworkChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                change: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Transaction status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HostNetworkChange"];
+                };
+            };
+            /** @description Invalid request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Administrator bearer token required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Change not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stale revision, competing change, or expired confirmation. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Host daemon unavailable or execution failed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    confirmHostNetworkChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                change: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Transaction status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HostNetworkChange"];
+                };
+            };
+            /** @description Invalid request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Administrator bearer token required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Change not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stale revision, competing change, or expired confirmation. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Host daemon unavailable or execution failed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    rollbackHostNetworkChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                change: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Transaction status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HostNetworkChange"];
+                };
+            };
+            /** @description Invalid request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Administrator bearer token required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Change not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stale revision, competing change, or expired confirmation. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Host daemon unavailable or execution failed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     listPrefixPools: {
         parameters: {
             query?: never;
@@ -3620,7 +4081,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["NetworkPool"][];
+                };
             };
         };
     };
@@ -3631,16 +4094,22 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NetworkPoolWrite"];
+            };
+        };
         responses: {
-            /** @description Network pool created. */
+            /** @description Pool created. */
             201: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["NetworkPool"];
+                };
             };
-            /** @description Invalid or overlapping pool. */
+            /** @description Invalid membership, subnet or overlapping addresses. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3658,16 +4127,22 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NetworkPoolWrite"];
+            };
+        };
         responses: {
-            /** @description Network pool updated. */
+            /** @description Pool updated. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["NetworkPool"];
+                };
             };
-            /** @description Update conflicts with a pool or active allocation. */
+            /** @description Pool, membership or allocation conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3687,14 +4162,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Network pool deleted. */
+            /** @description Pool deleted. */
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Pool has active allocations. */
+            /** @description Pool has allocations or is referenced by host settings. */
             409: {
                 headers: {
                     [name: string]: unknown;

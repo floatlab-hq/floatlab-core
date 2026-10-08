@@ -2,6 +2,7 @@ package ipam
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/netip"
 	"time"
@@ -12,14 +13,16 @@ import (
 )
 
 type Pool struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	CIDR      string    `json:"cidr"`
-	StartIP   string    `json:"start_ip"`
-	EndIP     string    `json:"end_ip"`
-	Default   bool      `json:"is_default"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	CIDR               string    `json:"cidr"`
+	StartIP            string    `json:"start_ip"`
+	EndIP              string    `json:"end_ip"`
+	Default            bool      `json:"is_default,omitempty"` // legacy default retained only for migration
+	NodeIDs            []string  `json:"node_ids"`
+	MembershipResolved bool      `json:"membership_resolved"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 func ValidatePool(pool Pool) error {
@@ -41,7 +44,10 @@ func ValidatePool(pool Pool) error {
 }
 
 func ListPools(ctx context.Context, db *rqlite.Client) ([]Pool, error) {
-	result, err := db.Query(ctx, rqlite.Statement{SQL: `SELECT id,name,cidr,start_ip,end_ip,is_default,created_at,updated_at FROM network_pools ORDER BY name`})
+	result, err := db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT p.id,p.name,p.cidr,p.start_ip,p.end_ip,p.is_default,p.created_at,p.updated_at,
+ COALESCE((SELECT json_group_array(node_id) FROM network_pool_nodes WHERE pool_id=p.id),'[]'),
+ COALESCE((SELECT resolved FROM network_pool_scope WHERE pool_id=p.id),0)
+ FROM network_pools p ORDER BY p.name`})
 	if err != nil {
 		return nil, err
 	}
@@ -54,6 +60,17 @@ func ListPools(ctx context.Context, db *rqlite.Client) ([]Pool, error) {
 		pool.StartIP, _ = row[3].(string)
 		pool.EndIP, _ = row[4].(string)
 		pool.Default = number(row[5]) == 1
+		pool.NodeIDs = []string{}
+		if len(row) > 8 {
+			if value, ok := row[8].(string); ok {
+				if err := json.Unmarshal([]byte(value), &pool.NodeIDs); err != nil {
+					return nil, err
+				}
+			}
+		}
+		if len(row) > 9 {
+			pool.MembershipResolved = number(row[9]) == 1
+		}
 		if value, ok := row[6].(string); ok {
 			pool.CreatedAt, _ = time.Parse(time.RFC3339, value)
 		}
@@ -66,6 +83,11 @@ func ListPools(ctx context.Context, db *rqlite.Client) ([]Pool, error) {
 }
 
 func SavePool(ctx context.Context, db *rqlite.Client, pool *Pool) error {
+	if err := ValidateMembers(pool.NodeIDs); err != nil {
+		return err
+	}
+	pool.MembershipResolved = true
+	pool.Default = false
 	if err := ValidatePool(*pool); err != nil {
 		return err
 	}
@@ -74,17 +96,36 @@ func SavePool(ctx context.Context, db *rqlite.Client, pool *Pool) error {
 		return err
 	}
 	wanted, _ := netip.ParsePrefix(pool.CIDR)
+	wantedStart, _ := netip.ParseAddr(pool.StartIP)
+	wantedEnd, _ := netip.ParseAddr(pool.EndIP)
 	for _, existing := range pools {
 		if existing.ID == pool.ID {
 			continue
 		}
-		prefix, _ := netip.ParsePrefix(existing.CIDR)
-		if wanted.Contains(prefix.Addr()) || prefix.Contains(wanted.Addr()) {
+		start, _ := netip.ParseAddr(existing.StartIP)
+		end, _ := netip.ParseAddr(existing.EndIP)
+		shared := !existing.MembershipResolved
+		for _, node := range pool.NodeIDs {
+			if containsNode(existing.NodeIDs, node) {
+				shared = true
+			}
+		}
+		if shared && wantedStart.Compare(end) <= 0 && start.Compare(wantedEnd) <= 0 {
 			return fmt.Errorf("ipam: pool overlaps %s", existing.Name)
 		}
 	}
 	if pool.ID != "" {
-		allocations, err := db.Query(ctx, rqlite.Statement{SQL: `SELECT address FROM network_allocations WHERE pool_id=?`, Params: []interface{}{pool.ID}})
+		nodes, err := db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT DISTINCT active_node_id FROM stack_runtime WHERE network_pool=? AND stack_ip IS NOT NULL AND deleted_at IS NULL`, Params: []interface{}{pool.ID}})
+		if err != nil {
+			return err
+		}
+		for _, row := range nodes.Values {
+			node, _ := row[0].(string)
+			if !containsNode(pool.NodeIDs, node) {
+				return fmt.Errorf("ipam: pool update would remove active allocation host %s", node)
+			}
+		}
+		allocations, err := db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT address FROM network_allocations WHERE pool_id=?`, Params: []interface{}{pool.ID}})
 		if err != nil {
 			return err
 		}
@@ -104,19 +145,20 @@ func SavePool(ctx context.Context, db *rqlite.Client, pool *Pool) error {
 	}
 	pool.UpdatedAt = now
 	statements := []rqlite.Statement{}
-	if pool.Default {
-		statements = append(statements, rqlite.Statement{SQL: `UPDATE network_pools SET is_default=0 WHERE is_default=1`})
-	}
 	statements = append(statements, rqlite.Statement{
 		SQL: `INSERT INTO network_pools(id,name,cidr,start_ip,end_ip,is_default,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)
 		      ON CONFLICT(id) DO UPDATE SET name=excluded.name,cidr=excluded.cidr,start_ip=excluded.start_ip,end_ip=excluded.end_ip,is_default=excluded.is_default,updated_at=excluded.updated_at`,
 		Params: []interface{}{pool.ID, pool.Name, pool.CIDR, pool.StartIP, pool.EndIP, pool.Default, pool.CreatedAt, pool.UpdatedAt},
 	})
+	statements = append(statements, rqlite.Statement{SQL: `DELETE FROM network_pool_nodes WHERE pool_id=?`, Params: []interface{}{pool.ID}}, rqlite.Statement{SQL: `INSERT INTO network_pool_scope(pool_id,resolved) VALUES(?,1) ON CONFLICT(pool_id) DO UPDATE SET resolved=1`, Params: []interface{}{pool.ID}})
+	for _, node := range pool.NodeIDs {
+		statements = append(statements, rqlite.Statement{SQL: `INSERT INTO network_pool_nodes(pool_id,node_id) VALUES(?,?)`, Params: []interface{}{pool.ID, node}})
+	}
 	return db.Execute(ctx, statements)
 }
 
 func DeletePool(ctx context.Context, db *rqlite.Client, id string) error {
-	result, err := db.Query(ctx, rqlite.Statement{SQL: `SELECT 1 FROM network_allocations WHERE pool_id=? LIMIT 1`, Params: []interface{}{id}})
+	result, err := db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT 1 FROM network_allocations WHERE pool_id=? LIMIT 1`, Params: []interface{}{id}})
 	if err != nil {
 		return err
 	}
@@ -125,14 +167,18 @@ func DeletePool(ctx context.Context, db *rqlite.Client, id string) error {
 	}
 	return db.Execute(ctx, []rqlite.Statement{{
 		SQL: `DELETE FROM network_pools WHERE id=? AND NOT EXISTS(SELECT 1 FROM network_allocations WHERE pool_id=?)`, Params: []interface{}{id, id},
-	}})
+	}, {SQL: `DELETE FROM network_pool_nodes WHERE pool_id=? AND NOT EXISTS(SELECT 1 FROM network_pools WHERE id=?)`, Params: []interface{}{id, id}},
+		{SQL: `DELETE FROM network_pool_scope WHERE pool_id=? AND NOT EXISTS(SELECT 1 FROM network_pools WHERE id=?)`, Params: []interface{}{id, id}}})
 }
 
 func AllocateIPv4(ctx context.Context, db *rqlite.Client, pool Pool, stackID string) (string, error) {
+	if !pool.MembershipResolved || len(pool.NodeIDs) == 0 {
+		return "", fmt.Errorf("ipam: pool membership requires administrator correction")
+	}
 	if err := ValidatePool(pool); err != nil {
 		return "", err
 	}
-	result, err := db.Query(ctx, rqlite.Statement{SQL: `SELECT address FROM network_allocations WHERE pool_id=?`, Params: []interface{}{pool.ID}})
+	result, err := db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT address FROM network_allocations WHERE pool_id=?`, Params: []interface{}{pool.ID}})
 	if err != nil {
 		return "", err
 	}
@@ -171,7 +217,7 @@ func ActivateIPv4(ctx context.Context, db *rqlite.Client, stackID string) error 
 }
 
 func ReleaseIPv4(ctx context.Context, db *rqlite.Client, stackID string) error {
-	return db.Execute(ctx, []rqlite.Statement{{SQL: `DELETE FROM network_allocations WHERE stack_id=?`, Params: []interface{}{stackID}}})
+	return db.Execute(ctx, []rqlite.Statement{{SQL: `DELETE FROM network_allocations WHERE stack_id=?`, Params: []interface{}{stackID}}, {SQL: `UPDATE stack_runtime SET stack_ip=NULL,network_pool=NULL WHERE stack_id=?`, Params: []interface{}{stackID}}})
 }
 
 func lastAddress(prefix netip.Prefix) netip.Addr {

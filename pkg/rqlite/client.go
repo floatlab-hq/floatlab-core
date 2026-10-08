@@ -83,6 +83,12 @@ func (c *Client) Query(ctx context.Context, stmt Statement) (*QueryResult, error
 	return c.query(ctx, "/db/query?level=weak", stmt)
 }
 
+// QueryStrong reads through the leader so ownership decisions cannot use a stale
+// follower snapshot during address takeover or pool edits.
+func (c *Client) QueryStrong(ctx context.Context, stmt Statement) (*QueryResult, error) {
+	return c.query(ctx, "/db/query?level=strong", stmt)
+}
+
 // Request runs a write statement through rqlite's unified request endpoint.
 func (c *Client) Request(ctx context.Context, stmt Statement) (*QueryResult, error) {
 	return c.query(ctx, "/db/request?transaction", stmt)

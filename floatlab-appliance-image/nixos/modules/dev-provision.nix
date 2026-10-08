@@ -35,24 +35,6 @@ let
     '';
   };
 
-  seedNetwork = pkgs.writeShellApplication {
-    name = "floatlab-dev-seed-network";
-    runtimeInputs = [ pkgs.coreutils pkgs.findutils pkgs.gnugrep ];
-    text = ''
-      set -euo pipefail
-      config_dir=/floatlab/system/etc/systemd/network
-      if find "$config_dir" -maxdepth 1 -type f -name '*.network' -print -quit | grep -q .; then
-        exit 0
-      fi
-      install -Dm0644 ${pkgs.writeText "floatlab-dev-dhcp.network" ''
-        [Match]
-        Name=en* eth*
-
-        [Network]
-        DHCP=yes
-      ''} "$config_dir/20-dhcp.network"
-    '';
-  };
 in {
   environment.systemPackages = [ provision ];
 
@@ -73,16 +55,4 @@ in {
     };
   };
 
-  systemd.services.floatlab-dev-seed-network = {
-    description = "Seed DHCP networking for the FloatLab test VM";
-    requires = [ "floatlab-datasets.service" ];
-    after = [ "floatlab-datasets.service" ];
-    before = [ "floatlab-network-config.service" ];
-    unitConfig.ConditionPathExists = testDisk;
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-      ExecStart = "${seedNetwork}/bin/floatlab-dev-seed-network";
-    };
-  };
 }

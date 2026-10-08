@@ -225,6 +225,13 @@ func (w *Worker) handleStackDelete(ctx context.Context, raw json.RawMessage) err
 	if _, err := w.pool.Execute(ctx, p.NodeID, "net.veth.delete", ipc.VethPayload{StackID: p.StackID, HostName: vethName("flh", p.StackID)}); err != nil {
 		return err
 	}
+	if service, ok, err := ipam.StackService(ctx, w.db, p.StackID); err != nil {
+		return err
+	} else if ok {
+		if _, err = w.pool.Execute(ctx, p.NodeID, "net.service.del", service); err != nil {
+			return err
+		}
+	}
 	if err := ipam.ReleaseIPv4(ctx, w.db, p.StackID); err != nil {
 		return err
 	}
