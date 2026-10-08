@@ -11,6 +11,7 @@ function api(overrides: Partial<FloatLabApi> = {}): FloatLabApi {
     listStacks: vi.fn().mockResolvedValue([stack]),
     getStack: vi.fn().mockResolvedValue(stack),
     getStackConfig: vi.fn().mockResolvedValue(stack.compose_file),
+    getStackStats: vi.fn(), execContainer: vi.fn(),
     listNodes: vi.fn().mockResolvedValue([]),
     listContainers: vi.fn().mockResolvedValue([]),
     validateCompose: vi.fn().mockResolvedValue(undefined),
@@ -82,7 +83,7 @@ describe("CommandPalette", () => {
     expect(fake.deleteStack).not.toHaveBeenCalled();
   });
 
-  it("keeps invalid Compose text open beside its validation error", async () => {
+  it("asks before reopening invalid Compose with the rejected text", async () => {
     const fake = api({ validateCompose: vi.fn().mockRejectedValue(new Error("invalid Compose")) });
     mountPalette(fake);
     window.dispatchEvent(new KeyboardEvent("keydown", { altKey: true, code: "Slash" }));
@@ -97,8 +98,12 @@ describe("CommandPalette", () => {
     editor.dispatchEvent(new Event("input", { bubbles: true }));
     document.querySelector<HTMLButtonElement>(".palette-compose .primary")!.click();
     await settle();
+    expect(document.querySelector("[role='alertdialog']")?.textContent).toContain("Edit and try again?");
+    expect(document.querySelector("[role='alertdialog']")?.textContent).toContain("invalid Compose");
+    expect(document.querySelector("#palette-compose-input")).toBeNull();
+    document.querySelector<HTMLButtonElement>("[role='alertdialog'] .danger")!.click();
+    await settle();
     expect(document.querySelector<HTMLTextAreaElement>("#palette-compose-input")?.value).toBe("not: valid");
-    expect(document.querySelector(".palette-error")?.textContent).toContain("invalid Compose");
     expect(fake.validateCompose).toHaveBeenCalled();
     document.querySelector<HTMLButtonElement>(".palette-compose button")!.click();
     await settle();

@@ -91,6 +91,9 @@ func newAPIClient(t *testing.T, baseURL string) *apiClient {
 
 func startAppliance(t *testing.T) string {
 	t.Helper()
+	if baseURL := os.Getenv("API_URL"); baseURL != "" {
+		return baseURL
+	}
 	root, err := filepath.Abs("..")
 	if err != nil {
 		t.Fatal(err)
@@ -112,9 +115,6 @@ func startAppliance(t *testing.T) string {
 	})
 	run(t, appliance, nil, "nix", "build", ".#iso", "--print-build-logs")
 	run(t, root, []string{"VM_NAME=" + name, "LIBVIRT_URI=" + uri, "LIBVIRT_POOL=" + pool}, filepath.Join(appliance, "scripts/run-libvirt.sh"))
-	if baseURL := os.Getenv("API_URL"); baseURL != "" {
-		return baseURL
-	}
 	return "http://" + waitForIP(t, root, uri, name) + ":8080"
 }
 
@@ -131,8 +131,10 @@ func (c *apiClient) waitReady() {
 		if health.Status != "ok" {
 			return fmt.Errorf("health status is %q", health.Status)
 		}
-		if health.RaftState != "" && health.RaftState != "Leader" && health.RaftState != "Follower" {
-			return fmt.Errorf("raft state is %q", health.RaftState)
+		// Lifecycle mutations apply to Raft directly, so this test target must
+		// have completed leader election before we submit them.
+		if health.RaftState != "Leader" {
+			return fmt.Errorf("waiting for raft leader: state is %q", health.RaftState)
 		}
 		var ready struct {
 			Status string `json:"status"`
@@ -443,7 +445,7 @@ func findSnapshot(c *apiClient, path, name string) string {
 func (c *apiClient) assertLogAPIs(stackID, containerID, marker string) {
 	c.t.Helper()
 	for _, path := range []string{
-		"/api/v1/logs/search?q=*&range=1h&limit=5",
+		"/api/v1/logs/search?query=*&limit=5",
 		"/api/v1/logs/stacks/" + stackID + "?range=1h",
 		"/api/v1/logs/containers/" + containerID,
 		"/api/v1/logs/nodes/node1?range=1h",
@@ -459,9 +461,9 @@ func (c *apiClient) assertLogAPIs(stackID, containerID, marker string) {
 	var last error
 	for time.Now().Before(deadline) {
 		var lines []struct {
-			Message string `json:"message"`
+			Message string `json:"msg"`
 		}
-		if err := c.doJSON(http.MethodGet, "/api/v1/logs/search?q="+url.QueryEscape(marker)+"&range=1h&limit=50", "", "", nil, &lines); err != nil {
+		if err := c.doJSON(http.MethodGet, "/api/v1/logs/search?query="+url.QueryEscape(marker)+"&limit=50", "", "", nil, &lines); err != nil {
 			last = err
 			time.Sleep(2 * time.Second)
 			continue
@@ -474,7 +476,7 @@ func (c *apiClient) assertLogAPIs(stackID, containerID, marker string) {
 		last = fmt.Errorf("log marker %q not found yet", marker)
 		time.Sleep(2 * time.Second)
 	}
-	c.t.Logf("log marker was not observed before timeout; log ingestion is asynchronous: %v", last)
+	c.t.Fatalf("log marker was not observed before timeout: %v", last)
 }
 
 func (c *apiClient) assertStatsAPIs(stackID string) {

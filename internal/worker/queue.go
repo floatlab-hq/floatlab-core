@@ -199,7 +199,9 @@ func (w *Worker) handleStackDelete(ctx context.Context, raw json.RawMessage) err
 		return err
 	}
 	_ = w.ops.Update(ctx, p.OperationID, "running", "network-release", "")
-	_, _ = w.pool.Execute(ctx, p.NodeID, "net.veth.delete", ipc.VethPayload{StackID: p.StackID, HostName: vethName("flh", p.StackID)})
+	if _, err := w.pool.Execute(ctx, p.NodeID, "net.veth.delete", ipc.VethPayload{StackID: p.StackID, HostName: vethName("flh", p.StackID)}); err != nil {
+		return err
+	}
 	if err := ipam.ReleaseIPv4(ctx, w.db, p.StackID); err != nil {
 		return err
 	}

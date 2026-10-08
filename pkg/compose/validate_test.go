@@ -68,7 +68,7 @@ func TestValidate_Valid(t *testing.T) {
 
 func TestDatasetPath(t *testing.T) {
 	got := DatasetPath("floatlab", "my-app")
-	want := "floatlab/stacks/my-app"
+	want := "floatlab/my-app"
 	if got != want {
 		t.Errorf("DatasetPath = %q, want %q", got, want)
 	}

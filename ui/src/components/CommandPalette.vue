@@ -41,14 +41,18 @@ const runtime: CommandRuntime = {
     composeResolve.value = resolve;
     void nextTick(() => document.querySelector<HTMLTextAreaElement>(".palette-compose textarea")?.focus());
   }),
+  cleanupCompose: async () => {
+    composeOpen.value = false;
+    composeWaiting.value = false;
+    composeResolve.value = undefined;
+  },
   present: async (next) => {
     result.value = next;
     if (composeWaiting.value) {
       composeWaiting.value = false;
       if (next.kind === "error") {
         composeError.value = next.message;
-        composeOpen.value = true;
-        void nextTick(() => document.querySelector<HTMLTextAreaElement>(".palette-compose textarea")?.focus());
+
       } else {
         void nextTick(() => input.value?.focus());
       }
@@ -323,6 +327,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onGlobalKeydown));
             >{{ cell }}</td></tr></tbody>
           </table>
           <pre v-else-if="result.kind === 'logs'">{{ result.lines.map((line) => `${line.ts} ${line.stream}: ${line.msg}`).join('\n') }}</pre>
+          <pre v-else-if="result.kind === 'exec'">{{ result.stdout }}{{ result.stderr }}</pre>
           <p v-else-if="result.kind === 'operation'">{{ result.text ?? `${result.action}${result.state ? `: ${result.state}` : ""}` }}</p>
           <p
             v-else
@@ -354,6 +359,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onGlobalKeydown));
         <h2 id="palette-confirm-title">
           Confirm command
         </h2>
+        <p
+          v-if="result?.kind === 'error'"
+          role="alert"
+        >
+          {{ result.message }}
+        </p>
         <p>{{ confirmMessage }}</p>
         <div class="palette-actions">
           <button

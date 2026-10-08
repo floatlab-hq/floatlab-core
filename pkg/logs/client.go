@@ -27,11 +27,13 @@ func NewClient(base string) *Client {
 // LogLine is a single JSON-line log entry from VictoriaLogs.
 // VictoriaLogs returns all indexed fields at the top level alongside _time and _msg.
 type LogLine struct {
-	Time   string            `json:"_time"`
-	Msg    string            `json:"_msg"`
-	Level  string            `json:"level,omitempty"`
-	Stream map[string]string `json:"_stream_fields,omitempty"`
+	Time       string            `json:"_time"`
+	Msg        string            `json:"_msg"`
+	StreamName string            `json:"stream,omitempty"`
+	Level      string            `json:"level,omitempty"`
+	Stream     map[string]string `json:"_stream_fields,omitempty"`
 	// Common indexed fields pushed by floatlab-hostd / floatlab-control.
+	ContainerID   string `json:"container_id,omitempty"`
 	ContainerName string `json:"container_name,omitempty"`
 	StackID       string `json:"stack_id,omitempty"`
 	NodeID        string `json:"node_id,omitempty"`

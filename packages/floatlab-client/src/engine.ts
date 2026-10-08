@@ -21,7 +21,10 @@ export function tokenize(input: string): string[] {
 
 type Parsed = { name: string; positionals: string[]; flags: Record<string, string | boolean> };
 const commands = [
-  ["create", ["new", "add", "mk", "make"], "create <name> [--primary node] [--secondary node] [--start]"],
+  ["create", ["new", "add", "mk", "make"], "create <name> [--file path | --primary node] [--secondary node] [--start]"],
+  ["config", [], "config <stack>"],
+  ["stats", [], "stats <stack> [--range 1h|6h|24h|7d]"],
+  ["exec", [], "exec <stack> <container> -- <command> [args...]"],
   ["edit", ["vi", "configure"], "edit <stack>"],
   ["start", [], "start <stack> [container]"], ["stop", ["shutdown"], "stop <stack> [container]"],
   ["delete", ["remove", "rm"], "delete <stack> [--purge]"],
@@ -30,7 +33,7 @@ const commands = [
   ["upgrade", [], "upgrade <stack> [service=image ...]"], ["snapshot", [], "snapshot create|list <stack>"],
 ] as const;
 const aliases = new Map<string, string>(commands.flatMap(([name, names]) => [name, ...names].map((alias) => [alias, name])));
-const flagValues = new Set(["primary", "secondary", "search", "since", "limit"]);
+const flagValues = new Set(["primary", "secondary", "search", "since", "limit", "file", "range"]);
 
 function parse(input: string | string[]): Parsed {
   const words = typeof input === "string" ? tokenize(input) : input;
@@ -41,9 +44,15 @@ function parse(input: string | string[]): Parsed {
   const positionals: string[] = []; const flags: Record<string, string | boolean> = {};
   for (let index = 1; index < words.length; index += 1) {
     const word = words[index]!;
+    if (word === "--" && name === "exec") {
+      if (positionals.length !== 2 || index === words.length - 1) throw new CommandError("Usage: exec <stack> <container> -- <command> [args...]");
+      flags.command = true; positionals.push(...words.slice(index + 1)); break;
+    }
     if (!word.startsWith("--")) { positionals.push(word); continue; }
-    const [key, inline] = word.slice(2).split("=", 2);
-    if (!key || !["primary", "secondary", "start", "purge", "search", "since", "limit", "containers"].includes(key)) throw new CommandError(`Unknown flag: ${word}`);
+    const equal = word.indexOf("=");
+    const key = word.slice(2, equal < 0 ? undefined : equal);
+    const inline = equal < 0 ? undefined : word.slice(equal + 1);
+    if (!key || !["primary", "secondary", "start", "purge", "search", "since", "limit", "containers", "file", "range"].includes(key)) throw new CommandError(`Unknown flag: ${word}`);
     if (flagValues.has(key)) {
       const value = inline ?? words[++index]; if (!value || value.startsWith("--")) throw new CommandError(`--${key} needs a value`);
       flags[key] = value;
@@ -53,7 +62,7 @@ function parse(input: string | string[]): Parsed {
 }
 
 const idempotencyKey = () => crypto.randomUUID();
-const isMatch = (value: string, item: { id: string; name: string }) => item.id === value || item.name === value || item.id.startsWith(value);
+const isMatch = (value: string, item: { id: string; name: string; service?: string }) => item.id === value || item.name === value || item.service === value || item.id.startsWith(value);
 const exactOne = <T extends { id: string; name: string }>(items: T[], value: string, label: string): T => {
   const found = items.filter((item) => isMatch(value, item));
   if (found.length === 1) return found[0]!;
@@ -68,7 +77,7 @@ export class CommandEngine {
 
   async dispatch(input: string | string[]): Promise<{ code: number; result: CommandResult }> {
     try {
-      const result = await this.run(parse(input)); await this.runtime.present(result); return { code: result.kind === "error" ? 1 : 0, result };
+      const result = await this.run(parse(input)); await this.runtime.present(result); return { code: result.kind === "exec" ? result.exit_code : result.kind === "error" ? 1 : 0, result };
     } catch (error) {
       const result: CommandResult = { kind: "error", message: error instanceof Error ? error.message : "Command failed", status: error instanceof ApiError ? error.status : undefined };
       await this.runtime.present(result); return { code: error instanceof CommandError ? error.code : 1, result };
@@ -90,8 +99,8 @@ export class CommandEngine {
       return [];
     }
     if (["create"].includes(name) && words.some((word) => word === "--primary" || word === "--secondary")) return matching((await this.getNodes().catch(() => [])).map((node) => ({ value: node.name, description: node.status })));
-    if (["edit", "start", "stop", "delete", "logs", "info", "upgrade", "list"].includes(name) && words.length === 2 && !input.endsWith(" ")) return matching((await this.getStacks().catch(() => [])).map((stack) => ({ value: stack.name, description: stack.state })));
-    if (["start", "stop", "logs", "info"].includes(name) && ((words.length === 2 && input.endsWith(" ")) || words.length === 3)) {
+    if (["config", "stats", "exec", "edit", "start", "stop", "delete", "logs", "info", "upgrade", "list"].includes(name) && words.length === 2 && !input.endsWith(" ")) return matching((await this.getStacks().catch(() => [])).map((stack) => ({ value: stack.name, description: stack.state })));
+    if (["start", "stop", "logs", "info", "exec"].includes(name) && ((words.length === 2 && input.endsWith(" ")) || words.length === 3)) {
       const stacks = await this.getStacks().catch(() => []); const stack = stacks.find((item) => isMatch(words[1] ?? "", item));
       return stack ? matching((await this.api.listContainers(stack.id).catch(() => [])).map((container) => ({ value: container.name, description: `${container.status}${container.health ? `, ${container.health}` : ""}` }))) : [];
     }
@@ -122,6 +131,16 @@ export class CommandEngine {
   private async run(parsed: Parsed): Promise<CommandResult> {
     if (parsed.name === "help") return { kind: "text", text: commands.map(([, aliases, help]) => `${help}${aliases.length ? ` (${aliases.join(", ")})` : ""}`).join("\n") + "\nhelp, exit, quit" };
     const { name, positionals: args, flags } = parsed;
+    if (name === "config") {
+      if (args.length !== 1) throw new CommandError("Usage: config <stack>");
+      return { kind: "text", text: await this.api.getStackConfig((await this.stack(args[0]!)).id) };
+    }
+    if (name === "stats") return this.stats(args, flags);
+    if (name === "exec") {
+      if (!flags.command || args.length < 3) throw new CommandError("Usage: exec <stack> <container> -- <command> [args...]");
+      const stack = await this.stack(args[0]!); const container = await this.container(stack, args[1]!);
+      return { kind: "exec", ...await this.api.execContainer(stack.id, container.id, args.slice(2), idempotencyKey()) };
+    }
     if (name === "create") return this.create(args, flags);
     if (name === "edit") return this.edit(args);
     if (name === "start" || name === "stop") return this.lifecycle(name, args);
@@ -134,20 +153,30 @@ export class CommandEngine {
   }
 
   private async create(args: string[], flags: Record<string, string | boolean>): Promise<CommandResult> {
-    if (args.length > 1) throw new CommandError("Usage: create <name> [--primary node] [--secondary node] [--start]");
+    if (args.length > 1) throw new CommandError("Usage: create <name> [--file path | --primary node] [--secondary node] [--start]");
     const name = args[0] ?? await this.ask("Stack name");
-    let primaryValue = typeof flags.primary === "string" ? flags.primary : undefined;
-    if (!primaryValue && this.runtime.choose) primaryValue = await this.runtime.choose("Primary node", (await this.getNodes()).map((node) => ({ value: node.name, description: node.status })));
-    const primary = await this.node(primaryValue ?? await this.ask("Primary node"));
-    const secondary = typeof flags.secondary === "string" ? await this.node(flags.secondary) : undefined;
-    const source = `name: ${JSON.stringify(name)}\nservices: {}\nx-fl-stack:\n  schema_version: 1\n  primary_node: ${JSON.stringify(primary.id)}${secondary ? `\n  secondary_node: ${JSON.stringify(secondary.id)}` : ""}\n  failover:\n    mode: manual\n  storage:\n    pool: ${JSON.stringify(primary.zfs_pool ?? "floatlab")}\n`;
-    const compose = await this.editValidated(source, { name }); if (compose === undefined) return { kind: "text", text: "Create cancelled." };
+    let compose: string | undefined;
+    if (typeof flags.file === "string") {
+      if (flags.primary || flags.secondary) throw new CommandError("--file uses node assignments from Compose; omit --primary and --secondary");
+      if (!this.runtime.readCompose) throw new CommandError("--file is only available in the CLI");
+      compose = await this.runtime.readCompose(flags.file);
+      try { await this.api.validateCompose({ name, compose_file: compose }); }
+      catch (error) { compose = await this.retryValidation(error) ? await this.editValidated(compose, { name }) : undefined; }
+    } else {
+      let primaryValue = typeof flags.primary === "string" ? flags.primary : undefined;
+      if (!primaryValue && this.runtime.choose) primaryValue = await this.runtime.choose("Primary node", (await this.getNodes()).map((node) => ({ value: node.name, description: node.status })));
+      const primary = await this.node(primaryValue ?? await this.ask("Primary node"));
+      const secondary = typeof flags.secondary === "string" ? await this.node(flags.secondary) : undefined;
+      const source = `name: ${JSON.stringify(name)}\nservices: {}\nx-fl-stack:\n  schema_version: 1\n  primary_node: ${JSON.stringify(primary.id)}${secondary ? `\n  secondary_node: ${JSON.stringify(secondary.id)}` : ""}\n  failover:\n    mode: manual\n  storage:\n    pool: ${JSON.stringify(primary.zfs_pool ?? "floatlab")}\n`;
+      compose = await this.editValidated(source, { name });
+    }
+    if (compose === undefined) return { kind: "text", text: "Create cancelled." };
     const created = await this.api.createStack({ name, compose_file: compose }, idempotencyKey()); this.changed();
     if (!flags.start) return { kind: "text", text: `Created ${created.name}.` };
     try { await this.waitForIdle(created.id); } catch (error) { if (error instanceof CommandError && error.code === 130) throw error; return { kind: "error", message: `Created ${created.name}, but could not start it: ${error instanceof Error ? error.message : "provisioning failed"}` }; }
     if (!await this.confirm(`Start ${created.name}?`)) return { kind: "text", text: `Created ${created.name}; left stopped.` };
     try { await this.api.startStack(created.id, idempotencyKey()); } catch (error) { return { kind: "error", message: `Created ${created.name}, but could not start it: ${error instanceof Error ? error.message : "start failed"}` }; }
-    this.changed(); return { kind: "operation", action: "start", state: "accepted", text: `Created and started ${created.name}.` };
+    this.changed(); return { kind: "operation", action: "start", state: "accepted", text: `Created ${created.name}; start requested.` };
   }
 
   private async edit(args: string[]): Promise<CommandResult> {
@@ -166,9 +195,15 @@ export class CommandEngine {
       while (true) {
         const edited = await this.runtime.editCompose(source); if (edited === undefined) return undefined; source = edited;
         try { await this.api.validateCompose({ ...validation, compose_file: source }); return source; }
-        catch (error) { if (!this.runtime.interactive) throw error; await this.runtime.present({ kind: "error", message: error instanceof Error ? error.message : "Compose validation failed" }); }
+        catch (error) { if (!await this.retryValidation(error)) return undefined; }
       }
     } finally { await this.runtime.cleanupCompose?.(); }
+  }
+
+  private async retryValidation(error: unknown): Promise<boolean> {
+    if (!this.runtime.interactive) throw error;
+    await this.runtime.present({ kind: "error", message: error instanceof Error ? error.message : "Compose validation failed" });
+    return this.runtime.confirm("Edit and try again?");
   }
 
   private async waitForIdle(id: string): Promise<void> {
@@ -199,7 +234,7 @@ export class CommandEngine {
   private async remove(args: string[], purge: boolean): Promise<CommandResult> {
     if (args.length !== 1) throw new CommandError("Usage: delete <stack> [--purge]"); const stack = await this.stack(args[0]!);
     if (!await this.confirm(`Delete ${stack.name}${purge ? " and its data" : ""}?`)) return { kind: "text", text: "Cancelled." };
-    await this.api.deleteStack(stack.id, purge, idempotencyKey()); this.changed(); return { kind: "operation", action: "delete", state: "accepted", text: `Deleted ${stack.name}.` };
+    await this.api.deleteStack(stack.id, purge, idempotencyKey()); this.changed(); return { kind: "operation", action: "delete", state: "accepted", text: `Deletion requested for ${stack.name}.` };
   }
 
   private async logs(args: string[], flags: Record<string, string | boolean>): Promise<CommandResult> {
@@ -212,6 +247,16 @@ export class CommandEngine {
       lines = await this.api.searchLogs({ query: `${scope} _msg:${JSON.stringify(flags.search)}`, start: since, limit });
     } else lines = container ? await this.api.getContainerLogs(container.id, { since, tail: limit }) : await this.api.getStackLogs(stack.id, { since, tail: limit });
     return { kind: "logs", lines };
+  }
+
+  private async stats(args: string[], flags: Record<string, string | boolean>): Promise<CommandResult> {
+    const range = typeof flags.range === "string" ? flags.range : "1h";
+    if (args.length !== 1 || !["1h", "6h", "24h", "7d"].includes(range)) throw new CommandError("Usage: stats <stack> [--range 1h|6h|24h|7d]");
+    const series = await this.api.getStackStats((await this.stack(args[0]!)).id, range);
+    return { kind: "table", columns: ["metric", "value", "unit", "timestamp"], rows: series.map((metric) => {
+      const point = metric.points.reduce<typeof metric.points[number] | undefined>((latest, item) => !latest || item.timestamp > latest.timestamp ? item : latest, undefined);
+      return [metric.label, point ? String(point.value) : "no samples", metric.unit, point ? new Date(point.timestamp * 1000).toISOString() : "—"];
+    }) };
   }
 
   private async info(args: string[]): Promise<CommandResult> {

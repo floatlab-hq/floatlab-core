@@ -1,4 +1,4 @@
-import type { Container, FloatLabApi, LogLine, Node, Stack } from "./types";
+import type { Container, ExecResult, FloatLabApi, LogLine, Node, Stack, StackMetricSeries } from "./types";
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) { super(message); }
@@ -50,6 +50,8 @@ export function createApiClient(options: ApiClientOptions): FloatLabApi {
       if (!response.ok) throw new ApiError(await response.text() || `${response.status} ${response.statusText}`, response.status);
       return response.text();
     },
+    getStackStats: (id, range) => send<StackMetricSeries[]>(`/stats/stacks/${encodeURIComponent(id)}${query({ range })}`),
+    execContainer: (stack, container, command, key) => mutation<ExecResult>(`/stacks/${encodeURIComponent(stack)}/containers/${encodeURIComponent(container)}/exec`, "POST", key, { command }),
     listNodes: () => send<Node[]>("/nodes"), listContainers: (id) => send<Container[]>(`/stacks/${encodeURIComponent(id)}/containers`),
     validateCompose: (body) => send<void>("/stacks/validate", { method: "POST", body: JSON.stringify(body) }),
     createStack: (body, key) => mutation<Stack>("/stacks", "POST", key, body),

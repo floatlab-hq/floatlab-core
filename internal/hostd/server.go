@@ -43,6 +43,10 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// Register all command handlers on the IPC server.
 	s.dispatcher.register()
+	if s.dispatcher.docker != nil {
+		defer s.dispatcher.docker.Close()
+		go s.dispatcher.docker.ForwardTelemetry(ctx, telemetryEnv("FLOATLAB_NODE_ID", "node1"), telemetryEnv("FLOATLAB_VLOGS_URL", "http://127.0.0.1:9428"), telemetryEnv("FLOATLAB_VMETRICS_URL", "http://127.0.0.1:8428"), s.log)
+	}
 
 	// Emit hostd.ready after the socket is bound.
 	// The restore runner fires after IPC is ready.
@@ -64,4 +68,11 @@ func (s *Server) Run(ctx context.Context) error {
 func hostname() string {
 	h, _ := os.Hostname()
 	return h
+}
+
+func telemetryEnv(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
 }

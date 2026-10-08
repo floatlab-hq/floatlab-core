@@ -251,7 +251,10 @@ func (o *Orchestrator) doProvision(ctx context.Context, stackID string) {
 	o.applyEvent(stack.PrimaryNodeID, stackID, run.EventProvisionDone)
 	actor, operationID := o.activeOperationIdentity(ctx, stackID)
 	_ = operation.RecordEvent(context.Background(), o.db, operation.Event{StackID: stackID, Type: "Created", Outcome: "succeeded", Actor: actor, OperationID: operationID})
-	if lifecycleErr == nil {
+	// Only the start-new operation should start immediately after provisioning.
+	// Plain creation leaves the stack idle until the caller requests a start.
+	op, _ := o.ops.ActiveForStack(ctx, stackID)
+	if lifecycleErr == nil && op != nil && op.Action == "start" {
 		o.applyEvent(stack.PrimaryNodeID, stackID, run.EventStartStack)
 	} else {
 		_ = o.ops.FinishForStack(context.Background(), stackID, "create", "succeeded", "")

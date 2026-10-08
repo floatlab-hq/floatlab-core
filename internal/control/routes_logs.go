@@ -33,12 +33,15 @@ func toAPILine(line logs.LogLine) apiLogLine {
 	for key, value := range line.Stream {
 		labels[key] = value
 	}
-	for key, value := range map[string]string{"container_name": line.ContainerName, "stack_id": line.StackID, "node_id": line.NodeID, "service": line.Service} {
+	for key, value := range map[string]string{"container_id": line.ContainerID, "container_name": line.ContainerName, "stack_id": line.StackID, "node_id": line.NodeID, "service": line.Service} {
 		if value != "" {
 			labels[key] = value
 		}
 	}
-	stream := labels["stream"]
+	stream := line.StreamName
+	if stream == "" {
+		stream = labels["stream"]
+	}
 	if stream != "stderr" {
 		stream = "stdout"
 	}

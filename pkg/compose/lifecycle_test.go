@@ -52,9 +52,36 @@ func TestRuntimeYAMLRewritesMountAndPort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, wanted := range []string{"/floatlab/demo/data", "host_ip: 192.0.2.10", "floatlab:"} {
+	for _, wanted := range []string{"/floatlab/demo/data", "host_ip: 192.0.2.10"} {
 		if !bytes.Contains([]byte(runtime), []byte(wanted)) {
 			t.Fatalf("runtime config missing %q:\n%s", wanted, runtime)
 		}
+	}
+}
+
+func TestRuntimeYAMLPreservesServiceNetworking(t *testing.T) {
+	source := `name: demo
+services:
+  web:
+    image: caddy:2-alpine
+    ports: ["8088:80"]
+  probe:
+    image: alpine:3.20
+`
+	runtime, err := RuntimeYAML(source, "demo", "192.0.2.10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := loadProjectAt(runtime, "demo", "/floatlab/demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"web", "probe"} {
+		if len(project.Services[name].Networks) != 0 {
+			t.Fatalf("%s lost shared default network: %s", name, runtime)
+		}
+	}
+	if project.Services["web"].Ports[0].HostIP != "192.0.2.10" {
+		t.Fatal("managed port binding missing")
 	}
 }

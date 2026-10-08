@@ -127,12 +127,7 @@ func RuntimeYAML(source, requestedName, stackIP string) (string, error) {
 		return "", fmt.Errorf("compose: valid stack IPv4 address is required for published ports")
 	}
 	project := spec.Project
-	if spec.HasPorts {
-		if project.Networks == nil {
-			project.Networks = types.Networks{}
-		}
-		project.Networks["floatlab"] = types.NetworkConfig{Driver: "bridge"}
-	}
+
 	for name, service := range project.Services {
 		for i, volume := range service.Volumes {
 			if volume.ReadOnly || volume.Type == "tmpfs" {
@@ -146,10 +141,6 @@ func RuntimeYAML(source, requestedName, stackIP string) (string, error) {
 			service.Volumes[i].Source = "/" + mount.Dataset
 		}
 		if len(service.Ports) > 0 {
-			if service.Networks == nil {
-				service.Networks = map[string]*types.ServiceNetworkConfig{}
-			}
-			service.Networks["floatlab"] = nil
 			for i := range service.Ports {
 				service.Ports[i].HostIP = stackIP
 			}

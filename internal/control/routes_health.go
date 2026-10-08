@@ -152,8 +152,9 @@ func registerEventRoutes(r chi.Router, s *Server) { r.Get("/events", s.handleEve
 func (s *Server) handleListAllocations(w http.ResponseWriter, r *http.Request) {
 	stackID := r.URL.Query().Get("stack_id")
 	result, err := s.db.Query(r.Context(), rqlite.Statement{
-		SQL:    `SELECT id, stack_id, service, address, prefix_pool, allocated_at FROM ip_reservations WHERE (? = '' OR stack_id = ?) ORDER BY allocated_at DESC`,
-		Params: []interface{}{stackID, stackID},
+		SQL: `SELECT id,stack_id,service,address,prefix_pool,allocated_at,'','' FROM ip_reservations WHERE (? = '' OR stack_id = ?)
+ UNION ALL SELECT id,stack_id,'',address,'',created_at,pool_id,state FROM network_allocations WHERE (? = '' OR stack_id = ?) ORDER BY 6 DESC`,
+		Params: []interface{}{stackID, stackID, stackID, stackID},
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -166,6 +167,8 @@ func (s *Server) handleListAllocations(w http.ResponseWriter, r *http.Request) {
 		Address     string `json:"address"`
 		PrefixPool  string `json:"prefix_pool"`
 		AllocatedAt string `json:"allocated_at"`
+		PoolID      string `json:"pool_id,omitempty"`
+		State       string `json:"state,omitempty"`
 	}
 	rows := make([]allocation, 0, len(result.Values))
 	for _, row := range result.Values {
@@ -176,6 +179,8 @@ func (s *Server) handleListAllocations(w http.ResponseWriter, r *http.Request) {
 		a.Address, _ = row[3].(string)
 		a.PrefixPool, _ = row[4].(string)
 		a.AllocatedAt, _ = row[5].(string)
+		a.PoolID, _ = row[6].(string)
+		a.State, _ = row[7].(string)
 		rows = append(rows, a)
 	}
 	writeJSON(w, http.StatusOK, rows)

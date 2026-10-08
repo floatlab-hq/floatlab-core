@@ -21,6 +21,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/stacks/{id}/containers/{containerId}/exec": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run a one-off command in a stack container
+         * @description Runs argv without a TTY or stdin. Output capture is limited to 60 seconds and 1 MiB combined. Disconnecting capture does not terminate the command in Docker.
+         */
+        post: operations["execStackContainer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/stacks": {
         parameters: {
             query?: never;
@@ -1719,7 +1739,7 @@ export interface components {
              */
             service: string;
             /**
-             * @description Allocated IPv6 address in CIDR notation.
+             * @description Allocated managed IPv4 address or legacy IPv6 address in CIDR notation.
              * @example fd00::1/48
              */
             address: string;
@@ -1730,6 +1750,13 @@ export interface components {
             prefix_pool: string;
             /** Format: date-time */
             allocated_at: string;
+            /** @description Managed IPv4 pool ID, when this is an IPv4 allocation. */
+            pool_id?: string;
+            /**
+             * @description Managed IPv4 allocation state.
+             * @enum {string}
+             */
+            state?: "pending" | "active";
         };
         IpReservationCreate: {
             /** Format: uuid */
@@ -1990,20 +2017,17 @@ export interface components {
                 load_5m?: components["schemas"]["MetricSeries"];
             };
         };
-        StackStats: {
-            /** Format: uuid */
-            stack_id: string;
-            range: components["schemas"]["MetricRange"];
-            /** @description Named metric series aggregated across all containers in the stack. */
-            series: {
-                cpu_usage_percent?: components["schemas"]["MetricSeries"];
-                memory_used_bytes?: components["schemas"]["MetricSeries"];
-                memory_limit_bytes?: components["schemas"]["MetricSeries"];
-                net_rx_bytes_per_sec?: components["schemas"]["MetricSeries"];
-                net_tx_bytes_per_sec?: components["schemas"]["MetricSeries"];
-                block_read_bytes_per_sec?: components["schemas"]["MetricSeries"];
-                block_write_bytes_per_sec?: components["schemas"]["MetricSeries"];
-            };
+        StackMetricSeries: {
+            label: string;
+            unit: string;
+            points: {
+                /**
+                 * Format: int64
+                 * @description Unix timestamp in seconds.
+                 */
+                timestamp: number;
+                value: number;
+            }[];
         };
         StorageStats: {
             /** Format: uuid */
@@ -2246,6 +2270,69 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AuthError"];
                 };
+            };
+        };
+    };
+    execStackContainer: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                id: string;
+                containerId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    command: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description Completed command, including a nonzero exit status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        stdout: string;
+                        stderr: string;
+                        exit_code: number;
+                    };
+                };
+            };
+            /** @description Invalid command. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Administrator token required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stack not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Execution, ownership, capture limit, or host communication failure. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -4375,7 +4462,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["StackStats"];
+                    "application/json": components["schemas"]["StackMetricSeries"][];
                 };
             };
             /** @description Stack not found. */

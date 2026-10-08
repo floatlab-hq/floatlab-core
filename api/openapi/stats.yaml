@@ -45,6 +45,24 @@ components:
           items:
             $ref: '#/components/schemas/MetricPoint'
 
+    StackMetricSeries:
+      type: object
+      required: [label, unit, points]
+      properties:
+        label: {type: string}
+        unit: {type: string}
+        points:
+          type: array
+          items:
+            type: object
+            required: [timestamp, value]
+            properties:
+              timestamp:
+                type: integer
+                format: int64
+                description: Unix timestamp in seconds.
+              value: {type: number}
+
     NodeStats:
       type: object
       required: [node_id, range, series]
@@ -209,7 +227,9 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StackStats'
+                type: array
+                items:
+                  $ref: '#/components/schemas/StackMetricSeries'
         '404':
           description: Stack not found.
           content:

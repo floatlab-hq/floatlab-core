@@ -96,6 +96,7 @@ func registerStackRoutes(r chi.Router, s *Server) {
 		r.Get("/stacks/{id}/alerts", s.handleStackAlerts)
 		r.Get("/stacks/{id}/events", s.handleStackEvents)
 		r.Get("/stacks/{id}/containers/{containerId}/terminal", s.handleStackTerminal)
+		r.Post("/stacks/{id}/containers/{containerId}/exec", s.handleContainerExec)
 		r.Get("/operations/{operationId}", s.handleGetOperation)
 		r.Post("/internal/alerts/transition", s.handleAlertTransition)
 	})

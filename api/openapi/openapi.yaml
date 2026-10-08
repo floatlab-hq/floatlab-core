@@ -63,6 +63,9 @@ paths:
   /auth/token:
     $ref: './auth.yaml#/paths/~1auth~1token'
 
+  /stacks/{id}/containers/{containerId}/exec:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1containers~1{containerId}~1exec'
+
   # Stack lifecycle
   /stacks:
     $ref: './stacks.yaml#/paths/~1stacks'

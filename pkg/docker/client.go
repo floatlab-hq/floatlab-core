@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
@@ -59,9 +60,11 @@ func (c *Client) ComposeUp(ctx context.Context, projectName, path string) error 
 
 func (c *Client) ComposeDown(ctx context.Context, projectName, path string, volumes bool) error {
 	project, err := c.compose.LoadProject(ctx, composeapi.ProjectLoadOptions{ConfigPaths: []string{path}, ProjectName: projectName})
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	// Provisioning can fail before the Compose file is written. In that case,
+	// Compose discovers any remaining resources by their project labels.
 	return c.compose.Down(ctx, projectName, composeapi.DownOptions{Project: project, RemoveOrphans: true, Volumes: volumes})
 }
 

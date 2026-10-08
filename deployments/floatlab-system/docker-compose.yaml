@@ -14,6 +14,8 @@ services:
       retries: 12
 
   victoria-metrics:
+    ports:
+      - "127.0.0.1:8428:8428"
     image: victoriametrics/victoria-metrics:v1.101.0
     command:
       - -storageDataPath=/victoria-metrics-data
@@ -23,6 +25,8 @@ services:
     restart: unless-stopped
 
   victoria-logs:
+    ports:
+      - "127.0.0.1:9428:9428"
     image: victoriametrics/victoria-logs:v0.28.0-victorialogs
     command:
       - -storageDataPath=/victoria-logs-data

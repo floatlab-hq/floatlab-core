@@ -36,6 +36,16 @@ func newDispatcher(srv *ipc.Server, dc *docker.Client, log *zap.Logger) *Dispatc
 }
 
 func (d *Dispatcher) register() {
+	d.srv.Handle("docker.exec.run", func(ctx context.Context, raw json.RawMessage) (any, error) {
+		if d.docker == nil {
+			return nil, fmt.Errorf("docker client not available")
+		}
+		var p ipc.ExecPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, err
+		}
+		return d.docker.Exec(ctx, p.StackID, p.ContainerID, p.Command)
+	})
 	d.srv.Handle("compose.up", d.composeUp)
 	d.srv.Handle("compose.down", d.composeDown)
 	d.srv.Handle("compose.pull", d.composePull)

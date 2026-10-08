@@ -89,7 +89,7 @@ func TestCreateStackDerivesCanonicalConfiguration(t *testing.T) {
 	if response.Code != http.StatusCreated {
 		t.Fatalf("create status = %d, body = %s", response.Code, response.Body.String())
 	}
-	for _, wanted := range []string{"name: demo", "node-a", "node-b", "floatlab/stacks/demo", "auto", "30s"} {
+	for _, wanted := range []string{"name: demo", "node-a", "node-b", "floatlab/demo", "auto", "30s"} {
 		if !strings.Contains(executePayload, wanted) {
 			t.Fatalf("stored stack is missing %q: %s", wanted, executePayload)
 		}
@@ -177,7 +177,7 @@ func testDatabase(t *testing.T, row []interface{}, executePayload *string) *http
 
 func stackRow(id, name, primary, secondary string) []interface{} {
 	now := time.Now().UTC().Format(time.RFC3339)
-	return []interface{}{id, name, "", primary, secondary, validStackCompose, "floatlab/stacks/" + name, "", "", "", "", "auto", "30s", now, now}
+	return []interface{}{id, name, "", primary, secondary, validStackCompose, "floatlab/" + name, "", "", "", "", "auto", "30s", now, now}
 }
 
 func testRaftNode(t *testing.T) *floatraft.Node {

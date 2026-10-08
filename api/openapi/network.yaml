@@ -68,7 +68,7 @@ components:
           example: "db"
         address:
           type: string
-          description: Allocated IPv6 address in CIDR notation.
+          description: Allocated managed IPv4 address or legacy IPv6 address in CIDR notation.
           example: "fd00::1/48"
         prefix_pool:
           type: string
@@ -77,6 +77,14 @@ components:
         allocated_at:
           type: string
           format: date-time
+
+        pool_id:
+          type: string
+          description: Managed IPv4 pool ID, when this is an IPv4 allocation.
+        state:
+          type: string
+          enum: [pending, active]
+          description: Managed IPv4 allocation state.
 
     IpReservationCreate:
       type: object

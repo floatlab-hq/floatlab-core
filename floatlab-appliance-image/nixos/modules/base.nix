@@ -9,6 +9,7 @@
     "rd.systemd.show_status=true"
   ];
 
+  services.qemuGuest.enable = true;
   services.openssh.enable = true;
   services.openssh.settings.PermitRootLogin = "prohibit-password";
 

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { tokenize, type CommandResult, type CommandRuntime, type Completion } from "@floatlab/client";
 
 export const format = (result: CommandResult): string => {
+  if (result.kind === "exec") return result.stdout + result.stderr;
   if (result.kind === "text") return result.text;
   if (result.kind === "error") return result.message;
   if (result.kind === "operation") return result.text ?? `${result.action}: ${result.state ?? "accepted"}`;
@@ -46,9 +47,11 @@ export function terminalRuntime(interactive: boolean, signal?: AbortSignal): Com
     confirm: (message) => confirm({ message, default: false }),
     ask: (message) => input({ message }),
     choose: (message, choices) => select({ message, choices: choices.map((choice) => ({ name: `${choice.value}${choice.description ? ` — ${choice.description}` : ""}`, value: choice.value })) }),
+    readCompose: (path) => readFile(path, "utf8"),
     editCompose: editor.edit,
     cleanupCompose: editor.cleanup,
     async present(result) {
+      if (result.kind === "exec") { process.stdout.write(result.stdout); process.stderr.write(result.stderr); return; }
       const output = format(result);
       if (interactive && (result.kind === "logs" || result.kind === "table")) {
         if (!await page(output)) console.warn("less is unavailable; printing output.");

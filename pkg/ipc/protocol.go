@@ -315,3 +315,15 @@ type DatasetInfoResult struct {
 type DatasetListResult struct {
 	Datasets []DatasetInfoResult `json:"datasets"`
 }
+
+// ExecPayload runs a one-off command without a terminal or stdin.
+type ExecPayload struct {
+	StackID     string   `json:"stack_id"`
+	ContainerID string   `json:"container_id"`
+	Command     []string `json:"command"`
+}
+type ExecResult struct {
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+	ExitCode int    `json:"exit_code"`
+}

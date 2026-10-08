@@ -47,5 +47,5 @@ func Validate(ps *ParsedStack) error {
 
 // DatasetPath returns the canonical ZFS dataset path for a stack.
 func DatasetPath(pool, stackName string) string {
-	return pool + "/stacks/" + stackName
+	return pool + "/" + stackName
 }

@@ -74,3 +74,58 @@ test("an aborted create-start exits without polling", async () => {
   const result = await new CommandEngine(creating, { ...runtime, signal: controller.signal }).dispatch("create demo --primary node --start");
   expect(result.code).toBe(130); expect(polled).toBe(false);
 });
+
+test("config prints the saved Compose source", async () => {
+  const source = "name: demo\nservices: {}\n";
+  const configured = { ...api, getStackConfig: async () => source } as FloatLabApi;
+  expect((await new CommandEngine(configured, runtime).dispatch("config demo")).result).toEqual({ kind: "text", text: source });
+});
+
+test("file creation validates the file and never opens an editor or asks for nodes", async () => {
+  let created = "";
+  const source = "name: demo\nx-fl-stack:\n  primary_node: node\nservices: {}";
+  const configured = { ...api, validateCompose: async (body: { compose_file: string }) => { expect(body.compose_file).toBe(source); }, createStack: async (body: { compose_file: string }) => { created = body.compose_file; return { name: "demo" }; } } as unknown as FloatLabApi;
+  const fileRuntime = { ...runtime, readCompose: async (path: string) => { expect(path).toBe("compose.yaml"); return source; }, editCompose: async () => { throw new Error("unexpected editor"); } };
+  expect((await new CommandEngine(configured, fileRuntime).dispatch("create demo --file compose.yaml")).code).toBe(0);
+  expect(created).toBe(source);
+  expect((await new CommandEngine(configured, fileRuntime).dispatch("create demo --file compose.yaml --primary node")).code).toBe(2);
+});
+
+test("invalid file creation fails without mutation or prompting", async () => {
+  const configured = { ...api, validateCompose: async () => { throw new Error("invalid Compose"); }, createStack: async () => { throw new Error("unexpected create"); } } as unknown as FloatLabApi;
+  const fileRuntime = { ...runtime, readCompose: async () => "invalid", confirm: async () => { throw new Error("unexpected prompt"); } };
+  const result = await new CommandEngine(configured, fileRuntime).dispatch("create demo --file compose.yaml");
+  expect(result.code).toBe(1); expect(result.result).toMatchObject({ kind: "error", message: "invalid Compose" });
+});
+
+for (const retry of [true, false]) test(`invalid interactive Compose asks before retrying (${retry})`, async () => {
+  let edits = 0; let saved = ""; const sources: string[] = [];
+  const configured = { ...api, getStackConfig: async () => "original", validateCompose: async (body: { compose_file: string }) => { if (body.compose_file === "rejected") throw new Error("invalid Compose"); }, updateCompose: async (_id: string, source: string) => { saved = source; } } as unknown as FloatLabApi;
+  const editRuntime = { ...runtime, interactive: true, editCompose: async (source: string) => { sources.push(source); return ++edits === 1 ? "rejected" : "fixed"; }, confirm: async (message: string) => { expect(message).toBe("Edit and try again?"); expect(presented.at(-1)).toMatchObject({ kind: "error", message: "invalid Compose" }); return retry; } };
+  expect((await new CommandEngine(configured, editRuntime).dispatch("edit demo")).code).toBe(0);
+  expect(sources).toEqual(retry ? ["original", "rejected"] : ["original"]);
+  expect(saved).toBe(retry ? "fixed" : "");
+});
+
+test("stats shows the newest sample and identifies missing samples", async () => {
+  const configured = { ...api, getStackStats: async (_id: string, range: string) => { expect(range).toBe("6h"); return [{ label: "mem", unit: "bytes", points: [{ timestamp: 2, value: 12 }, { timestamp: 1, value: 9 }] }, { label: "cpu", unit: "%", points: [] }]; } } as FloatLabApi;
+  expect((await new CommandEngine(configured, runtime).dispatch("stats demo --range 6h")).result).toMatchObject({ kind: "table", rows: [["mem", "12", "bytes", "1970-01-01T00:00:02.000Z"], ["cpu", "no samples", "%", "—"]] });
+  expect((await new CommandEngine(configured, runtime).dispatch("stats demo --range invalid")).code).toBe(2);
+});
+
+test("exec preserves argv after the delimiter and propagates exit status", async () => {
+  const command = ["sh", "-c", "printf '%s' '$HOME;literal'", "", "--limit", "a=b"];
+  const configured = { ...api, listContainers: async () => [{ id: "container", name: "demo-web-1", service: "web" }], execContainer: async (_stack: string, container: string, args: string[]) => { expect(container).toBe("container"); expect(args).toEqual(command); return { stdout: "out", stderr: "err", exit_code: 7 }; } } as unknown as FloatLabApi;
+  const engine = new CommandEngine(configured, runtime);
+  const result = await engine.dispatch(["exec", "demo", "web", "--", ...command]);
+  expect(result.code).toBe(7); expect(result.result).toEqual({ kind: "exec", stdout: "out", stderr: "err", exit_code: 7 });
+  expect((await engine.dispatch("exec demo web sh")).code).toBe(2);
+});
+
+test("interactive file validation offers editing the rejected file", async () => {
+  let saved = ""; let edited = "";
+  const configured = { ...api, validateCompose: async (body: { compose_file: string }) => { if (body.compose_file === "invalid") throw new Error("invalid Compose"); }, createStack: async (body: { compose_file: string }) => { saved = body.compose_file; return { name: "demo" }; } } as unknown as FloatLabApi;
+  const fileRuntime = { ...runtime, interactive: true, readCompose: async () => "invalid", confirm: async () => true, editCompose: async (source: string) => { edited = source; return "fixed"; } };
+  expect((await new CommandEngine(configured, fileRuntime).dispatch("create demo --file compose.yaml")).code).toBe(0);
+  expect(edited).toBe("invalid"); expect(saved).toBe("fixed");
+});

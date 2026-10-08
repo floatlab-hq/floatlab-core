@@ -42,9 +42,6 @@ func (c *Client) ListByStack(ctx context.Context, stackID string) ([]ContainerSu
 	out := make([]ContainerSummary, 0, len(result.Items))
 	for _, ct := range result.Items {
 		id := ct.ID
-		if len(id) > 12 {
-			id = id[:12]
-		}
 		health, exitCode := containerDetails(ctx, c, ct.ID, string(ct.State))
 		out = append(out, ContainerSummary{
 			ID:       id,
