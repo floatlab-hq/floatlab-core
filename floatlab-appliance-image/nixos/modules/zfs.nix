@@ -2,7 +2,7 @@
 let
   importScript = pkgs.writeShellApplication {
     name = "floatlab-import-pool";
-    runtimeInputs = [ pkgs.zfs pkgs.util-linux pkgs.coreutils ];
+    runtimeInputs = [ pkgs.zfs pkgs.util-linux pkgs.coreutils pkgs.gnugrep ];
     text = ''
       set -euo pipefail
 
@@ -11,7 +11,7 @@ let
         exit 0
       fi
 
-      if ! zpool import -H -o name | grep -Fxq floatlab; then
+      if ! zpool import | grep -E '^[[:space:]]*pool: floatlab$' >/dev/null; then
         echo "FloatLab pool not found" >&2
         mkdir -p /run/floatlab
         printf '%s\n' pool-missing > /run/floatlab/boot-mode
@@ -31,8 +31,8 @@ in {
   boot.zfs.forceImportRoot = false;
   environment.systemPackages = [ pkgs.zfs ];
 
-  # Required by NixOS/OpenZFS. Replace with a stable per-node 8-hex-digit ID
-  # once host identity persistence is implemented.
+  # Live-media default required by NixOS/OpenZFS. Installed GRUB entries set
+  # spl_hostid and the boot identity service restores the generated /etc/hostid.
   networking.hostId = "f10a7ab0";
 
   systemd.services.floatlab-zfs-import = {

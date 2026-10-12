@@ -33,9 +33,12 @@ export async function connection(env: Record<string, string | undefined> = proce
   const saved = await loadSession(path); return saved ? { ...saved, source: "config" } : undefined;
 }
 
-export async function login(url: string, username: string, password: string): Promise<Session> {
-  const response = await fetch(`${normalizeApiUrl(url)}/auth/token`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify({ username, password }) });
-  const body = await response.json().catch(() => ({})) as { access_token?: string; expires_in?: number; error?: string };
+export class SecondFactorRequired extends Error {}
+
+export async function login(url: string, username: string, password: string, factor?: { totp_code?: string; recovery_code?: string }): Promise<Session> {
+  const response = await fetch(`${normalizeApiUrl(url)}/auth/token`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify({ username, password, ...factor }) });
+  const body = await response.json().catch(() => ({})) as { access_token?: string; expires_in?: number; error?: string; second_factor_required?: boolean };
+  if (response.status === 401 && body.second_factor_required) throw new SecondFactorRequired("Second factor required");
   if (!response.ok || !body.access_token) throw new Error(body.error ?? `Login failed (${response.status})`);
   return { url: normalizeApiUrl(url), token: body.access_token, expires_at: new Date(Date.now() + (body.expires_in ?? 0) * 1000).toISOString() };
 }

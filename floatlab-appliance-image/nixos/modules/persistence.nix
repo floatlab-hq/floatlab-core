@@ -13,11 +13,13 @@ let
 
         if ! zfs list -H -o name "$dataset" >/dev/null 2>&1; then
           zfs create -o mountpoint="$mountpoint" "$@" "$dataset"
-        else
+        elif [ "$(zfs get -H -o value mountpoint "$dataset")" != "$mountpoint" ]; then
           zfs set mountpoint="$mountpoint" "$dataset"
         fi
         mkdir -p "$mountpoint"
-        zfs mount "$dataset" 2>/dev/null || true
+        if [ "$(zfs get -H -o value mounted "$dataset")" != yes ]; then
+          zfs mount "$dataset"
+        fi
       }
 
       ensure_dataset floatlab/system /floatlab/system

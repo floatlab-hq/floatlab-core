@@ -1,7 +1,7 @@
 { pkgs, ... }:
 {
-  networking.hostName = "floatlab";
-  time.timeZone = "Australia/Melbourne";
+  networking.hostName = ""; # The installer restores the persisted transient hostname.
+  time.timeZone = null; # UTC until the installer restores the persisted timezone.
 
   boot.kernelParams = [
     "console=ttyS0,115200n8"

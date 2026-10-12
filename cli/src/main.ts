@@ -1,10 +1,22 @@
 #!/usr/bin/env bun
 import { ApiError, CommandEngine, createApiClient, type FloatLabApi } from "@floatlab/client";
 import { commandInput, credentials, terminalRuntime } from "./terminal";
-import { clearToken, connection, login, saveSession, valid } from "./session";
+import { clearToken, connection, login, saveSession, valid, SecondFactorRequired } from "./session";
 
 const version = typeof __FLOATLAB_VERSION__ === "string" ? __FLOATLAB_VERSION__ : "dev";
 declare const __FLOATLAB_VERSION__: string;
+
+async function interactiveLogin(url: string) {
+  const auth = await credentials();
+  try { return await login(url, auth.username, auth.password); }
+  catch (error) {
+    if (!(error instanceof SecondFactorRequired)) throw error;
+    const { input, select } = await import("@inquirer/prompts");
+    const method = await select({ message: "Second factor", choices: [{ name: "Authenticator code", value: "totp_code" }, { name: "Recovery code", value: "recovery_code" }] });
+    const code = await input({ message: method === "totp_code" ? "Six-digit authenticator code" : "Single-use recovery code" });
+    return login(url, auth.username, auth.password, { [method]: code });
+  }
+}
 
 async function acquire(interactive: boolean) {
   let current = await connection();
@@ -13,7 +25,7 @@ async function acquire(interactive: boolean) {
     const { input } = await import("@inquirer/prompts"); const url = await input({ message: "FloatLab URL" }); current = { url, source: "config" }; await saveSession(current);
   }
   if (!valid(current)) {
-    const auth = await credentials(); const session = await login(current.url, auth.username, auth.password); await saveSession(session); current = { ...session, source: "config" };
+    const session = await interactiveLogin(current.url); await saveSession(session); current = { ...session, source: "config" };
   }
   return current;
 }
@@ -23,7 +35,7 @@ async function execute(input: string | string[], interactive: boolean): Promise<
   const run = async () => new CommandEngine(createApiClient({ baseUrl: current.url, token: current.token, signal: runtime.signal }), runtime).dispatch(input);
   let result = await run();
   if (result.result.kind === "error" && result.result.status === 401 && current.source === "config" && interactive) {
-    await clearToken(current.url); const auth = await credentials(); const session = await login(current.url, auth.username, auth.password); await saveSession(session); current = { ...session, source: "config" }; result = await run();
+    await clearToken(current.url); const session = await interactiveLogin(current.url); await saveSession(session); current = { ...session, source: "config" }; result = await run();
   }
   return result.code;
 }
@@ -35,7 +47,7 @@ async function interactive(): Promise<number> {
     const line = await commandInput(engine.complete.bind(engine), history); if (!line) continue; if (["exit", "quit"].includes(line)) return 0;
     history.push(line); let result = await engine.dispatch(line); if (result.code === 130) return 130;
     if (result.result.kind === "error" && result.result.status === 401 && current.source === "config") {
-      await clearToken(current.url); const auth = await credentials(); const session = await login(current.url, auth.username, auth.password); await saveSession(session);
+      await clearToken(current.url); const session = await interactiveLogin(current.url); await saveSession(session);
       current = { ...session, source: "config" }; engine = new CommandEngine(createApiClient({ baseUrl: current.url, token: current.token, signal: runtime.signal }), runtime); result = await engine.dispatch(line); if (result.code === 130) return 130;
     }
   }

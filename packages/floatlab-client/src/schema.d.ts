@@ -1539,6 +1539,10 @@ export interface components {
             username: string;
             /** Format: password */
             password: string;
+            /** @description Required for TOTP-enrolled accounts unless a recovery code is supplied. */
+            totp_code?: string;
+            /** @description A single-use recovery code; mutually exclusive with totp_code. */
+            recovery_code?: string;
         };
         TokenResponse: {
             access_token: string;
@@ -1549,6 +1553,8 @@ export interface components {
         };
         AuthError: {
             error: string;
+            /** @description Returned after correct password verification when a second factor is required. */
+            second_factor_required?: boolean;
         };
         /**
          * @description Current lifecycle state of the stack.
@@ -2466,7 +2472,7 @@ export interface operations {
                     "application/json": components["schemas"]["AuthError"];
                 };
             };
-            /** @description Invalid username or password. */
+            /** @description Invalid credentials or missing/invalid second factor. */
             401: {
                 headers: {
                     [name: string]: unknown;

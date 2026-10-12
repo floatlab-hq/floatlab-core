@@ -19,6 +19,13 @@ components:
           format: password
           minLength: 1
           maxLength: 72
+        totp_code:
+          type: string
+          pattern: '^[0-9]{6}$'
+          description: Required for TOTP-enrolled accounts unless a recovery code is supplied.
+        recovery_code:
+          type: string
+          description: A single-use recovery code; mutually exclusive with totp_code.
     TokenResponse:
       type: object
       required: [access_token, token_type, expires_in]
@@ -37,6 +44,9 @@ components:
       properties:
         error:
           type: string
+        second_factor_required:
+          type: boolean
+          description: Returned after correct password verification when a second factor is required.
 
 paths:
   /auth/token:
@@ -65,7 +75,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/AuthError'
         '401':
-          description: Invalid username or password.
+          description: Invalid credentials or missing/invalid second factor.
           content:
             application/json:
               schema:

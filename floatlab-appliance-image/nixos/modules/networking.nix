@@ -5,6 +5,7 @@
   networking.networkmanager.enable = lib.mkForce false;
   networking.firewall.allowedTCPPorts = [ 8080 ];
   systemd.network.enable = true;
+  systemd.network.wait-online.extraArgs = [ "--interface=floatlab-lan:routable" "--ipv4" ];
   services.resolved.enable = true;
 
   # Hostd owns topology and static/service addresses. Networkd handles only the

@@ -12,6 +12,7 @@
       Restart = "on-failure";
       RestartSec = 2;
       RuntimeDirectory = "floatlab";
+      EnvironmentFile = "-/floatlab/system/etc/hostd.env";
       RuntimeDirectoryMode = "0750";
     };
   };

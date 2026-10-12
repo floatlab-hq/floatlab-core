@@ -42,14 +42,15 @@ type Server struct {
 }
 
 type Config struct {
-	ListenAddr  string
-	RaftConfig  floatraft.Config
-	RQLiteURL   string
-	VLogsURL    string
-	VMetricsURL string
-	JWTSecret   string
-	JWTIssuer   string
-	JWTAudience string
+	ListenAddr    string
+	RaftConfig    floatraft.Config
+	RQLiteURL     string
+	VLogsURL      string
+	VMetricsURL   string
+	JWTSecret     string
+	JWTIssuer     string
+	JWTAudience   string
+	CredentialKey []byte
 }
 
 func NewServer(

@@ -24,3 +24,19 @@ test("interactive input submits the typed command", async () => {
   await Bun.sleep(0); input.write("exit\r");
   expect(await answer).toBe("exit");
 });
+
+test("login asks for a second factor and sends the supplied factor", async () => {
+  const server = Bun.serve({ port: 0, async fetch(request) {
+    const body = await request.json() as { username: string; password: string; totp_code?: string; recovery_code?: string };
+    if (!body.totp_code && !body.recovery_code) return Response.json({ error: "second factor required", second_factor_required: true }, { status: 401 });
+    expect(body.username).toBe("admin");
+    expect(body.totp_code ?? body.recovery_code).toBe("123456");
+    return Response.json({ access_token: "test-token", expires_in: 60 });
+  } });
+  const { login, SecondFactorRequired } = await import("../src/session");
+  try {
+    await expect(login(server.url.href, "admin", "password")).rejects.toBeInstanceOf(SecondFactorRequired);
+    expect((await login(server.url.href, "admin", "password", { totp_code: "123456" })).token).toBe("test-token");
+    expect((await login(server.url.href, "admin", "password", { recovery_code: "123456" })).token).toBe("test-token");
+  } finally { server.stop(true); }
+});

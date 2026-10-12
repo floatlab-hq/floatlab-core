@@ -1,0 +1,112 @@
+package installer
+
+import (
+	"context"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/floatlab/floatlab-core/internal/hostnetwork"
+)
+
+func testDisks() []Disk {
+	return []Disk{{Path: "/dev/disk/by-id/virtio-a", Device: "/dev/vda", Size: 32 * GiB, Eligible: true, Fingerprint: "a"}, {Path: "/dev/disk/by-id/virtio-b", Device: "/dev/vdb", Size: 40 * GiB, Eligible: true, Fingerprint: "b"}}
+}
+func TestStorageCommandAndSafety(t *testing.T) {
+	disks := testDisks()
+	command := ZPoolCommand(disks)
+	if !strings.Contains(command, "floatlab mirror /dev/disk/by-id/virtio-a-part3") {
+		t.Fatal(command)
+	}
+	if _, err := ParseZPool(strings.Replace(command, "compression=zstd", "compression=lz4", 1), disks); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{command + "; reboot", strings.Replace(command, "mirror", "raidz", 1), strings.Replace(command, "virtio-a-part3", "virtio-c-part3", 1), strings.Replace(command, "ashift=12", "ashift=9", 1), strings.Replace(command, "mountpoint=none", "mountpoint=/", 1)} {
+		if _, err := ParseZPool(bad, disks); err == nil {
+			t.Fatalf("accepted %s", bad)
+		}
+	}
+	if err := ValidateSelection(disks, GiB); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSelection(append(disks, disks[0]), GiB); err == nil {
+		t.Fatal("duplicate accepted")
+	}
+	disks[0].Eligible = false
+	if err := ValidateSelection(disks, GiB); err == nil {
+		t.Fatal("occupied disk accepted")
+	}
+	disks = testDisks()
+	disks[0].Size = 20 * GiB
+	if err := ValidateSelection(disks, GiB); err == nil {
+		t.Fatal("undersized disk accepted")
+	}
+	current := testDisks()
+	current[0].Fingerprint = "changed"
+	if err := Revalidate(testDisks(), current); err == nil {
+		t.Fatal("changed partition table accepted")
+	}
+	current = testDisks()
+	current[1].Eligible = false
+	if err := Revalidate(testDisks(), current); err == nil {
+		t.Fatal("newly occupied disk accepted")
+	}
+	if ImageSize(GiB) != 8*GiB || ImageSize(9*GiB+1) != 12*GiB {
+		t.Fatal("image sizing")
+	}
+}
+func TestSettingsAndBootPayload(t *testing.T) {
+	a := Appliance{NodeID: "node", NodeName: "floatlab", Timezone: "UTC", HostID: "abcdef12", JWTSecret: strings.Repeat("a", 64), Network: hostnetwork.DefaultConfig()}
+	if err := a.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	a.Timezone = "Australia/Melbourne"
+	if err := a.Validate(); err != nil {
+		t.Fatal("non-UTC timezone unavailable", err)
+	}
+	a.NodeName = "bad name"
+	if err := a.Validate(); err == nil {
+		t.Fatal("invalid hostname")
+	}
+	a.NodeName = "floatlab"
+	a.Timezone = "../../etc/passwd"
+	if err := a.Validate(); err == nil {
+		t.Fatal("timezone traversal")
+	}
+	p := Payload{Kernel: "boot/kernel", Initrd: "boot/initrd", Init: "/nix/store/example/init", Bytes: 100, Files: map[string]string{"boot/kernel": strings.Repeat("a", 64), "boot/initrd": strings.Repeat("b", 64), "nix-store.squashfs": strings.Repeat("c", 64)}}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	grub := GRUB(p, "image-uuid", a)
+	if !strings.Contains(grub, "root=UUID=image-uuid") || !strings.Contains(grub, "spl.spl_hostid=0xabcdef12") {
+		t.Fatal(grub)
+	}
+	p.Files["../escape"] = strings.Repeat("a", 64)
+	if err := p.Validate(); err == nil {
+		t.Fatal("payload traversal")
+	}
+}
+
+func TestDiagnosticsRedactSecrets(t *testing.T) {
+	out := Diagnostic([]byte("\x1b[31mDisk failed\x1b[0m\npassword=bad\nTOKEN sensitive\nTry another disk\n"))
+	if strings.Contains(out, "bad") || strings.Contains(out, "sensitive") || strings.Contains(out, "\x1b") || !strings.Contains(out, "Disk failed") {
+		t.Fatal(out)
+	}
+	if len(Diagnostic([]byte(strings.Repeat("x", 4096)))) > 2048 {
+		t.Fatal("unbounded diagnostics")
+	}
+}
+
+func TestImageRecoveryProtectsRunningMedia(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PATH", root+":"+os.Getenv("PATH"))
+	disks := testDisks()[:1]
+	disks[0].PartitionIDs = []string{"a", "b", "c"}
+	script := "#!/bin/sh\necho " + disks[0].Path + "-part2\n"
+	if err := os.WriteFile(root+"/findmnt", []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyImageTargets(context.Background(), disks, "/iso"); err == nil || !strings.Contains(err.Error(), "original installation ISO") {
+		t.Fatal("allowed writes to running image", err)
+	}
+}
