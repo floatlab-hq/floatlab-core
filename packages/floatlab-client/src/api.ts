@@ -1,4 +1,5 @@
 import type { Container, ExecResult, FloatLabApi, HostNetworkApi, HostNetworkStatus, HostNetworkChange, NetworkPool, LogLine, Node, Stack, StackMetricSeries } from "./types";
+import type { DashboardApi, TokenResponse, RaftHealth, Notification, NodeStats, StorageStats } from "./types";
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) { super(message); }
@@ -15,7 +16,7 @@ export function normalizeApiUrl(url: string): string {
   return parsed.toString().replace(/\/$/, "");
 }
 
-export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNetworkApi {
+export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNetworkApi & DashboardApi {
   const baseUrl = normalizeApiUrl(options.baseUrl);
   const send = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
     const headers = new Headers(init.headers);
@@ -44,6 +45,12 @@ export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNe
   const hostNetworkPath = (node: string) => `/nodes/${encodeURIComponent(node)}/settings/network`;
   const changePath = (node: string, change: string) => `${hostNetworkPath(node)}/changes/${encodeURIComponent(change)}`;
   return {
+    createAuthToken: (credentials) => send<TokenResponse>("/auth/token", { method: "POST", body: JSON.stringify(credentials) }),
+    getRaftHealth: () => send<RaftHealth>("/health/raft"),
+    listNotifications: () => send<Notification[]>("/notifications?limit=50"),
+    getNodeStats: (id) => send<NodeStats>(`/stats/nodes/${encodeURIComponent(id)}?range=1h`),
+    getStorageStats: (id) => send<StorageStats>(`/stats/storage/${encodeURIComponent(id)}?range=1h`),
+    getNodeLogs: (id) => send<LogLine[]>(`/logs/nodes/${encodeURIComponent(id)}?tail=100`),
     getHostNetwork: (node) => send<HostNetworkStatus>(hostNetworkPath(node)),
     applyHostNetwork: (node, revision, config, key) => mutation<HostNetworkChange>(hostNetworkPath(node), "PUT", key, { revision, config }),
     getHostNetworkChange: (node, change) => send<HostNetworkChange>(changePath(node, change)),

@@ -1,4 +1,5 @@
-import { createApiClient } from "@floatlab/client";
+import { createApiClient } from '@floatlab/client'
 
-// Browser authentication remains owned by the application session/cookie.
-export const api = createApiClient({ baseUrl: "/api/v1" });
+export function browserApi(token?: string) {
+  return createApiClient({ baseUrl: new URL('/api/v1', window.location.origin).href, token })
+}

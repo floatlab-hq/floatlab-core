@@ -1,0 +1,179 @@
+{
+  "NodeCreate": {
+    "name": "NodeCreate",
+    "fields": [
+      {
+        "key": "name",
+        "label": "name",
+        "type": "string",
+        "required": true
+      },
+      {
+        "key": "hostname",
+        "label": "hostname",
+        "type": "string",
+        "required": true
+      },
+      {
+        "key": "addresses",
+        "label": "addresses",
+        "type": "json",
+        "required": false
+      },
+      {
+        "key": "role",
+        "label": "role",
+        "type": "enum",
+        "required": false,
+        "options": [
+          {
+            "value": "primary",
+            "label": "primary"
+          },
+          {
+            "value": "secondary",
+            "label": "secondary"
+          }
+        ],
+        "default": "secondary"
+      },
+      {
+        "key": "zfs_pool",
+        "label": "zfs pool",
+        "type": "string",
+        "required": true
+      }
+    ]
+  },
+  "NodeUpdate": {
+    "name": "NodeUpdate",
+    "fields": [
+      {
+        "key": "name",
+        "label": "name",
+        "type": "string",
+        "required": false
+      },
+      {
+        "key": "hostname",
+        "label": "hostname",
+        "type": "string",
+        "required": false
+      },
+      {
+        "key": "addresses",
+        "label": "addresses",
+        "type": "json",
+        "required": false
+      },
+      {
+        "key": "role",
+        "label": "role",
+        "type": "enum",
+        "required": false,
+        "options": [
+          {
+            "value": "primary",
+            "label": "primary"
+          },
+          {
+            "value": "secondary",
+            "label": "secondary"
+          }
+        ]
+      },
+      {
+        "key": "zfs_pool",
+        "label": "zfs pool",
+        "type": "string",
+        "required": false
+      }
+    ]
+  },
+  "AlertRuleCreate": {
+    "name": "AlertRuleCreate",
+    "fields": [
+      {
+        "key": "name",
+        "label": "name",
+        "type": "string",
+        "required": true
+      },
+      {
+        "key": "condition",
+        "label": "condition",
+        "type": "string",
+        "required": true,
+        "description": "PromQL/MetricsQL expression that, when its result exceeds threshold, fires the alert.\nExamples: \"cpu_usage_percent > 90\", \"zfs_pool_health != 0\""
+      },
+      {
+        "key": "severity",
+        "label": "severity",
+        "type": "enum",
+        "required": true,
+        "options": [
+          {
+            "value": "info",
+            "label": "info"
+          },
+          {
+            "value": "warning",
+            "label": "warning"
+          },
+          {
+            "value": "critical",
+            "label": "critical"
+          }
+        ]
+      },
+      {
+        "key": "stack_id",
+        "label": "stack id",
+        "type": "string",
+        "required": false
+      },
+      {
+        "key": "node_id",
+        "label": "node id",
+        "type": "string",
+        "required": false
+      },
+      {
+        "key": "for_duration",
+        "label": "for duration",
+        "type": "string",
+        "required": false
+      },
+      {
+        "key": "annotations",
+        "label": "annotations",
+        "type": "json",
+        "required": false
+      },
+      {
+        "key": "enabled",
+        "label": "enabled",
+        "type": "boolean",
+        "required": false,
+        "default": true
+      }
+    ]
+  },
+  "StackCreate": {
+    "name": "StackCreate",
+    "fields": [
+      {
+        "key": "name",
+        "label": "name",
+        "type": "string",
+        "required": true
+      },
+      {
+        "key": "compose_file",
+        "label": "compose file",
+        "type": "multiline",
+        "required": true
+      }
+    ]
+  }
+}

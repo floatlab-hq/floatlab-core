@@ -3,6 +3,21 @@ import type { components } from "./schema";
 export type Stack = components["schemas"]["Stack"];
 export type Container = components["schemas"]["Container"] & { service?: string };
 export type Node = components["schemas"]["Node"];
+export type NodeStats = components["schemas"]["NodeStats"];
+export type StorageStats = components["schemas"]["StorageStats"];
+export type Notification = components["schemas"]["Notification"];
+export type RaftHealth = components["schemas"]["RaftHealth"];
+export type LoginRequest = components["schemas"]["LoginRequest"];
+export type TokenResponse = components["schemas"]["TokenResponse"];
+
+export interface DashboardApi {
+  createAuthToken(credentials: LoginRequest): Promise<TokenResponse>;
+  getRaftHealth(): Promise<RaftHealth>;
+  listNotifications(): Promise<Notification[]>;
+  getNodeStats(id: string): Promise<NodeStats>;
+  getStorageStats(id: string): Promise<StorageStats>;
+  getNodeLogs(id: string): Promise<LogLine[]>;
+}
 export type LogLine = components["schemas"]["LogLine"];
 
 export type StackMetricSeries = components["schemas"]["StackMetricSeries"];

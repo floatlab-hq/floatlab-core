@@ -1,0 +1,29 @@
+{
+  "repository": "https://github.com/omacom/omarchy",
+  "commit": "35a55fd236598598130711249a647e0071532e9a",
+  "themes": [
+    "catppuccin-latte",
+    "catppuccin",
+    "ethereal",
+    "everforest",
+    "flexoki-light",
+    "gruvbox",
+    "hackerman",
+    "kanagawa",
+    "last-horizon",
+    "lumon",
+    "lupine",
+    "matte-black",
+    "miasma",
+    "nord",
+    "osaka-jade",
+    "retro-82",
+    "ristretto",
+    "rose-pine",
+    "solitude",
+    "starship",
+    "tokyo-night",
+    "vantablack",
+    "white"
+  ]
+}

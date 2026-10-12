@@ -1,0 +1,13 @@
+body { min-width: 0; }
+.storybook-canvas { color: var(--text); font-family: var(--font-mono); }
+.foundation { max-width: 1100px; padding: 24px; }
+.foundation h1 { font-size: 24px; margin-bottom: 12px; }
+.foundation h2 { font-size: 16px; margin: 28px 0 16px; }
+.foundation p { line-height: 1.7; }
+.foundation-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.foundation-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; background: var(--panel); }
+.foundation-swatch { height: 64px; border-radius: var(--radius); border: 1px solid var(--line); margin-bottom: 12px; }
+.foundation-label { display: block; font-size: 12px; line-height: 1.8; }
+.foundation-muted { color: var(--dim); }
+.foundation-row { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+::selection { color: var(--omarchy-bright-foreground); background: var(--omarchy-selection); }

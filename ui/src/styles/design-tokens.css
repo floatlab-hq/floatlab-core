@@ -1,0 +1,43 @@
+:root {
+  --surface-recessed: var(--omarchy-dark-background);
+  --surface-canvas: var(--omarchy-background);
+  --surface-default: var(--omarchy-lighter-background);
+  --text-primary: var(--omarchy-bright-foreground);
+  --text-secondary: var(--omarchy-foreground);
+  --text-inverse: var(--omarchy-lighter-background);
+  --text-placeholder: color-mix(in srgb, var(--text-secondary) 60%, transparent);
+  --status-success: var(--omarchy-green);
+  --status-warning: var(--omarchy-yellow);
+  --status-error: var(--omarchy-red);
+  --text-column: 10px;
+  --text-meta: 11px;
+  --text-status: 12px;
+  --text-control: 13px;
+  --text-item: 14px;
+  --text-subheading: 15px;
+  --text-heading: 20px;
+  --line-column: 14px;
+  --line-meta: 16px;
+  --line-body: 18px;
+  --line-item: 20px;
+  --line-subheading: 21px;
+  --line-heading: 28px;
+  --tracking-column: 0.7px;
+  --weight-ui: 500;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-section: 26px;
+  --height-plate: 32px;
+  --height-control: 40px;
+  --height-app-row: 52px;
+  --height-host-row: 64px;
+}
+
+.button.surface { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); min-height: var(--height-control); padding: 0 14px; color: var(--text-secondary); background: var(--surface-default); font-size: var(--text-control); font-weight: var(--weight-ui); line-height: var(--line-body); }
+.button.surface:hover { background: color-mix(in srgb, var(--surface-default) 90%, var(--text-secondary)); }
+
+.resource-track.compact { width: 12px; height: 9px; background: color-mix(in srgb, var(--text-secondary) 20%, transparent); }
+.resource-track.compact b { background: var(--text-secondary); }

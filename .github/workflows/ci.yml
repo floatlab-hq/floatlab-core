@@ -39,11 +39,17 @@ jobs:
       - name: Generate shared API schema
         run: pnpm --filter @floatlab/client generate:api && git diff --exit-code -- packages/floatlab-client/src/schema.d.ts
 
+      - name: Generate UI form contracts
+        run: pnpm --dir ui forms:sync && git diff --exit-code -- ui/src/forms/core-forms.json
+
       - name: Typecheck and test TypeScript workspace
         run: pnpm --filter @floatlab/client typecheck && pnpm --filter floatlab-cli typecheck && pnpm --recursive test
 
       - name: Build UI
-        run: pnpm --dir ui build
+        run: pnpm --dir ui lint && pnpm --dir ui build
+
+      - name: Build component galleries
+        run: pnpm --dir ui storybook:build && pnpm --dir ui story:build
 
       - name: Build CLI release targets
         run: |

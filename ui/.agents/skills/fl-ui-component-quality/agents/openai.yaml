@@ -1,0 +1,4 @@
+interface:
+  display_name: "FloatLab UI Component Quality"
+  short_description: "Enforce primitive-first UI quality and hierarchy"
+  default_prompt: "Use $fl-ui-component-quality to build a relational FloatLab UI component."

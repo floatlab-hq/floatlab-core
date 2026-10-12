@@ -2,7 +2,7 @@ import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { nextTick } from "vue";
 import type { FloatLabApi } from "@floatlab/client";
-import CommandPalette from "./CommandPalette.vue";
+import CommandPalette from "./CommandConsole.vue";
 
 const stack = { id: "stack-1", name: "plex", state: "idle", primary_node: "node-1", compose_file: "services: {}\n" };
 
