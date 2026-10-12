@@ -4,7 +4,7 @@ let
 
   provision = pkgs.writeShellApplication {
     name = "floatlab-dev-provision";
-    runtimeInputs = [ pkgs.zfs pkgs.util-linux pkgs.coreutils ];
+    runtimeInputs = [ pkgs.zfs pkgs.util-linux pkgs.coreutils pkgs.gnugrep ];
     text = ''
       set -euo pipefail
       if [ "$#" -ne 1 ]; then
@@ -12,7 +12,7 @@ let
         exit 2
       fi
       disk="$1"
-      if zpool list -H -o name floatlab >/dev/null 2>&1 || zpool import -H -o name | grep -Fxq floatlab; then
+      if zpool list -H -o name floatlab >/dev/null 2>&1 || zpool import | grep -E '^[[:space:]]*pool: floatlab$' >/dev/null; then
         echo "A floatlab pool already exists; refusing to create another" >&2
         exit 1
       fi
@@ -27,7 +27,7 @@ let
     runtimeInputs = [ pkgs.zfs pkgs.util-linux pkgs.gnugrep ];
     text = ''
       set -euo pipefail
-      if zpool list -H -o name floatlab >/dev/null 2>&1 || zpool import -H -o name | grep -Fxq floatlab; then
+      if zpool list -H -o name floatlab >/dev/null 2>&1 || zpool import | grep -E '^[[:space:]]*pool: floatlab$' >/dev/null; then
         exit 0
       fi
       wipefs -a ${testDisk}

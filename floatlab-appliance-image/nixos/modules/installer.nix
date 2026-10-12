@@ -106,6 +106,7 @@ in {
       TimeoutStopSec = 5;
       UMask = "0077";
       Restart = "on-failure";
+      RestartForceExitStatus = "SIGHUP";
       RestartSec = 5;
     };
   };

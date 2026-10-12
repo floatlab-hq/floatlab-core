@@ -95,6 +95,9 @@
            assert cfg.fileSystems."/iso".device == "/dev/root";
            assert builtins.elem "ext4" cfg.boot.initrd.kernelModules;
            assert !cfg.boot.initrd.systemd.enable;
+           assert cfg.networking.hostName == "";
+           assert cfg.systemd.services."floatlab-installer-console@".serviceConfig.RestartForceExitStatus == "SIGHUP";
+           assert builtins.elem "--interface=floatlab-lan:routable" cfg.systemd.network.wait-online.extraArgs;
            pkgs.runCommand "floatlab-installer-boot-config" {} "touch $out";
       };
 

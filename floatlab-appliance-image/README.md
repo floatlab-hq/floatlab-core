@@ -106,6 +106,39 @@ nix run .#installer-test -- --iso /absolute/path/to/floatlab.iso
 Use `--disks 1` or `--disks 2` for one layout and `--keep` to retain disposable
 qcow2 disks and serial logs. The driver uses KVM when available and TCG otherwise.
 
+Run the extended pre-merge checks against the same production ISO:
+
+```console
+nix run .#installer-test -- --iso /absolute/path/to/floatlab.iso --disks 1 --before-storage
+nix run .#installer-test -- --iso /absolute/path/to/floatlab.iso --disks 1 --failures --static --timezone Australia/Melbourne
+nix run .#installer-test -- --iso /absolute/path/to/floatlab.iso --disks 2 --totp --timezone Australia/Melbourne --cli /absolute/path/to/floatlab
+```
+
+`--before-storage` kills the worker at its first wipe-command boundary, then
+restarts the VM and checks that disks remain unchanged. `--failures` disconnects
+the console, reboots after the storage checkpoint, disables NTP, injects a failed
+registry pull, retries finalization, and verifies repeated bootstrap and bypass
+of the wizard for an existing Compose installation. `--static` uses `10.0.2.20`
+on QEMU's isolated user network. `--totp` waits for NTP synchronization, enrolls
+an authenticator, checks replay rejection and recovery-code persistence across
+all mirror boots, and verifies that repeated bootstrap cannot reset credentials
+or restore a consumed recovery code. Supply `--cli` with the compiled CLI to
+exercise interactive login against the installed appliance. Run NTP-failure and
+TOTP-enrollment cases separately. These tests modify only disposable VM disks.
+
+Production ISO validation completed on 2026-10-12 on x86-64 Linux with KVM.
+The three extended scenarios passed, including disk-only single-disk boot,
+both mirror members together and each member alone, unchanged node UUIDs,
+persisted hostnames and Melbourne timezone, static IPv4, management/service
+health, administrator and interactive CLI login, TOTP replay rejection,
+recovery-code consumption across reboots, repeated bootstrap without credential
+reset, existing-installation bypass, console reconnection, interruptions before
+and after the storage checkpoint, unavailable NTP, failed registry pulls and
+successful retry, and cancellation of the automatic reboot countdown.
+The ISO build and effective boot-configuration check passed, as did the existing
+host-network VM regression, 129 installer/control/credential Go tests, and six
+CLI tests. Physical hardware validation remains separate from these VM checks.
+
 ## Fast test VM
 
 ```bash
