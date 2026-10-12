@@ -31,8 +31,8 @@ in {
   boot.zfs.forceImportRoot = false;
   environment.systemPackages = [ pkgs.zfs ];
 
-  # Required by NixOS/OpenZFS. Replace with a stable per-node 8-hex-digit ID
-  # once host identity persistence is implemented.
+  # Live-media default required by NixOS/OpenZFS. Installed GRUB entries set
+  # spl_hostid and the boot identity service restores the generated /etc/hostid.
   networking.hostId = "f10a7ab0";
 
   systemd.services.floatlab-zfs-import = {

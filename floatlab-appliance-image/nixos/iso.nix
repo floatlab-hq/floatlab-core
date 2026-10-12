@@ -10,6 +10,7 @@
     ./modules/hostd.nix
     ./modules/core-stack.nix
     ./modules/dev-provision.nix
+    ./modules/installer.nix
   ];
 
   image.fileName = lib.mkForce "floatlab-appliance-${config.system.nixos.label}-${pkgs.stdenv.hostPlatform.system}.iso";
@@ -18,6 +19,7 @@
   # The standard NixOS live ISO already uses a compressed squashfs store and
   # an ephemeral writable root layer. We intentionally retain that mechanism.
   installer.cloneConfig = false;
+  isoImage.forceTextMode = true;
 
   system.stateVersion = "26.05";
 }

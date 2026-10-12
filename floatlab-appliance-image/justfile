@@ -1,7 +1,10 @@
 build:
     ./scripts/build-iso.sh
 
-run: build
+build-dev:
+    ./scripts/build-iso.sh dev-iso
+
+run: build-dev
     ./scripts/run-libvirt.sh
 
 run-qemu: build

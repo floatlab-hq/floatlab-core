@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ lib, pkgs, floatlab-development ? false, ... }:
 let
   testDisk = "/dev/disk/by-id/virtio-floatlab-zfs";
 
@@ -35,7 +35,7 @@ let
     '';
   };
 
-in {
+in lib.mkIf floatlab-development {
   environment.systemPackages = [ provision ];
 
   systemd.services.floatlab-dev-auto-provision = {

@@ -15,14 +15,17 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/floatlab/floatlab-core/internal/credentials"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
 )
 
 const tokenTTL = 24 * time.Hour
 
 type loginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username     string `json:"username"`
+	Password     string `json:"password"`
+	TOTPCode     string `json:"totp_code,omitempty"`
+	RecoveryCode string `json:"recovery_code,omitempty"`
 }
 
 type authAttempt struct {
@@ -72,7 +75,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := s.db.Query(r.Context(), rqlite.Statement{
-		SQL:    `SELECT password_hash,roles FROM users WHERE username=?`,
+		SQL:    `SELECT u.password_hash,u.roles,c.totp_secret,c.last_totp_step FROM users u LEFT JOIN user_credentials c ON c.username=u.username WHERE u.username=?`,
 		Params: []interface{}{request.Username},
 	})
 	if err != nil {
@@ -91,6 +94,26 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(request.Password)) != nil || json.Unmarshal([]byte(rolesJSON), &roles) != nil {
 		writeError(w, http.StatusUnauthorized, "invalid username or password")
 		return
+	}
+
+	encrypted := ""
+	if len(result.Values[0]) >= 4 {
+		encrypted, _ = result.Values[0][2].(string)
+	}
+	if encrypted != "" {
+		if request.TOTPCode == "" && request.RecoveryCode == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": "second factor required", "second_factor_required": true})
+			return
+		}
+		ok, err := s.verifySecondFactor(r.Context(), request, encrypted, result.Values[0][3])
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "authentication unavailable")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "invalid credentials or second factor")
+			return
+		}
 	}
 
 	now := time.Now().UTC()
@@ -158,4 +181,34 @@ func clientIP(r *http.Request) string {
 		return host
 	}
 	return r.RemoteAddr
+}
+
+func (s *Server) verifySecondFactor(ctx context.Context, request loginRequest, encrypted string, lastValue interface{}) (bool, error) {
+	if request.TOTPCode != "" && request.RecoveryCode != "" {
+		return false, nil
+	}
+	if request.RecoveryCode != "" {
+		result, err := s.db.Request(ctx, rqlite.Statement{SQL: `DELETE FROM user_recovery_codes WHERE username=? AND code_hash=?`, Params: []interface{}{request.Username, credentials.RecoveryHash(request.RecoveryCode)}})
+		if err != nil {
+			return false, err
+		}
+		return result.RowsAffected == 1, nil
+	}
+	secret, err := credentials.Decrypt(s.cfg.CredentialKey, encrypted)
+	if err != nil {
+		return false, err
+	}
+	last, ok := lastValue.(float64)
+	if !ok {
+		return false, fmt.Errorf("invalid credential state")
+	}
+	step, ok := credentials.Verify(secret, request.TOTPCode, time.Now(), int64(last))
+	if !ok {
+		return false, nil
+	}
+	result, err := s.db.Request(ctx, rqlite.Statement{SQL: `UPDATE user_credentials SET last_totp_step=? WHERE username=? AND last_totp_step<?`, Params: []interface{}{step, request.Username, step}})
+	if err != nil {
+		return false, err
+	}
+	return result.RowsAffected == 1, nil
 }

@@ -57,6 +57,55 @@ Equivalent helper:
 ./scripts/build-iso.sh
 ```
 
+## Console installation
+
+The production ISO opens the installer on the appliance screen and serial console.
+Press Enter on either console to claim the single installation session.
+
+1. Select disks, inspect their current partition tables and proposed layout, edit
+   supported ZFS properties if needed, and type `ERASE ALL DATA` to confirm.
+   One disk creates a single-disk pool; multiple disks form one mirror. Every disk
+   receives an EFI partition, an immutable image partition, and a ZFS partition.
+2. Enter the timezone, node name, and DHCP or static IPv4 settings while the
+   systemd worker prepares storage and installs the image in the background.
+3. Create the FloatLab administrator. When NTP is synchronized, optionally enroll
+   an authenticator and save the ten single-use recovery codes. These credentials
+   belong to FloatLab; they do not create a Linux account.
+4. Wait for container images, service health, node registration, and administrator
+   login to be verified. Success starts a 30-second reboot countdown. Press Enter
+   to cancel it, then type `REBOOT` when ready.
+
+Installation requires x86-64 UEFI with Secure Boot disabled and Internet access
+for initial container image downloads. Each disk needs the image reservation
+(at least 8 GiB), 512 MiB EFI space, and at least 16 GiB for ZFS. Installed boots
+use cached container images and do not require registry access.
+
+The worker survives a console disconnect; reopen the console to continue. Logs
+are available through `journalctl -u floatlab-install-worker`. Disk identity or
+partition changes invalidate erase confirmation. Destructive operations are never
+replayed automatically. Once the pool checkpoint is saved, image copying and
+finalization can be retried without formatting again. Resume incomplete image
+copying from the original ISO, rather than the installed image being copied.
+If interruption occurred before that checkpoint, inspect the partial disks/pool
+before beginning a fresh, explicitly confirmed installation.
+
+Settings, identity, credential encryption key, and checkpoints persist under
+`/floatlab/system/etc`. Administrator bootstrap files contain a password hash and
+encrypted TOTP secret; startup imports them without resetting existing accounts
+and removes the credential file. TOTP login requires `totp_code` or a single-use
+`recovery_code` at `/api/v1/auth/token`; the CLI prompts for the second factor.
+Existing installations bypass the wizard and retain their persistent Compose file.
+
+Run the real UEFI console and disk-only boot tests (including each mirror member
+alone) outside the Nix build sandbox, where container downloads are available:
+
+```console
+nix run .#installer-test -- --iso /absolute/path/to/floatlab.iso
+```
+
+Use `--disks 1` or `--disks 2` for one layout and `--keep` to retain disposable
+qcow2 disks and serial logs. The driver uses KVM when available and TCG otherwise.
+
 ## Fast test VM
 
 ```bash
@@ -64,7 +113,7 @@ nix develop
 just run
 ```
 
-This incrementally rebuilds the ISO, replaces any existing `floatlab-dev` VM, creates a thin 16 GiB qcow2 volume in libvirt's `default` pool, and starts the VM with KVM. The appliance recognizes that test disk, creates the `floatlab` ZFS pool, and uses the same bridged DHCP default as production on its first boot.
+This explicitly builds the `dev-iso` variant, replaces any existing `floatlab-dev` VM, creates a thin 16 GiB qcow2 volume in libvirt's `default` pool, and starts the VM with KVM. The appliance recognizes that test disk, creates the `floatlab` ZFS pool, and uses the same bridged DHCP default as production on its first boot.
 
 Open its serial console with:
 
@@ -140,13 +189,11 @@ This scaffold sets Docker's `data-root` to `/floatlab/system/docker` and explici
 
 ### Compose seeding
 
-The ISO contains a template Compose file. It is installed only when `/floatlab/system/docker-compose.yml` is absent, allowing FloatLab to own upgrades after initial seed. The control-plane image is built from the same source and embedded in the ISO; third-party service images are pulled on first boot and must be pinned by digest before release.
+The ISO contains a template Compose file. It is installed only when `/floatlab/system/docker-compose.yml` is absent, allowing FloatLab to own upgrades after initial seed. The control-plane image is built from the same source and embedded in the ISO; third-party service images are fetched during installation finalization and must be pinned by digest before release.
 
 ## Next implementation work
 
 1. Replace placeholder container tags with immutable digests.
 2. Decide whether release images also embed the third-party service images for fully offline seeding.
-3. Add an explicit onboarding target instead of allowing required service failures to leave the system at a console.
-4. Generate and persist a unique `networking.hostId` per node rather than using the development placeholder.
-5. Add NixOS VM tests for pool-present, pool-absent, and Compose-seed paths.
-6. Add PXE outputs (`kernel`, `initrd`, and squashfs/root image) after the ISO path is stable.
+3. Add NixOS VM tests for pool-present, pool-absent, and Compose-seed paths.
+4. Add PXE outputs (`kernel`, `initrd`, and squashfs/root image) after the ISO path is stable.

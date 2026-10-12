@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+
 	"fmt"
 	"os"
 	"os/signal"
@@ -12,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/floatlab/floatlab-core/internal/control"
+	"github.com/floatlab/floatlab-core/internal/credentials"
 	"github.com/floatlab/floatlab-core/internal/failover"
 	"github.com/floatlab/floatlab-core/internal/ipam"
 	"github.com/floatlab/floatlab-core/internal/orchestrator"
@@ -25,22 +27,26 @@ import (
 )
 
 var (
-	listenAddr    string
-	rqliteURL     string
-	raftNodeID    string
-	raftBindAddr  string
-	raftAdvAddr   string
-	raftDataDir   string
-	raftBootstrap bool
-	vlogsURL      string
-	vmetricsURL   string
-	jwtSecret     string
-	jwtIssuer     string
-	jwtAudience   string
-	bootstrapUser string
-	bootstrapPass string
-	hostNodeID    string
-	hostSocket    string
+	listenAddr        string
+	rqliteURL         string
+	raftNodeID        string
+	raftBindAddr      string
+	raftAdvAddr       string
+	raftDataDir       string
+	raftBootstrap     bool
+	vlogsURL          string
+	vmetricsURL       string
+	jwtSecret         string
+	jwtIssuer         string
+	jwtAudience       string
+	registerLocalNode bool
+	bootstrapFile     string
+	applianceConfig   string
+	credentialKeyFile string
+	bootstrapUser     string
+	bootstrapPass     string
+	hostNodeID        string
+	hostSocket        string
 )
 
 func main() {
@@ -62,6 +68,10 @@ func main() {
 	root.Flags().StringVar(&jwtSecret, "jwt-secret", os.Getenv("FLOATLAB_JWT_SECRET"), "HMAC secret for management API JWTs")
 	root.Flags().StringVar(&jwtIssuer, "jwt-issuer", os.Getenv("FLOATLAB_JWT_ISSUER"), "Required JWT issuer")
 	root.Flags().StringVar(&jwtAudience, "jwt-audience", os.Getenv("FLOATLAB_JWT_AUDIENCE"), "Required JWT audience")
+	root.Flags().BoolVar(&registerLocalNode, "register-local-node", false, "Register the appliance node through the internal bootstrap path")
+	root.Flags().StringVar(&bootstrapFile, "bootstrap-file", os.Getenv("FLOATLAB_BOOTSTRAP_FILE"), "Private hashed administrator bootstrap file")
+	root.Flags().StringVar(&applianceConfig, "appliance-config", os.Getenv("FLOATLAB_APPLIANCE_CONFIG"), "Private persistent appliance identity")
+	root.Flags().StringVar(&credentialKeyFile, "credential-key-file", os.Getenv("FLOATLAB_CREDENTIAL_KEY_FILE"), "Private AES-256 credential encryption key")
 	root.Flags().StringVar(&bootstrapUser, "bootstrap-user", os.Getenv("FLOATLAB_BOOTSTRAP_USER"), "Initial administrator username")
 	root.Flags().StringVar(&bootstrapPass, "bootstrap-password", os.Getenv("FLOATLAB_BOOTSTRAP_PASSWORD"), "Initial administrator password")
 	root.Flags().StringVar(&hostNodeID, "host-node-id", "node1", "Node ID served by the local host daemon")
@@ -79,6 +89,37 @@ func run(cmd *cobra.Command, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	var identity struct {
+		NodeID    string `json:"node_id"`
+		NodeName  string `json:"node_name"`
+		JWTSecret string `json:"jwt_secret"`
+	}
+	if applianceConfig != "" {
+		if err := credentials.ReadPrivate(applianceConfig, &identity); err != nil {
+			return err
+		}
+		if identity.NodeID == "" || identity.NodeName == "" || len(identity.JWTSecret) < 32 {
+			return fmt.Errorf("invalid appliance identity")
+		}
+		raftNodeID, hostNodeID, jwtSecret = identity.NodeID, identity.NodeID, identity.JWTSecret
+	}
+	var credentialKey []byte
+	if credentialKeyFile != "" {
+		info, err := os.Lstat(credentialKeyFile)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
+			return fmt.Errorf("credential key must be private")
+		}
+		credentialKey, err = os.ReadFile(credentialKeyFile)
+		if err != nil {
+			return err
+		}
+		if len(credentialKey) != 32 {
+			return fmt.Errorf("credential key must be 32 bytes")
+		}
+	}
 	// Persistent state via rqlite.
 	db := rqlite.NewClient(rqliteURL)
 	if err := rqlite.Migrate(ctx, db); err != nil {
@@ -97,6 +138,20 @@ func run(cmd *cobra.Command, args []string) error {
 	if err := config.Migrate(ctx, db); err != nil {
 		log.Error("config migrate failed", zap.Error(err))
 		return err
+	}
+	if bootstrapFile != "" {
+		if err := control.BootstrapFile(ctx, db, bootstrapFile); err != nil {
+			return err
+		}
+	}
+	if registerLocalNode {
+		name := identity.NodeName
+		if name == "" {
+			name = "floatlab"
+		}
+		if err := control.RegisterApplianceNode(ctx, db, hostNodeID, name); err != nil {
+			return err
+		}
 	}
 	store := config.NewStore(db)
 
@@ -188,13 +243,14 @@ func run(cmd *cobra.Command, args []string) error {
 
 	// HTTP control server.
 	srv := control.NewServer(&control.Config{
-		ListenAddr:  listenAddr,
-		RQLiteURL:   rqliteURL,
-		VLogsURL:    vlogsURL,
-		VMetricsURL: vmetricsURL,
-		JWTSecret:   jwtSecret,
-		JWTIssuer:   jwtIssuer,
-		JWTAudience: jwtAudience,
+		ListenAddr:    listenAddr,
+		RQLiteURL:     rqliteURL,
+		VLogsURL:      vlogsURL,
+		VMetricsURL:   vmetricsURL,
+		JWTSecret:     jwtSecret,
+		JWTIssuer:     jwtIssuer,
+		JWTAudience:   jwtAudience,
+		CredentialKey: credentialKey,
 	}, db, store, raftNode, hosts, broker, seq, log)
 
 	log.Info("floatlab-control starting",

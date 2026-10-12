@@ -13,6 +13,16 @@ func Migrate(ctx context.Context, c *Client) error {
 			created_at    DATETIME NOT NULL,
 			updated_at    DATETIME NOT NULL
 		)`},
+		{SQL: `CREATE TABLE IF NOT EXISTS user_credentials (
+            username TEXT PRIMARY KEY,
+            totp_secret TEXT NOT NULL DEFAULT '',
+            last_totp_step INTEGER NOT NULL DEFAULT -1
+        )`},
+		{SQL: `CREATE TABLE IF NOT EXISTS user_recovery_codes (
+            username TEXT NOT NULL,
+            code_hash TEXT NOT NULL,
+            PRIMARY KEY(username, code_hash)
+        )`},
 		{SQL: `CREATE TABLE IF NOT EXISTS tasks (
 			id          TEXT PRIMARY KEY,
 			type        TEXT NOT NULL,

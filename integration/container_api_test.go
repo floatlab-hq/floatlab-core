@@ -123,7 +123,7 @@ func startAppliance(t *testing.T) string {
 	// A path flake includes new source files that Git flakes omit until staged.
 	// Keep the result link outside the source tree so consecutive passes reuse the image.
 	result := filepath.Join(t.TempDir(), "appliance")
-	run(t, appliance, nil, "nix", "--extra-experimental-features", "nix-command flakes", "build", "path:"+root+"?dir=floatlab-appliance-image#iso", "--print-build-logs", "--out-link", result)
+	run(t, appliance, nil, "nix", "--extra-experimental-features", "nix-command flakes", "build", "path:"+root+"?dir=floatlab-appliance-image#dev-iso", "--print-build-logs", "--out-link", result)
 	images, err := filepath.Glob(filepath.Join(result, "iso", "*.iso"))
 	if err != nil || len(images) != 1 {
 		t.Fatalf("expected one appliance ISO: %v %v", images, err)

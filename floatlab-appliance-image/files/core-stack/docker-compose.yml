@@ -3,7 +3,7 @@ name: floatlab-system
 services:
   rqlite:
     image: rqlite/rqlite:8.26.0
-    command: -node-id=node1 -raft-addr=rqlite:4002 -raft-adv-addr=rqlite:4002
+    command: -node-id=${FLOATLAB_NODE_ID:-node1} -raft-addr=rqlite:4002 -raft-adv-addr=rqlite:4002
     volumes:
       - /floatlab/system/rqlite:/rqlite/file
     restart: unless-stopped
@@ -41,21 +41,21 @@ services:
     image: floatlab-control:local
     user: "0:0"
     environment:
-      FLOATLAB_BOOTSTRAP_USER: demo
-      FLOATLAB_BOOTSTRAP_PASSWORD: floatlab
+      FLOATLAB_APPLIANCE_CONFIG: /floatlab/system/etc/appliance.json
+      FLOATLAB_CREDENTIAL_KEY_FILE: /floatlab/system/etc/credential.key
+      FLOATLAB_BOOTSTRAP_FILE: /floatlab/system/etc/bootstrap.json
     command:
       - --listen=:8080
       - --rqlite-url=http://rqlite:4001
-      - --raft-id=node1
       - --raft-bind=0.0.0.0:7000
       - --raft-advertise=floatlab-control:7000
       - --raft-data=/var/lib/floatlab/raft
       - --raft-bootstrap=true
       - --vlogs-url=http://victoria-logs:9428
       - --vmetrics-url=http://victoria-metrics:8428
-      - --host-node-id=node1
+      - --host-node-id=${FLOATLAB_NODE_ID:-node1}
       - --host-socket=/run/floatlab/hostd.sock
-      - --jwt-secret=floatlab-dev
+      - --register-local-node
     ports:
       - "0.0.0.0:8080:8080"
     volumes:
