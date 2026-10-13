@@ -42,19 +42,23 @@ experimental-features = nix-command flakes
 ## Build the ISO
 
 ```bash
-nix build .#iso --print-build-logs
+./scripts/build-iso.sh
 ```
 
 The ISO is produced under:
 
 ```text
-result/iso/floatlab-appliance-*.iso
+result/iso/floatlab-installer-{version}.iso
 ```
 
-Equivalent helper:
+`version` is the Git tag pointing at HEAD, or the short Git commit hash when HEAD
+is untagged. Tags must be present locally (fetch tags first in shallow CI checkouts).
+Uncommitted changes retain HEAD's version.
+
+Direct Nix builds use the short commit hash; use the helper above for tag naming:
 
 ```bash
-./scripts/build-iso.sh
+nix build .#iso --print-build-logs
 ```
 
 ## Console installation

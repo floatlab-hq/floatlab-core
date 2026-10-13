@@ -9,6 +9,8 @@
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
+      floatlab-version = let version = builtins.getEnv "FLOATLAB_INSTALLER_VERSION";
+        in if version != "" then version else pkgs.lib.removeSuffix "-dirty" (self.shortRev or self.dirtyShortRev or "unknown");
       floatlab-binaries = pkgs.buildGoModule {
         pname = "floatlab";
         version = "0.1.0";
@@ -64,13 +66,13 @@
       nixosConfigurations.floatlab-iso = nixpkgs.lib.nixosSystem {
         inherit system;
         modules = [ ./nixos/iso.nix ];
-        specialArgs = { inherit floatlab-binaries floatlab-control-image; floatlab-development = false; };
+        specialArgs = { inherit floatlab-binaries floatlab-control-image floatlab-version; floatlab-development = false; };
       };
 
       nixosConfigurations.floatlab-dev-iso = nixpkgs.lib.nixosSystem {
         inherit system;
         modules = [ ./nixos/iso.nix ];
-        specialArgs = { inherit floatlab-binaries floatlab-control-image; floatlab-development = true; };
+        specialArgs = { inherit floatlab-binaries floatlab-control-image floatlab-version; floatlab-development = true; };
       };
       packages.${system} = {
         iso = makeISO self.nixosConfigurations.floatlab-iso;

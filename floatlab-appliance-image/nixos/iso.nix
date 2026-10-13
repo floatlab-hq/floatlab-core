@@ -1,4 +1,4 @@
-{ config, lib, modulesPath, pkgs, ... }:
+{ lib, modulesPath, floatlab-version, ... }:
 {
   imports = [
     (modulesPath + "/installer/cd-dvd/installation-cd-minimal.nix")
@@ -13,7 +13,7 @@
     ./modules/installer.nix
   ];
 
-  image.fileName = lib.mkForce "floatlab-appliance-${config.system.nixos.label}-${pkgs.stdenv.hostPlatform.system}.iso";
+  image.baseName = lib.mkForce "floatlab-installer-${floatlab-version}";
   isoImage.volumeID = lib.mkForce "FLOATLAB";
 
   # The standard NixOS live ISO already uses a compressed squashfs store and
