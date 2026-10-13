@@ -78,24 +78,13 @@ in {
     wantedBy = lib.mkIf (!floatlab-development) (lib.mkForce []);
     serviceConfig.ExecCondition = lib.mkIf (!floatlab-development) gate;
   };
-  systemd.services.floatlab-install-worker = {
-    description = "FloatLab installation worker";
-    path = with pkgs; [ coreutils util-linux dosfstools e2fsprogs grub2_efi zfs systemd inetutils iproute2 ];
-    serviceConfig = {
-      Type = "simple";
-      ExecStart = "${floatlab-binaries}/bin/floatlab-installer worker";
-      UMask = "0077";
-      TimeoutStartSec = "infinity";
-      Restart = "no";
-    };
-  };
   systemd.services."floatlab-installer-console@" = {
     description = "FloatLab installer console on %I";
     conflicts = [ "getty@%i.service" "serial-getty@%i.service" ];
     after = [ "systemd-udev-settle.service" "getty@%i.service" "serial-getty@%i.service" ];
-    path = with pkgs; [ coreutils util-linux zfs systemd ];
+    path = with pkgs; [ coreutils util-linux dosfstools e2fsprogs grub2_efi zfs systemd inetutils iproute2 ];
     serviceConfig = {
-      ExecStart = "${floatlab-binaries}/bin/floatlab-installer console";
+      ExecStart = "${floatlab-binaries}/bin/install-tui";
       StandardInput = "tty-force";
       StandardOutput = "tty";
       StandardError = "tty";
@@ -103,9 +92,10 @@ in {
       TTYReset = true;
       TTYVHangup = true;
       KillSignal = "SIGHUP";
-      TimeoutStopSec = 5;
+      TimeoutStopSec = "infinity";
       UMask = "0077";
       Restart = "on-failure";
+      Environment = "TERM=xterm-256color";
       RestartForceExitStatus = "SIGHUP";
       RestartSec = 5;
     };

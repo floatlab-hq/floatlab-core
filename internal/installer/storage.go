@@ -21,23 +21,32 @@ const GiB int64 = 1 << 30
 const MiB int64 = 1 << 20
 
 type Disk struct {
-	Path           string   `json:"path"`
-	Device         string   `json:"device"`
-	Model          string   `json:"model"`
-	Serial         string   `json:"serial"`
-	Size           int64    `json:"size"`
-	Fingerprint    string   `json:"fingerprint"`
-	PartitionIDs   []string `json:"partition_ids,omitempty"`
-	PartitionTable string   `json:"partition_table"`
-	Eligible       bool     `json:"eligible"`
-	Reason         string   `json:"reason,omitempty"`
+	Path           string      `json:"path"`
+	Device         string      `json:"device"`
+	Model          string      `json:"model"`
+	Manufacturer   string      `json:"manufacturer"`
+	Partitions     []Partition `json:"partitions,omitempty"`
+	Serial         string      `json:"serial"`
+	Size           int64       `json:"size"`
+	Fingerprint    string      `json:"fingerprint"`
+	PartitionIDs   []string    `json:"partition_ids,omitempty"`
+	PartitionTable string      `json:"partition_table"`
+	Eligible       bool        `json:"eligible"`
+	Reason         string      `json:"reason,omitempty"`
 }
+type Partition struct {
+	Size       int64  `json:"size"`
+	Filesystem string `json:"filesystem"`
+}
+
 type block struct {
 	Name        string   `json:"name"`
 	KName       string   `json:"kname"`
 	Type        string   `json:"type"`
 	Size        int64    `json:"size"`
 	Model       string   `json:"model"`
+	Vendor      string   `json:"vendor"`
+	Filesystem  string   `json:"fstype"`
 	Serial      string   `json:"serial"`
 	RO          bool     `json:"ro"`
 	Mountpoints []string `json:"mountpoints"`
@@ -72,7 +81,7 @@ func occupied(b block, active string) bool {
 	return false
 }
 func Inventory(ctx context.Context) ([]Disk, error) {
-	out, err := Output(ctx, "lsblk", "--json", "--bytes", "--paths", "--output", "NAME,KNAME,TYPE,SIZE,MODEL,SERIAL,RO,MOUNTPOINTS")
+	out, err := Output(ctx, "lsblk", "--json", "--bytes", "--paths", "--output", "NAME,KNAME,TYPE,SIZE,VENDOR,MODEL,SERIAL,FSTYPE,RO,MOUNTPOINTS")
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +105,12 @@ func Inventory(ctx context.Context) ([]Disk, error) {
 		if b.Type != "disk" {
 			continue
 		}
-		d := Disk{Device: b.Name, Model: strings.TrimSpace(b.Model), Serial: strings.TrimSpace(b.Serial), Size: b.Size, Eligible: true}
+		d := Disk{Device: b.Name, Model: strings.TrimSpace(b.Model), Manufacturer: strings.TrimSpace(b.Vendor), Serial: strings.TrimSpace(b.Serial), Size: b.Size, Eligible: true}
+		for _, child := range b.Children {
+			if child.Type == "part" {
+				d.Partitions = append(d.Partitions, Partition{Size: child.Size, Filesystem: child.Filesystem})
+			}
+		}
 		for _, id := range ids {
 			target, e := filepath.EvalSymlinks(id)
 			if e == nil && target == b.Name && !strings.Contains(filepath.Base(id), "-part") {
@@ -177,30 +191,132 @@ func ZPoolArgs(disks []Disk) []string {
 	}
 	return args
 }
-func ZPoolCommand(disks []Disk) string { return "zpool " + strings.Join(ZPoolArgs(disks), " ") }
 
-// ParseZPool accepts exactly the generated command with only four property values editable.
+// The editable preview names whole disks; the service chooses partition paths.
+func ZPoolCommand(disks []Disk) string {
+	args := wholeDiskArgs(ZPoolArgs(disks), disks)
+	return "zpool " + strings.Join(args, " ")
+}
+
+// ParseZPool never invokes a shell. Only known physical disks can be vdevs;
+// the fixed pool name and mount/cache properties are required by the appliance.
 func ParseZPool(command string, disks []Disk) ([]string, error) {
+	if strings.ContainsAny(command, "|;&`$<>\x00") {
+		return nil, fmt.Errorf("enter one zpool create command without shell operators")
+	}
 	words, err := shlex.Split(command)
 	if err != nil {
 		return nil, err
 	}
-	expected := append([]string{"zpool"}, ZPoolArgs(disks)...)
-	if len(words) != len(expected) {
-		return nil, fmt.Errorf("only ashift, autotrim, compression, and atime may be edited")
+	if len(words) < 4 || words[0] != "zpool" || words[1] != "create" {
+		return nil, fmt.Errorf("command must start with zpool create")
 	}
-	allowed := map[string]map[string]bool{"ashift": {"12": true, "13": true}, "autotrim": {"on": true, "off": true}, "compression": {"zstd": true, "lz4": true, "off": true}, "atime": {"on": true, "off": true}}
-	for i, w := range words {
-		if w == expected[i] {
+	args := []string{"create", "-f", "-o", "cachefile=none", "-O", "mountpoint=none"}
+	i := 2
+	poolFirst := words[i] == "floatlab"
+	if poolFirst {
+		i++
+	}
+	for i < len(words) && strings.HasPrefix(words[i], "-") {
+		flag := words[i]
+		i++
+		if flag == "-f" {
 			continue
 		}
-		key, _, ok := strings.Cut(expected[i], "=")
-		k, value, valid := strings.Cut(w, "=")
-		if !ok || !valid || k != key || !allowed[k][value] {
-			return nil, fmt.Errorf("unsupported edit to %q", expected[i])
+		if (flag != "-o" && flag != "-O") || i == len(words) {
+			return nil, fmt.Errorf("unsupported zpool option %s", flag)
+		}
+		key, value, ok := strings.Cut(words[i], "=")
+		i++
+		if !ok || value == "" {
+			return nil, fmt.Errorf("properties must use name=value")
+		}
+		switch flag + " " + key {
+		case "-o cachefile", "-O mountpoint":
+			if value != "none" {
+				return nil, fmt.Errorf("%s must remain none", key)
+			}
+			continue
+		case "-o ashift":
+			n, e := strconv.Atoi(value)
+			if e != nil || n < 12 || n > 16 {
+				return nil, fmt.Errorf("ashift must be between 12 and 16")
+			}
+		case "-o autotrim", "-O atime":
+			if value != "on" && value != "off" {
+				return nil, fmt.Errorf("%s must be on or off", key)
+			}
+		case "-O compression":
+			if !regexp.MustCompile(`^(off|on|lz4|lzjb|zle|gzip(-[1-9])?|zstd(-([1-9]|1[0-9]))?)$`).MatchString(value) {
+				return nil, fmt.Errorf("invalid compression")
+			}
+		default:
+			return nil, fmt.Errorf("unsupported property %s", key)
+		}
+		args = append(args, flag, key+"="+value)
+	}
+	if !poolFirst {
+		if i >= len(words) || words[i] != "floatlab" {
+			return nil, fmt.Errorf("pool must be named floatlab")
+		}
+		i++
+	}
+	args = append(args, "floatlab")
+	seen := map[string]bool{}
+	topology := map[string]bool{"mirror": true, "raidz": true, "raidz1": true, "raidz2": true, "raidz3": true, "log": true, "cache": true, "spare": true, "special": true, "dedup": true}
+	for _, word := range words[i:] {
+		name := strings.ToLower(word)
+		if topology[name] || regexp.MustCompile(`^draid[1-3](:[0-9]+[cds])*$`).MatchString(name) {
+			args = append(args, name)
+			continue
+		}
+		var found *Disk
+		for j := range disks {
+			d := &disks[j]
+			if word == d.Path || word == d.Device || word == DataPartition(*d) {
+				found = d
+				break
+			}
+		}
+		if found == nil || !found.Eligible || seen[found.Path] {
+			return nil, fmt.Errorf("unknown, unavailable, or duplicate disk %s", word)
+		}
+		seen[found.Path] = true
+		args = append(args, DataPartition(*found))
+	}
+	if len(seen) == 0 {
+		return nil, fmt.Errorf("command must contain at least one disk")
+	}
+	return args, nil
+}
+
+func commandDisks(args []string, inventory []Disk) []Disk {
+	var selected []Disk
+	for _, arg := range args {
+		for _, d := range inventory {
+			if arg == DataPartition(d) {
+				selected = append(selected, d)
+			}
 		}
 	}
-	return words[1:], nil
+	return selected
+}
+
+func wholeDiskArgs(args []string, disks []Disk) []string {
+	result := append([]string(nil), args...)
+	for i, arg := range result {
+		for _, d := range disks {
+			if arg == DataPartition(d) {
+				result[i] = d.Path
+			}
+		}
+	}
+	return result
+}
+
+func dryRunPool(ctx context.Context, args []string) (string, error) {
+	out, err := Output(ctx, "zpool", append([]string{"create", "-n"}, args[1:]...)...)
+	return Diagnostic(out), err
 }
 func ValidateSelection(disks []Disk, payloadBytes int64) error {
 	if len(disks) == 0 {

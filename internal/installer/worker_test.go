@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,7 +101,7 @@ func TestWorkerRetriesFinalizationWithoutErasing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, command := range []string{"wipefs --all", "sfdisk --wipe", "zpool create", "mkfs.ext4 -F"} {
+	for _, command := range []string{"wipefs --all", "sfdisk --wipe", "zpool create -f", "mkfs.ext4 -F"} {
 		if strings.Count(string(commands), command) != 1 {
 			t.Fatalf("destructive work repeated: %s\n%s", command, commands)
 		}
@@ -110,6 +111,9 @@ func TestWorkerRetriesFinalizationWithoutErasing(t *testing.T) {
 	}
 	if strings.Contains(string(commands), "reboot") {
 		t.Fatal("failed installation rebooted")
+	}
+	if dry, create := strings.Index(string(commands), "zpool create -n"), strings.Index(string(commands), "zpool create -f"); dry < 0 || create < dry {
+		t.Fatal("pool creation did not follow a partition dry-run", string(commands))
 	}
 	// A checkpoint before storage is ready may never replay destructive work.
 	if err := credentials.WritePrivate(runtimeDir+"/status.json", Status{Started: time.Now(), Phase: "Partition and format disks"}); err != nil {
@@ -129,5 +133,83 @@ func TestCopyRejectsCorruptPayload(t *testing.T) {
 	os.WriteFile(source, []byte("corrupt"), 0600)
 	if err := copyVerified(source, root+"/target", strings.Repeat("a", 64)); err == nil {
 		t.Fatal("corrupt payload accepted")
+	}
+}
+
+func TestCopyProgressCountsWrittenBytesAndVerifiesDestination(t *testing.T) {
+	root := t.TempDir()
+	data := []byte(strings.Repeat("Floatlab image\n", 10000))
+	if err := os.WriteFile(root+"/source", data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	var copied int
+	if err := copyVerifiedProgress(root+"/source", root+"/target", hex.EncodeToString(sum[:]), func(n int) { copied += n }); err != nil {
+		t.Fatal(err)
+	}
+	if copied != len(data) {
+		t.Fatalf("reported %d bytes for %d-byte image", copied, len(data))
+	}
+	written, err := os.ReadFile(root + "/target")
+	if err != nil || string(written) != string(data) {
+		t.Fatal("destination differs", err)
+	}
+}
+
+func TestFrontendLossFinishesActiveCommandAndStopsBeforePoolCreation(t *testing.T) {
+	root := t.TempDir()
+	runtimeDir, persistentDir, mediaDir, bin := root+"/run", root+"/etc", root+"/media", root+"/bin"
+	for _, dir := range []string{runtimeDir, persistentDir, mediaDir, bin} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	log, entered, finished := root+"/commands", root+"/entered", root+"/finished"
+	for _, name := range []string{"wipefs", "sfdisk", "udevadm", "mkfs.vfat", "mkfs.ext4", "zpool"} {
+		script := "#!/bin/sh\necho " + name + " >> " + log + "\n"
+		if name == "wipefs" {
+			script += "touch " + entered + "\nsleep 0.1\ntouch " + finished + "\n"
+		}
+		if err := os.WriteFile(bin+"/"+name, []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	payload := Payload{Kernel: "kernel", Initrd: "initrd", Init: "/nix/store/example/init", Bytes: 3, Files: map[string]string{"kernel": strings.Repeat("a", 64), "initrd": strings.Repeat("b", 64), "nix-store.squashfs": strings.Repeat("c", 64)}}
+	if err := credentials.WritePrivate(mediaDir+"/floatlab-manifest.json", payload); err != nil {
+		t.Fatal(err)
+	}
+	disks := testDisks()[:1]
+	if err := credentials.WritePrivate(runtimeDir+"/operation.json", Operation{Disks: disks, Command: ZPoolCommand(disks)}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		for {
+			if _, err := os.Stat(entered); err == nil {
+				cancel()
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Millisecond):
+			}
+		}
+	}()
+	err := installWorker(ctx, runtimeDir, persistentDir, mediaDir, func(context.Context) ([]Disk, error) { return disks, nil }, nil)
+	<-stopped
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(finished); err != nil {
+		t.Fatal("active wipe command was killed", err)
+	}
+	commands, err := os.ReadFile(log)
+	if err != nil || strings.TrimSpace(string(commands)) != "wipefs" {
+		t.Fatal("new operation began after frontend loss", string(commands), err)
 	}
 }

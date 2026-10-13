@@ -63,35 +63,74 @@ nix build .#iso --print-build-logs
 
 ## Console installation
 
-The production ISO opens the installer on the appliance screen and serial console.
-Press Enter on either console to claim the single installation session.
+The production ISO runs the Bubble Tea `install-tui` on the appliance screen and
+serial console. Press Enter on either console to claim the single installation
+session. The TUI launches `install-service` and exchanges newline-delimited JSON
+through stdin/stdout; service diagnostics go to a private temporary log.
 
-1. Select disks, inspect their current partition tables and proposed layout, edit
-   supported ZFS properties if needed, and type `ERASE ALL DATA` to confirm.
-   One disk creates a single-disk pool; multiple disks form one mirror. Every disk
-   receives an EFI partition, an immutable image partition, and a ZFS partition.
-2. Enter the timezone, node name, and DHCP or static IPv4 settings while the
-   systemd worker prepares storage and installs the image in the background.
-3. Create the FloatLab administrator. When NTP is synchronized, optionally enroll
-   an authenticator and save the ten single-use recovery codes. These credentials
-   belong to FloatLab; they do not create a Linux account.
-4. Wait for container images, service health, node registration, and administrator
-   login to be verified. Success starts a 30-second reboot countdown. Press Enter
-   to cancel it, then type `REBOOT` when ready.
+1. Select disks with checkboxes. Rows show the disk name, manufacturer, model,
+   capacity, and existing partitions. One disk generates a single-disk pool command;
+   multiple disks generate a mirror. Edit the full command for raidz or other vdev
+   layouts. The bordered multiline editor groups the pool name, options, and
+   topology into three lines. Enter inserts a newline; Ctrl+S validates and previews.
+   The service parses arguments without a shell and dry-runs against whole
+   disks. Inspect the rewritten command and partition plan, then type
+   `ERASE ALL DATA` to confirm.
+2. Installation starts immediately while you enter host and network settings.
+   Choose a timezone from the searchable list and select DHCP or Static with the
+   radio buttons. Static addressing fields appear only for Static. The service
+   validates these settings before opening the separate administrator account step.
+   Each disk receives a 512 MiB UEFI partition, an immutable Floatlab
+   boot-image partition (at least 8 GiB), and a ZFS partition (at least 16 GiB).
+   The service repeats the dry-run against the actual ZFS partitions before creating
+   the pool. It copies and verifies the image and installs each UEFI bootloader.
+3. Review and explicitly submit configuration. The service validates it immediately;
+   errors remain editable. Optionally enroll TOTP when NTP is synchronized and save
+   the ten single-use recovery codes. If copying finishes first, installation waits
+   for valid configuration before applying settings and verifying the stack.
+4. Success shows a 30-second reboot countdown. Press P or Space to pause it, or R
+   or Enter to reboot immediately. Failure remains visible without a countdown;
+   reboot manually after inspecting the error. There is no quit action or in-place
+   installation retry.
 
-Installation requires x86-64 UEFI with Secure Boot disabled and Internet access
-for initial container image downloads. Each disk needs the image reservation
-(at least 8 GiB), 512 MiB EFI space, and at least 16 GiB for ZFS. Installed boots
-use cached container images and do not require registry access.
+The header shows branding and the input step. The bottom six lines stay dedicated
+to installation status, activity, overall progress, copied bytes, and transfer speed.
+Copying accounts for most progress; other operations indicate activity and milestones.
 
-The worker survives a console disconnect; reopen the console to continue. Logs
-are available through `journalctl -u floatlab-install-worker`. Disk identity or
-partition changes invalidate erase confirmation. Destructive operations are never
-replayed automatically. Once the pool checkpoint is saved, image copying and
-finalization can be retried without formatting again. Resume incomplete image
-copying from the original ISO, rather than the installed image being copied.
-If interruption occurred before that checkpoint, inspect the partial disks/pool
-before beginning a fresh, explicitly confirmed installation.
+Installation requires x86-64 UEFI with Secure Boot disabled and Internet access for
+initial container downloads. Installed boots use cached container images. On an
+unexpected frontend disconnect, the service finishes the active operation, cleans
+up, and stops before starting the next installation stage. Inspect partial disks
+before reinstalling; destructive work is never replayed automatically.
+
+### Try the TUI without installing
+
+Run these commands from the repository root with Go installed:
+
+```bash
+go build -o /tmp/floatlab-install-service-mock ./cmd/install-service-mock
+go run ./cmd/install-tui --mock --service /tmp/floatlab-install-service-mock
+```
+
+See the [installer developer guide](DEVELOPMENT.md) for UI controls, mock scenarios,
+and development checks. To build standalone executables together:
+
+```bash
+go build -o /tmp/floatlab-installer/ ./cmd/install-tui ./cmd/install-service-mock
+/tmp/floatlab-installer/install-tui --mock
+/tmp/floatlab-installer/install-tui --mock --scenario rejected-config --step-delay 100ms
+```
+
+Mock scenarios: `success`, `delayed-config`, `rejected-config`, `failure`, and
+`cancellation`. All use the real session protocol and simulated disks. Pool dry-runs
+always validate; configuration validation and TOTP enrollment still work. Reboot
+exits the mock instead of rebooting the host. `--service` selects a service executable.
+
+The real and mock service protocols and lifecycle checks are covered by Go tests:
+
+```bash
+go test -race ./internal/installer ./internal/installtui
+```
 
 Settings, identity, credential encryption key, and checkpoints persist under
 `/floatlab/system/etc`. Administrator bootstrap files contain a password hash and

@@ -15,13 +15,13 @@ func testDisks() []Disk {
 func TestStorageCommandAndSafety(t *testing.T) {
 	disks := testDisks()
 	command := ZPoolCommand(disks)
-	if !strings.Contains(command, "floatlab mirror /dev/disk/by-id/virtio-a-part3") {
+	if !strings.Contains(command, "floatlab mirror /dev/disk/by-id/virtio-a") {
 		t.Fatal(command)
 	}
 	if _, err := ParseZPool(strings.Replace(command, "compression=zstd", "compression=lz4", 1), disks); err != nil {
 		t.Fatal(err)
 	}
-	for _, bad := range []string{command + "; reboot", strings.Replace(command, "mirror", "raidz", 1), strings.Replace(command, "virtio-a-part3", "virtio-c-part3", 1), strings.Replace(command, "ashift=12", "ashift=9", 1), strings.Replace(command, "mountpoint=none", "mountpoint=/", 1)} {
+	for _, bad := range []string{command + "; reboot", strings.Replace(command, "virtio-a", "virtio-c", 1), strings.Replace(command, "ashift=12", "ashift=9", 1), strings.Replace(command, "mountpoint=none", "mountpoint=/", 1)} {
 		if _, err := ParseZPool(bad, disks); err == nil {
 			t.Fatalf("accepted %s", bad)
 		}
@@ -53,6 +53,36 @@ func TestStorageCommandAndSafety(t *testing.T) {
 	}
 	if ImageSize(GiB) != 8*GiB || ImageSize(9*GiB+1) != 12*GiB {
 		t.Fatal("image sizing")
+	}
+}
+
+func TestEditableTopologyMapsEveryDiskToItsZFSPartition(t *testing.T) {
+	disks := testDisks()
+	command := "zpool create -o ashift=12 floatlab raidz2 /dev/vda /dev/disk/by-id/virtio-b"
+	args, err := ParseZPool(command, disks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := strings.Join(args, " ")
+	if !strings.Contains(final, "floatlab raidz2 "+DataPartition(disks[0])+" "+DataPartition(disks[1])) {
+		t.Fatal(final)
+	}
+	whole := strings.Join(wholeDiskArgs(args, disks), " ")
+	if strings.Contains(whole, "-part3") || !strings.Contains(whole, disks[0].Path) {
+		t.Fatal(whole)
+	}
+	for _, invalid := range []string{
+		"zpool create floatlab /dev/vda /dev/disk/by-id/virtio-a",
+		"zpool create floatlab /tmp/file-vdev",
+		"zpool create -o cachefile=/etc/zfs/zpool.cache floatlab /dev/vda",
+		"zpool create -O mountpoint=/ floatlab /dev/vda",
+		"zpool create floatlab /dev/vda | reboot",
+		"zpool create floatlab $(whoami)",
+		"zpool create floatlab /dev/vda\nzpool create another /dev/vdb",
+	} {
+		if _, err := ParseZPool(invalid, disks); err == nil {
+			t.Fatal("unsafe command accepted", invalid)
+		}
 	}
 }
 func TestSettingsAndBootPayload(t *testing.T) {
