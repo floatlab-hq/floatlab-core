@@ -14,7 +14,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 	_ "time/tzdata"
@@ -75,6 +74,13 @@ func (a Appliance) Validate() error {
 	if _, err := time.LoadLocation(a.Timezone); err != nil {
 		return fmt.Errorf("unknown timezone")
 	}
+	if err := a.validateIdentity(); err != nil {
+		return err
+	}
+	return a.Network.Validate()
+}
+
+func (a Appliance) validateIdentity() error {
 	if len(a.HostID) != 8 || a.HostID == "00000000" {
 		return fmt.Errorf("invalid ZFS host ID")
 	}
@@ -84,7 +90,7 @@ func (a Appliance) Validate() error {
 	if a.NodeID == "" || len(a.JWTSecret) < 32 {
 		return fmt.Errorf("invalid node identity")
 	}
-	return a.Network.Validate()
+	return nil
 }
 func Lock(path string) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
@@ -173,9 +179,6 @@ func copyVerifiedProgress(source, target, checksum string, progress func(int)) e
 		return fmt.Errorf("written image checksum mismatch")
 	}
 	return nil
-}
-func GRUB(p Payload, uuid string, a Appliance) string {
-	return fmt.Sprintf("set timeout=3\nserial --unit=0 --speed=115200\nterminal_input console serial\nterminal_output console serial\nmenuentry 'FloatLab' {\n search --no-floppy --fs-uuid --set=root %s\n linux /%s init=%s root=UUID=%s console=ttyS0,115200n8 spl.spl_hostid=0x%s floatlab.installed=1\n initrd /%s\n}\n", uuid, p.Kernel, p.Init, uuid, a.HostID, p.Initrd)
 }
 
 func worker(ctx context.Context, runtimeDir, persistentDir, mediaDir string, inventory func(context.Context) ([]Disk, error)) error {
@@ -280,7 +283,7 @@ func installWorker(stopCtx context.Context, runtimeDir, persistentDir, mediaDir 
 		return saveStatusAt(runtimeDir, persistentDir, status)
 	}
 	if !status.PoolReady && !status.StorageReady {
-		if err = ValidateSelection(op.Disks, payload.Bytes); err != nil {
+		if err = ValidateSelection(op.Disks, payload.RootBytes); err != nil {
 			return err
 		}
 		args, e := ParseZPool(op.Command, op.Disks)
@@ -306,7 +309,7 @@ func installWorker(stopCtx context.Context, runtimeDir, persistentDir, mediaDir 
 					return e
 				}
 				cmd := exec.CommandContext(ctx, "sfdisk", "--wipe", "always", d.Path)
-				cmd.Stdin = strings.NewReader(PartitionScript(ImageSize(payload.Bytes)))
+				cmd.Stdin = strings.NewReader(PartitionScript())
 				if output, e := cmd.CombinedOutput(); e != nil {
 					return fmt.Errorf("partition %s: %w: %s", d.Path, e, Diagnostic(output))
 				}
@@ -314,9 +317,6 @@ func installWorker(stopCtx context.Context, runtimeDir, persistentDir, mediaDir 
 					return e
 				}
 				if e := runStep("mkfs.vfat", "-F", "32", d.Path+"-part1"); e != nil {
-					return e
-				}
-				if e := runStep("mkfs.ext4", "-F", d.Path+"-part2"); e != nil {
 					return e
 				}
 			}
@@ -338,7 +338,7 @@ func installWorker(stopCtx context.Context, runtimeDir, persistentDir, mediaDir 
 		}
 
 		for i := range op.Disks {
-			for partition := 1; partition <= 3; partition++ {
+			for partition := 1; partition <= 2; partition++ {
 				id, e := outputStep("blkid", "-s", "PARTUUID", "-o", "value", fmt.Sprintf("%s-part%d", op.Disks[i].Path, partition))
 				if e != nil {
 					return e
@@ -381,34 +381,42 @@ func installWorker(stopCtx context.Context, runtimeDir, persistentDir, mediaDir 
 			return err
 		}
 		if err = phase("Copy image and install EFI bootloaders", func() error {
-			files := make([]string, 0, len(payload.Files))
-			for name := range payload.Files {
-				files = append(files, name)
+			archive, e := os.Stat(mediaDir + "/floatlab-root.tar.gz")
+			if e != nil {
+				return e
 			}
-			sort.Strings(files)
-			status.Total = payload.Bytes * int64(len(op.Disks))
+			bootloader, e := os.Stat(mediaDir + "/zfsbootmenu.EFI")
+			if e != nil {
+				return e
+			}
+			status.Total = archive.Size() + bootloader.Size()*int64(len(op.Disks))
+			status.Copied = 0
 			copyStarted := time.Now()
 			lastProgress := time.Time{}
+			progress := func(n int) {
+				status.Copied += int64(n)
+				status.Progress = 0.1 + 0.8*float64(status.Copied)/float64(status.Total)
+				status.BytesPerSecond = float64(status.Copied) / time.Since(copyStarted).Seconds()
+				if time.Since(lastProgress) >= 100*time.Millisecond {
+					publish()
+					lastProgress = time.Now()
+				}
+			}
+			status.Activity = "Copying and verifying OS dataset"
+			if e := installOS(stopCtx, runtimeDir, mediaDir, payload, op.Identity, b, progress); e != nil {
+				return e
+			}
+			// A completed snapshot needs no OS transfer on retry.
+			status.Total = status.Copied + bootloader.Size()*int64(len(op.Disks))
 			for i, d := range op.Disks {
 				if e := stopCtx.Err(); e != nil {
 					return e
 				}
-				diskErr := func() (diskErr error) {
-					image := fmt.Sprintf("%s/image-%d", runtimeDir, i)
+				if e := func() (diskErr error) {
 					efi := fmt.Sprintf("%s/efi-%d", runtimeDir, i)
-					for _, dir := range []string{image, efi} {
-						if e := os.MkdirAll(dir, 0700); e != nil {
-							return e
-						}
-					}
-					if e := runStep("mount", d.Path+"-part2", image); e != nil {
+					if e := os.MkdirAll(efi, 0700); e != nil {
 						return e
 					}
-					defer func() {
-						cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-						defer cancel()
-						diskErr = errors.Join(diskErr, run(cleanup, "umount", image))
-					}()
 					if e := runStep("mount", d.Path+"-part1", efi); e != nil {
 						return e
 					}
@@ -417,50 +425,18 @@ func installWorker(stopCtx context.Context, runtimeDir, persistentDir, mediaDir 
 						defer cancel()
 						diskErr = errors.Join(diskErr, run(cleanup, "umount", efi))
 					}()
-					for _, name := range files {
-						if e := stopCtx.Err(); e != nil {
-							return e
-						}
-						status.Phase = "Installing Floatlab"
-						status.Activity = "Copying and verifying " + name + " to " + d.Device
-						if e := copyVerifiedProgress(filepath.Join(mediaDir, name), filepath.Join(image, name), payload.Files[name], func(n int) {
-							status.Copied += int64(n)
-							status.Progress = 0.1 + 0.8*float64(status.Copied)/float64(status.Total)
-							status.BytesPerSecond = float64(status.Copied) / time.Since(copyStarted).Seconds()
-							if time.Since(lastProgress) >= 100*time.Millisecond {
-								publish()
-								lastProgress = time.Now()
-							}
-						}); e != nil {
-							return e
-						}
-					}
-					if e := stopCtx.Err(); e != nil {
-						return e
-					}
-					status.Phase = "Installing bootloader"
-					status.Activity = "Installing UEFI bootloader on " + d.Device
+					status.Activity = "Installing ZFSBootMenu on " + d.Device
 					publish()
-					uuid, e := outputStep("blkid", "-s", "UUID", "-o", "value", d.Path+"-part2")
-					if e != nil {
+					target := efi + "/EFI/BOOT/BOOTX64.EFI"
+					if e := copyVerifiedProgress(mediaDir+"/zfsbootmenu.EFI", target, payload.Files["zfsbootmenu.EFI"], progress); e != nil {
 						return e
 					}
-					if e = credentials.WriteBytes(image+"/floatlab-manifest.json", b); e != nil {
+					if e := runStep("zbm-kcl", "-r", "spl_hostid", "-r", "zbm.prefer", "-r", "zbm.import_policy", "-r", "zbm.timeout", "-r", "console", "-a", "spl_hostid="+op.Identity.HostID+" zbm.prefer=floatlab!! zbm.import_policy=strict zbm.timeout=5 console=tty0 console=ttyS0,115200n8", target); e != nil {
 						return e
 					}
-					if e = credentials.WriteBytes(image+"/floatlab-host-id", []byte(op.Identity.HostID)); e != nil {
-						return e
-					}
-					if e = credentials.WriteBytes(image+"/boot/grub/grub.cfg", []byte(GRUB(payload, strings.TrimSpace(string(uuid)), op.Identity))); e != nil {
-						return e
-					}
-					if e = runStep("grub-install", "--target=x86_64-efi", "--removable", "--no-nvram", "--efi-directory="+efi, "--boot-directory="+image+"/boot"); e != nil {
-						return e
-					}
-					return nil
-				}()
-				if diskErr != nil {
-					return diskErr
+					return runStep("sync", "-f", target)
+				}(); e != nil {
+					return e
 				}
 			}
 			return nil

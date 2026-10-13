@@ -8,14 +8,6 @@ let
     name = "floatlab-restore-identity";
     runtimeInputs = [ pkgs.coreutils pkgs.jq pkgs.systemd ];
     text = ''
-      if [ -f /iso/floatlab-host-id ]; then
-        # Available before importing ZFS, including a boot from either mirror member.
-        id=$(cat /iso/floatlab-host-id)
-        [[ "$id" =~ ^[0-9a-f]{8}$ ]]
-        ${pkgs.zfs}/bin/zgenhostid -f -o /run/floatlab-hostid "$id"
-        rm -f /etc/hostid
-        cp /run/floatlab-hostid /etc/hostid
-      fi
       if [ -f /floatlab/system/etc/appliance.json ]; then
         hostnamectl --transient set-hostname "$(jq -er .node_name /floatlab/system/etc/appliance.json)"
         timedatectl set-timezone "$(jq -er .timezone /floatlab/system/etc/appliance.json)"
@@ -38,25 +30,9 @@ let
     '';
   };
 in {
-  # Scripted stage 1 takes root=UUID from each disk's GRUB entry. Live media still
-  # uses root=LABEL=FLOATLAB; both mount the same squashfs with an ephemeral root.
   boot.initrd.systemd.enable = lib.mkForce false;
-  boot.initrd.availableKernelModules = [ "ext4" ];
-  boot.initrd.kernelModules = [ "ext4" ];
-  boot.initrd.supportedFilesystems = [ "ext4" ];
-  # installation-cd-base overrides the complete fileSystems attribute, so the
-  # media mount must be changed at that same level rather than only at a leaf.
-  fileSystems = lib.mkForce (config.lib.isoFileSystems // {
-    "/iso" = {
-      device = "/dev/root";
-      fsType = "auto";
-      options = [ "ro" ];
-      neededForBoot = true;
-      noCheck = true;
-    };
-  });
   services.timesyncd.enable = true;
-  environment.systemPackages = [ floatlab-binaries pkgs.gptfdisk pkgs.dosfstools pkgs.e2fsprogs pkgs.grub2_efi ];
+  environment.systemPackages = [ floatlab-binaries pkgs.gptfdisk pkgs.dosfstools pkgs.gnutar pkgs.gzip pkgs.nix pkgs.floatlab-zbm-kcl ];
   systemd.services.floatlab-boot-host-id = {
     wantedBy = [ "multi-user.target" ];
     before = [ "floatlab-zfs-import.service" ];
@@ -82,7 +58,7 @@ in {
     description = "FloatLab installer console on %I";
     conflicts = [ "getty@%i.service" "serial-getty@%i.service" ];
     after = [ "systemd-udev-settle.service" "getty@%i.service" "serial-getty@%i.service" ];
-    path = with pkgs; [ coreutils util-linux dosfstools e2fsprogs grub2_efi zfs systemd inetutils iproute2 ];
+    path = with pkgs; [ coreutils util-linux dosfstools gnutar gzip nix floatlab-zbm-kcl zfs systemd inetutils iproute2 ];
     serviceConfig = {
       ExecStart = "${floatlab-binaries}/bin/install-tui";
       StandardInput = "tty-force";

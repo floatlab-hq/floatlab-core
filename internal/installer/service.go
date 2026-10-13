@@ -152,7 +152,7 @@ func (s *Service) Serve(parent context.Context, input io.Reader, output io.Write
 		if err != nil {
 			return s.terminal(ctx, input, send, Status{Phase: "Installer startup", Error: Diagnostic([]byte(err.Error()))})
 		}
-		s.payloadBytes = payload.Bytes
+		s.payloadBytes = payload.RootBytes
 		s.disks, err = s.inventory(ctx)
 		if err != nil {
 			return s.terminal(ctx, input, send, Status{Phase: "Installer startup", Error: Diagnostic([]byte(err.Error()))})
@@ -516,7 +516,7 @@ func (s *Service) mockInstall(ctx context.Context, disks []Disk, configured <-ch
 	}
 	st.PoolReady = true
 	st.Phase = "Installing Floatlab"
-	st.Total = s.payloadBytes * int64(len(disks))
+	st.Total = s.payloadBytes
 	for i := 1; i <= 40; i++ {
 		if err := wait(); err != nil {
 			return err
@@ -524,7 +524,7 @@ func (s *Service) mockInstall(ctx context.Context, disks []Disk, configured <-ch
 		st.Copied = st.Total * int64(i) / 40
 		st.Progress = 0.1 + 0.8*float64(i)/40
 		st.BytesPerSecond = float64(st.Total/40) / s.StepDelay.Seconds()
-		st.Activity = "Copying Floatlab image"
+		st.Activity = "Copying Floatlab OS into ZFS"
 		emit(st)
 		if s.Scenario == "failure" && i == 20 {
 			return errors.New("Mock: image copy failed")
@@ -533,7 +533,7 @@ func (s *Service) mockInstall(ctx context.Context, disks []Disk, configured <-ch
 			return errors.New("Mock: frontend connection lost; active operation finished and cleanup completed")
 		}
 	}
-	st.Phase, st.Activity = "Installing bootloader", "Installing UEFI bootloaders"
+	st.Phase, st.Activity = "Installing bootloader", "Installing ZFSBootMenu on each disk"
 	emit(st)
 	if err := wait(); err != nil {
 		return err

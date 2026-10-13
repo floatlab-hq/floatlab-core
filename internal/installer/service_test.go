@@ -83,7 +83,7 @@ func validConfig() InstallConfig {
 func confirmMock(t *testing.T, s *serviceTest) Event {
 	inventory := s.event(t, "inventory")
 	preview := s.request(t, Request{Type: "preview", Command: ZPoolCommand(inventory.Disks[:2])})
-	if preview.Type != "preview" || !strings.Contains(preview.Command, "mirror /dev/disk/by-id/mock-a-part3") {
+	if preview.Type != "preview" || !strings.Contains(preview.Command, "mirror /dev/disk/by-id/mock-a-part2") {
 		t.Fatal(preview)
 	}
 	reply := s.request(t, Request{Type: "confirm", Command: preview.Command, Confirmation: "ERASE ALL DATA"})

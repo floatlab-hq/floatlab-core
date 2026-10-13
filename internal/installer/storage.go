@@ -147,15 +147,15 @@ func Inventory(ctx context.Context) ([]Disk, error) {
 }
 
 type Payload struct {
-	Kernel string            `json:"kernel"`
-	Initrd string            `json:"initrd"`
-	Init   string            `json:"init"`
-	Files  map[string]string `json:"files"`
-	Bytes  int64             `json:"bytes"`
+	Version   string            `json:"version"`
+	Init      string            `json:"init"`
+	RootBytes int64             `json:"root_bytes"`
+	Files     map[string]string `json:"files"`
+	Bytes     int64             `json:"bytes"`
 }
 
 func (p Payload) Validate() error {
-	if p.Bytes <= 0 || !strings.HasPrefix(p.Init, "/nix/store/") || strings.ContainsAny(p.Init, " \n\r'\";") {
+	if p.Bytes <= 0 || p.RootBytes <= 0 || !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`).MatchString(p.Version) || p.Version == "current" || p.Version == "live" || p.Version == "next" || !strings.HasPrefix(p.Init, "/nix/store/") || filepath.Clean(p.Init) != p.Init || !strings.HasSuffix(p.Init, "/init") || strings.ContainsAny(p.Init, " \t\n\r'\";$`\\") {
 		return fmt.Errorf("invalid image manifest")
 	}
 	for name, hash := range p.Files {
@@ -166,7 +166,7 @@ func (p Payload) Validate() error {
 			return err
 		}
 	}
-	for _, name := range []string{p.Kernel, p.Initrd, "nix-store.squashfs"} {
+	for _, name := range []string{"floatlab-root.tar.gz", "zfsbootmenu.EFI"} {
 		if _, ok := p.Files[name]; !ok {
 			return fmt.Errorf("manifest missing %s", name)
 		}
@@ -180,9 +180,9 @@ func ImageSize(payloadBytes int64) int64 {
 	}
 	return size
 }
-func DataPartition(d Disk) string { return d.Path + "-part3" }
+func DataPartition(d Disk) string { return d.Path + "-part2" }
 func ZPoolArgs(disks []Disk) []string {
-	args := []string{"create", "-f", "-o", "cachefile=none", "-o", "ashift=12", "-o", "autotrim=on", "-O", "compression=zstd", "-O", "atime=off", "-O", "mountpoint=none", "floatlab"}
+	args := []string{"create", "-f", "-o", "cachefile=none", "-o", "compatibility=openzfs-2.3-linux", "-o", "ashift=12", "-o", "autotrim=on", "-O", "compression=zstd", "-O", "atime=off", "-O", "mountpoint=none", "floatlab"}
 	if len(disks) > 1 {
 		args = append(args, "mirror")
 	}
@@ -211,7 +211,7 @@ func ParseZPool(command string, disks []Disk) ([]string, error) {
 	if len(words) < 4 || words[0] != "zpool" || words[1] != "create" {
 		return nil, fmt.Errorf("command must start with zpool create")
 	}
-	args := []string{"create", "-f", "-o", "cachefile=none", "-O", "mountpoint=none"}
+	args := []string{"create", "-f", "-o", "cachefile=none", "-o", "compatibility=openzfs-2.3-linux", "-O", "mountpoint=none"}
 	i := 2
 	poolFirst := words[i] == "floatlab"
 	if poolFirst {
@@ -235,6 +235,11 @@ func ParseZPool(command string, disks []Disk) ([]string, error) {
 		case "-o cachefile", "-O mountpoint":
 			if value != "none" {
 				return nil, fmt.Errorf("%s must remain none", key)
+			}
+			continue
+		case "-o compatibility":
+			if value != "openzfs-2.3-linux" {
+				return nil, fmt.Errorf("compatibility must remain openzfs-2.3-linux for ZFSBootMenu")
 			}
 			continue
 		case "-o ashift":
@@ -349,8 +354,8 @@ func Revalidate(selected, current []Disk) error {
 	}
 	return nil
 }
-func PartitionScript(imageBytes int64) string {
-	return "label: gpt\nunit: sectors\n\nsize=512MiB, type=U\nsize=" + strconv.FormatInt(imageBytes/MiB, 10) + "MiB, type=L\ntype=6A898CC3-1DD2-11B2-99A6-080020736631\n"
+func PartitionScript() string {
+	return "label: gpt\nunit: sectors\n\nsize=512MiB, type=U\ntype=6A898CC3-1DD2-11B2-99A6-080020736631\n"
 }
 
 // Commands never receive credentials in argv. Still suppress secret-bearing output
@@ -387,11 +392,14 @@ func verifyImageTargets(ctx context.Context, disks []Disk, mediaDir string) erro
 		return err
 	}
 	sourcePath := strings.TrimSpace(string(source))
+	if strings.HasPrefix(sourcePath, "floatlab/") {
+		return fmt.Errorf("boot the original installation ISO to resume image copying")
+	}
 	if resolved, e := filepath.EvalSymlinks(sourcePath); e == nil {
 		sourcePath = resolved
 	}
 	for _, d := range disks {
-		if len(d.PartitionIDs) != 3 {
+		if len(d.PartitionIDs) != 2 {
 			return fmt.Errorf("missing recorded partition identities; inspect installation manually")
 		}
 		imagePath := d.Path + "-part2"
@@ -399,7 +407,7 @@ func verifyImageTargets(ctx context.Context, disks []Disk, mediaDir string) erro
 			imagePath = resolved
 		}
 		if imagePath == sourcePath {
-			return fmt.Errorf("boot the original installation ISO to resume image copying; the running image partition must remain read-only")
+			return fmt.Errorf("boot the original installation ISO to resume image copying; refusing writes to the running media")
 		}
 		for i, id := range d.PartitionIDs {
 			out, e := Output(ctx, "blkid", "-s", "PARTUUID", "-o", "value", fmt.Sprintf("%s-part%d", d.Path, i+1))

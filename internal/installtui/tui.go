@@ -654,7 +654,7 @@ func (m *Model) body() string {
 	case "confirm":
 		lines = []string{"Confirm disk layout", "Esc: edit command", ""}
 		for _, d := range m.preview.Disks {
-			lines = append(lines, d.Device+" — "+d.Manufacturer+" "+d.Model, "  Existing: "+partitions(d), "  Proposed: 512 MiB UEFI + "+size(m.imageBytes)+" boot image + remaining ZFS")
+			lines = append(lines, d.Device+" — "+d.Manufacturer+" "+d.Model, "  Existing: "+partitions(d), "  Proposed: 512 MiB UEFI + remaining ZFS (OS reserve "+size(m.imageBytes)+")")
 		}
 		lines = append(lines, "", "Final command:", formatPoolCommand(m.preview.Command), "", "Whole-disk dry-run:", m.preview.DryRun, "", "All data on these disks will be erased.", "Type ERASE ALL DATA and press Enter:", m.confirmation.View())
 	case "timezone":

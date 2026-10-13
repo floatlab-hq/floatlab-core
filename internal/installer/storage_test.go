@@ -13,6 +13,9 @@ func testDisks() []Disk {
 	return []Disk{{Path: "/dev/disk/by-id/virtio-a", Device: "/dev/vda", Size: 32 * GiB, Eligible: true, Fingerprint: "a"}, {Path: "/dev/disk/by-id/virtio-b", Device: "/dev/vdb", Size: 40 * GiB, Eligible: true, Fingerprint: "b"}}
 }
 func TestStorageCommandAndSafety(t *testing.T) {
+	if got := PartitionScript(); strings.Count(got, "type=") != 2 || strings.Contains(got, "type=L") {
+		t.Fatal("expected only EFI and ZFS partitions", got)
+	}
 	disks := testDisks()
 	command := ZPoolCommand(disks)
 	if !strings.Contains(command, "floatlab mirror /dev/disk/by-id/virtio-a") {
@@ -68,10 +71,11 @@ func TestEditableTopologyMapsEveryDiskToItsZFSPartition(t *testing.T) {
 		t.Fatal(final)
 	}
 	whole := strings.Join(wholeDiskArgs(args, disks), " ")
-	if strings.Contains(whole, "-part3") || !strings.Contains(whole, disks[0].Path) {
+	if strings.Contains(whole, "-part2") || !strings.Contains(whole, disks[0].Path) {
 		t.Fatal(whole)
 	}
 	for _, invalid := range []string{
+		"zpool create -o compatibility=off floatlab /dev/vda",
 		"zpool create floatlab /dev/vda /dev/disk/by-id/virtio-a",
 		"zpool create floatlab /tmp/file-vdev",
 		"zpool create -o cachefile=/etc/zfs/zpool.cache floatlab /dev/vda",
@@ -103,13 +107,16 @@ func TestSettingsAndBootPayload(t *testing.T) {
 	if err := a.Validate(); err == nil {
 		t.Fatal("timezone traversal")
 	}
-	p := Payload{Kernel: "boot/kernel", Initrd: "boot/initrd", Init: "/nix/store/example/init", Bytes: 100, Files: map[string]string{"boot/kernel": strings.Repeat("a", 64), "boot/initrd": strings.Repeat("b", 64), "nix-store.squashfs": strings.Repeat("c", 64)}}
+	p := Payload{Version: "v1", Init: "/nix/store/example/init", RootBytes: GiB, Bytes: 100, Files: map[string]string{"floatlab-root.tar.gz": strings.Repeat("a", 64), "zfsbootmenu.EFI": strings.Repeat("b", 64)}}
 	if err := p.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	grub := GRUB(p, "image-uuid", a)
-	if !strings.Contains(grub, "root=UUID=image-uuid") || !strings.Contains(grub, "spl.spl_hostid=0xabcdef12") {
-		t.Fatal(grub)
+	for _, version := range []string{"../escape", "current", "live", "next", "v1@base", ""} {
+		bad := p
+		bad.Version = version
+		if err := bad.Validate(); err == nil {
+			t.Fatalf("accepted reserved or unsafe version %q", version)
+		}
 	}
 	p.Files["../escape"] = strings.Repeat("a", 64)
 	if err := p.Validate(); err == nil {
@@ -131,7 +138,7 @@ func TestImageRecoveryProtectsRunningMedia(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("PATH", root+":"+os.Getenv("PATH"))
 	disks := testDisks()[:1]
-	disks[0].PartitionIDs = []string{"a", "b", "c"}
+	disks[0].PartitionIDs = []string{"a", "b"}
 	script := "#!/bin/sh\necho " + disks[0].Path + "-part2\n"
 	if err := os.WriteFile(root+"/findmnt", []byte(script), 0700); err != nil {
 		t.Fatal(err)

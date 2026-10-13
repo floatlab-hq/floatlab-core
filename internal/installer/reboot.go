@@ -9,6 +9,13 @@ import (
 
 // Export cleanly so the next boot can import using its unique host ID without force.
 func reboot(ctx context.Context) error {
+	root, err := Output(ctx, "findmnt", "-n", "-o", "FSTYPE", "--target", "/")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(string(root)) == "zfs" {
+		return run(ctx, "systemctl", "reboot")
+	}
 	if err := run(ctx, "systemctl", "stop", "floatlab-core-stack.service", "docker.service", "docker.socket", "floatlab-hostd.service"); err != nil {
 		return err
 	}

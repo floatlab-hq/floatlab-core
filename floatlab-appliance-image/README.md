@@ -1,10 +1,16 @@
 # FloatLab immutable appliance image
 
-This repository is a concrete starting point for an immutable, squashfs-backed NixOS appliance that boots from ISO/USB and can later expose the same kernel/initrd for PXE. Runtime writes remain ephemeral unless explicitly directed to the ZFS pool named `floatlab`.
+The installer boots a squashfs-backed NixOS ISO. Installed appliances boot a native ZFS root through ZFSBootMenu, discarding ordinary OS writes between boots. Persistent appliance state lives under `floatlab/system`. Existing alpha installations require reinstalling; there is no partition migration.
 
 ## Boot design
 
-The standard NixOS live ISO supplies the Linux kernel, initrd, systemd, compressed squashfs system image, and ephemeral writable root. FloatLab adds an ordered systemd pipeline:
+The live ISO keeps its compressed squashfs and ephemeral writable root. Installed disks contain a 512 MiB EFI partition and a ZFS partition using the remaining space. Every disk receives the fixed-hash ZFSBootMenu 3.1.0 EFI executable at `EFI/BOOT/BOOTX64.EFI`, configured for the appliance host ID, strict pool import, a five-second menu, and serial console. Secure Boot must be disabled.
+
+Installation verifies and unpacks a native NixOS root archive once into `floatlab/os/{version}`, registers its Nix store, takes `@base`, and makes the version read-only. `floatlab/os/current` is a read-only clone of that snapshot and the pool's default `bootfs`. ZFSBootMenu reads its `/boot/vmlinuz` and `/boot/initramfs` directly. The installed initrd imports the pool without forcing, checks the pristine origin, destroys the previous unmounted `floatlab/os/live`, and recreates it directly from the same version snapshot before mounting it as `/`. Version datasets and `live` are hidden from the normal boot menu. Unexpected snapshots, dependent clones, or a mounted `live` stop boot into recovery rather than trigger recursive destruction.
+
+The pool uses `compatibility=openzfs-2.3-linux`, supported by both the bundled bootloader and appliance OpenZFS. Do not enable newer pool features without updating and validating the bootloader. Upgrade downloads, `next` trial boots, automatic commitment, timed recovery, and version garbage collection are deferred.
+
+Both environments use the existing ordered systemd pipeline:
 
 1. `floatlab-zfs-import.service` discovers and imports `floatlab` without forcing an import.
 2. `floatlab-datasets.service` creates and mounts:
@@ -22,7 +28,7 @@ The standard NixOS live ISO supplies the Linux kernel, initrd, systemd, compress
 8. `floatlab-core-stack.service` starts rqlite, VictoriaMetrics, VictoriaLogs, and the control plane with `docker compose up -d`.
 9. Hostd forwards host, kernel, and Docker journal entries to VictoriaLogs over its loopback-only HTTP endpoint. It batches entries and advances a cursor in `/run/floatlab` only after successful delivery, retrying when VictoriaLogs is unavailable. Journal storage is ephemeral and capped at 256 MiB; retries can duplicate an acknowledged batch if checkpointing is interrupted.
 
-The live ISO and installed appliance share the same trimmed kernel, initrd, and squashfs. Firmware is selected from wired-network and storage drivers, with Intel and AMD CPU microcode retained. Wi-Fi, Bluetooth, audio, and DVB/camera modules and firmware are omitted, along with bundled manuals and w3m. Nano is the recovery editor. Console graphics and USB keyboard support remain available.
+The live ISO and installed appliance share appliance services and the trimmed kernel, with separate initrds and root layouts. Firmware is selected from wired-network and storage drivers, with Intel and AMD CPU microcode retained. Wi-Fi, Bluetooth, audio, and DVB/camera modules and firmware are omitted, along with bundled manuals and w3m. Nano is the recovery editor. Console graphics and USB keyboard support remain available.
 
 The import service deliberately does **not** use `zpool import -f`. A pool that appears active elsewhere should fail into maintenance, not risk simultaneous writers.
 
@@ -107,10 +113,11 @@ through stdin/stdout; service diagnostics go to a private temporary log.
    Choose a timezone from the searchable list and select DHCP or Static with the
    radio buttons. Static addressing fields appear only for Static. The service
    validates these settings before opening the separate administrator account step.
-   Each disk receives a 512 MiB UEFI partition, an immutable Floatlab
-   boot-image partition (at least 8 GiB), and a ZFS partition (at least 16 GiB).
-   The service repeats the dry-run against the actual ZFS partitions before creating
-   the pool. It copies and verifies the image and installs each UEFI bootloader.
+   Each disk receives a 512 MiB UEFI partition and a ZFS partition using the
+   remaining space. Disk validation reserves space for the unpacked OS plus
+   at least 16 GiB of data. The service repeats the dry-run against the actual
+   ZFS partitions before creating the pool. It copies and verifies the OS once
+   into ZFS and installs each UEFI bootloader.
 3. Review and explicitly submit configuration. The service validates it immediately;
    errors remain editable. Optionally enroll TOTP when NTP is synchronized and save
    the ten single-use recovery codes. If copying finishes first, installation waits
@@ -173,6 +180,8 @@ alone) outside the Nix build sandbox, where container downloads are available:
 nix run .#installer-test -- --iso /absolute/path/to/floatlab.iso
 ```
 
+The disk-only tests boot each layout twice, check that OS markers disappear while persistent markers remain, and verify the pristine snapshot GUID stays unchanged.
+
 Use `--disks 1` or `--disks 2` for one layout and `--keep` to retain disposable
 qcow2 disks and serial logs. The driver uses KVM when available and TCG otherwise.
 
@@ -196,7 +205,18 @@ or restore a consumed recovery code. Supply `--cli` with the compiled CLI to
 exercise interactive login against the installed appliance. Run NTP-failure and
 TOTP-enrollment cases separately. These tests modify only disposable VM disks.
 
-Production ISO validation completed on 2026-10-12 on x86-64 Linux with KVM.
+ZFS-root validation completed on 2026-10-14 on x86-64 Linux with KVM.
+Fresh single-disk installation with static IPv4 and Melbourne timezone passed
+both disk-only boots. Mirrored installation passed two boots with both disks,
+two with the first member alone, and two with the second member alone.
+All eight installed boots verified a fresh `live` root, discarded OS writes,
+persistent settings and administrator login, unchanged pristine snapshot GUIDs,
+and local management, metrics, and log service health. Go race tests and vet,
+normal Git-based Nix boot configuration, clone lifecycle, isolated EFI editor,
+and image-trimming checks passed. Physical hardware and the extended TOTP and
+interruption VM scenarios were not rerun for this layout.
+
+The previous three-partition production ISO was validated on 2026-10-12 on x86-64 Linux with KVM. Those results predate the ZFS-root layout described above.
 The three extended scenarios passed, including disk-only single-disk boot,
 both mirror members together and each member alone, unchanged node UUIDs,
 persisted hostnames and Melbourne timezone, static IPv4, management/service
@@ -205,7 +225,7 @@ recovery-code consumption across reboots, repeated bootstrap without credential
 reset, existing-installation bypass, console reconnection, interruptions before
 and after the storage checkpoint, unavailable NTP, failed registry pulls and
 successful retry, and cancellation of the automatic reboot countdown.
-The ISO build and effective boot-configuration check passed, as did the existing
+The previous ISO build and effective boot-configuration check passed, as did the existing
 host-network VM regression, 129 installer/control/credential Go tests, and six
 CLI tests. Physical hardware validation remains separate from these VM checks.
 
@@ -280,7 +300,9 @@ mkdir -p /tmp/floatlab-network-test
 
 ### Ephemeral root
 
-Do not define a normal persistent `/` filesystem. The imported NixOS ISO module already boots a compressed squashfs closure with an ephemeral writable layer. `/run`, `/tmp`, journald storage, and ordinary mutable state disappear at reboot.
+The ISO retains its squashfs closure and ephemeral writable layer. Installed `/` is the disposable `floatlab/os/live` clone, rebuilt before each mount. Ordinary root writes never reach `current` or its version snapshot. `/run`, `/tmp`, journald storage, and ordinary mutable state disappear at reboot; persistent state must use the datasets under `/floatlab/system`.
+
+The installer can resume a completed snapshot without recopying it. It discards only its own incomplete version dataset, after checking the installation identity; it never replaces an existing `current` pointing to another version. Resume checks still verify every recorded partition identity. Boot from the original ISO to resume copying. Installed shutdown uses the normal ZFS-root shutdown path, since exporting a mounted root pool is unsafe.
 
 ### Persistent network configuration
 

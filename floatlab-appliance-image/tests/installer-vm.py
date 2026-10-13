@@ -231,7 +231,7 @@ def run_case(args, count):
         if args.before_storage or args.failures:
             environment = shlex.split(guest_command(guest_socket, "systemctl show -p Environment --value floatlab-installer-console@ttyS0"))
             worker_path = next(value[5:] for value in environment if value.startswith("PATH="))
-            tool = "wipefs" if args.before_storage else "grub-install"
+            tool = "wipefs" if args.before_storage else "zbm-kcl"
             script = ("#!/run/current-system/sw/bin/sh\ntouch /run/floatlab-installer-test/wipefs-entered\nsleep 600\n"
                       if args.before_storage else "#!/run/current-system/sw/bin/sh\necho Injected bootloader failure >&2\nexit 1\n")
             guest_command(guest_socket, "mkdir -p /run/floatlab-installer-test /run/systemd/system/floatlab-installer-console@ttyS0.service.d; "
@@ -311,7 +311,7 @@ def run_case(args, count):
             child.expect("Type SAVED")
             child.sendline("SAVED")
         if child.expect(["Rebooting in", "Installation failed"]) == 1:
-            raise AssertionError("installer failed: " + child.before.strip())
+            raise AssertionError("installer failed: " + guest_command(guest_socket, "cat /run/floatlab-installer/status.json"))
         child.send("p")
         child.expect("Automatic reboot paused")
         node_id, verified_step = wait_stack(base, name, secret=secret)
@@ -319,6 +319,14 @@ def run_case(args, count):
             rejected_login(base, {"totp_code": totp(secret, verified_step)})
             login(base, {"recovery_code": recovery_codes[0]})
             rejected_login(base, {"recovery_code": recovery_codes[0]})
+        snapshot_guid = guest_command(guest_socket, 'zfs get -H -o value guid "$(zfs get -H -o value origin floatlab/os/current)"')
+        guest_command(guest_socket, 'set -e; test "$(zpool get -H -o value compatibility floatlab)" = openzfs-2.3-linux; '
+                      'test "$(zpool get -H -o value bootfs floatlab)" = floatlab/os/current; '
+                      'for disk in /dev/disk/by-id/virtio-floatlab-installer-*; do '
+                      'case "$disk" in *-part*) continue;; esac; '
+                      'test "$(lsblk -nr -o TYPE "$disk" | grep -cx part)" = 2; '
+                      'test "$(blkid -s TYPE -o value "$disk-part2")" = zfs_member; done; '
+                      'echo persistent > /floatlab/system/etc/os-persistence-test')
         child.send("r")
         child.expect(pexpect.EOF)
     except Exception:
@@ -336,10 +344,10 @@ def run_case(args, count):
                 shutil.rmtree(directory)
 
     # Reboot without installation media; test each mirror member independently.
-    boot_cases = [(selected, False) for selected in ([list(range(count))] + [[i] for i in range(count)] if count > 1 else [[0]])]
-    for selected, legacy in boot_cases:
+    boot_cases = [(selected, False, iteration) for selected in ([list(range(count))] + [[i] for i in range(count)] if count > 1 else [[0]]) for iteration in range(2)]
+    for selected, legacy, iteration in boot_cases:
         label = "boot-existing" if legacy else "boot-" + "-".join(str(i) for i in selected)
-        child = spawn(selected, False, label)
+        child = spawn(selected, False, label + "-" + str(iteration))
         try:
             wait_stack(base, name, node_id, child, secret)
             wait_guest(guest_socket, "systemctl is-active --quiet floatlab-core-stack; "
@@ -349,6 +357,16 @@ def run_case(args, count):
             output = guest_command(guest_socket, "hostname; timedatectl show -p Timezone --value; "
                                    "test ! -e /floatlab/system/etc/bootstrap.json && echo SETTINGS_OK")
             assert output.splitlines() == [name, args.timezone, "SETTINGS_OK"], output
+            output = guest_command(guest_socket, 'set -e; test "$(findmnt -n -o SOURCE /)" = floatlab/os/live; '
+                                   'test ! -e /os-ephemeral-test; '
+                                   'test "$(cat /floatlab/system/etc/os-persistence-test)" = persistent; '
+                                   'origin=$(zfs get -H -o value origin floatlab/os/current); '
+                                   'test "$(zfs get -H -o value origin floatlab/os/live)" = "$origin"; '
+                                   'test "$(zfs get -H -o value readonly floatlab/os/current)" = on; '
+                                   'test "$(zfs get -H -o value readonly "${origin%@base}")" = on; '
+                                   'zfs get -H -o value guid "$origin"')
+            assert output.strip() == snapshot_guid.strip(), output
+            guest_command(guest_socket, 'echo dirty > /os-ephemeral-test')
             marker = "floatlab-journal-test-" + str(time.time_ns())
             guest_command(guest_socket, "logger -t floatlab-journal-test " + shlex.quote(marker))
             wait_guest(guest_socket, "curl -fsSG --data-urlencode " + shlex.quote('query=_msg:"' + marker + '"') +
@@ -368,15 +386,14 @@ def run_case(args, count):
                            for address in link["addr_info"]), output
             if secret:
                 rejected_login(base, {"recovery_code": recovery_codes[0]})
-            if args.cli and selected == list(range(count)) and not legacy:
+            if args.cli and selected == list(range(count)) and not legacy and iteration == 0:
                 factor = {"recovery_code": recovery_codes[1]} if secret else None
                 cli_login(args.cli, directory / "cli-config", base, factor)
                 if factor:
                     rejected_login(base, factor)
             if secret and selected == list(range(count)):
                 repeat_bootstrap(guest_socket, base, name, node_id, secret, recovery_codes[0], child)
-            guest_command(guest_socket, "systemctl stop floatlab-core-stack docker docker.socket floatlab-hostd; "
-                          "zpool export floatlab; systemd-run --on-active=2s systemctl reboot")
+            guest_command(guest_socket, "systemd-run --on-active=2s systemctl reboot")
             child.expect(pexpect.EOF)
         finally:
             child.close(force=True)

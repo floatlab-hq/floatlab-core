@@ -60,6 +60,8 @@ jobs:
           FLOATLAB_INSTALLER_VERSION: ${{ github.ref_name }}
         run: |
           nix build ./floatlab-appliance-image#checks.x86_64-linux.installer-boot-config --impure --no-link --print-build-logs
+          nix build ./floatlab-appliance-image#checks.x86_64-linux.os-live --no-link --print-build-logs
+          nix build ./floatlab-appliance-image#checks.x86_64-linux.zfsbootmenu-efi --no-link --print-build-logs
           bash floatlab-appliance-image/scripts/build-iso.sh
           cp "floatlab-appliance-image/result/iso/floatlab-installer-${GITHUB_REF_NAME}.iso" dist/
       - name: Checksum release artifacts

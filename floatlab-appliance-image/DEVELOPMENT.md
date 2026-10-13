@@ -100,7 +100,8 @@ service lifecycle, UI choices, progress, and reboot behavior.
 | `internal/installtui` | Screens, keyboard handling, timezone choices, and progress display. |
 | `internal/installer/service.go` | Stdio JSON protocol, validation, session state, and mock scenarios. |
 | `internal/installer/storage.go` | Disk discovery, partition layout, and ZFS command parsing. |
-| `internal/installer/worker.go` | Real installation, verified image copying, and configuration. |
+| `internal/installer/worker.go` | Real installation, verified EFI copying, and configuration. |
+| `internal/installer/os.go` | Root archive validation, version snapshot installation, and current clone creation. |
 
 For ISO builds and tests against disposable VM disks, see the
 [appliance README](README.md#build-the-iso). Changes to dependency versions or imported dependency packages require

@@ -31,8 +31,8 @@ in {
   boot.zfs.forceImportRoot = false;
   environment.systemPackages = [ pkgs.zfs ];
 
-  # Live-media default required by NixOS/OpenZFS. Installed GRUB entries set
-  # spl_hostid and the boot identity service restores the generated /etc/hostid.
+  # Live-media default required by NixOS/OpenZFS. ZFSBootMenu supplies the
+  # installed SPL host ID before the root pool is imported.
   networking.hostId = "f10a7ab0";
 
   systemd.services.floatlab-zfs-import = {

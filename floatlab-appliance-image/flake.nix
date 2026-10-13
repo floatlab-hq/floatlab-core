@@ -8,7 +8,25 @@
   outputs = { self, nixpkgs }:
     let
       system = "x86_64-linux";
-      pkgs = import nixpkgs { inherit system; };
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [ (final: prev: {
+          floatlab-zbm-kcl = prev.runCommand "floatlab-zbm-kcl" { nativeBuildInputs = [ prev.makeWrapper ]; } ''
+            mkdir -p "$out/bin"
+            cp ${prev.fetchurl {
+              url = "https://github.com/zbm-dev/zfsbootmenu/releases/download/v3.1.0/zbm-kcl";
+              sha256 = "16edae3eee5df9a0b133734bc4d8a8cb68ca73ac30f98cb21cea3212b051ff01";
+            }} "$out/bin/zbm-kcl"
+            chmod +x "$out/bin/zbm-kcl"
+            substituteInPlace "$out/bin/zbm-kcl" --replace-fail '#!/bin/bash' '#!${prev.bash}/bin/bash'
+            wrapProgram "$out/bin/zbm-kcl" --prefix PATH : ${prev.lib.makeBinPath [ prev.binutils prev.coreutils prev.gawk prev.gnugrep prev.gnused prev.zfs ]}
+          '';
+        }) ];
+      };
+      zfsbootmenu = pkgs.fetchurl {
+        url = "https://github.com/zbm-dev/zfsbootmenu/releases/download/v3.1.0/zfsbootmenu-release-x86_64-v3.1.0-linux6.12.EFI";
+        sha256 = "131d55c7b385df8cd319d267b6aa15d97f8c32c94f5149bd906556715fadf4e7";
+      };
       floatlab-version = let version = builtins.getEnv "FLOATLAB_INSTALLER_VERSION";
         in if version != "" then version else pkgs.lib.removeSuffix "-dirty" (self.shortRev or self.dirtyShortRev or "unknown");
       floatlab-binaries = pkgs.buildGoModule {
@@ -35,8 +53,20 @@
       makeISO = configuration:
         let
           cfg = configuration.config;
-          kernel = "boot${cfg.boot.kernelPackages.kernel}/${cfg.system.boot.loader.kernelFile}";
-          initrd = "boot${cfg.system.build.initialRamdisk}/${cfg.system.boot.loader.initrdFile}";
+          installed = self.nixosConfigurations.floatlab-installed.config;
+          closure = pkgs.closureInfo { rootPaths = [ installed.system.build.toplevel ]; };
+          root = pkgs.runCommand "floatlab-installed-root" { nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ]; } ''
+            mkdir -p "$out" root/nix/store root/boot root/etc root/var root/run root/tmp
+            chmod 1777 root/tmp
+            while IFS= read -r path; do cp -a --parents "$path" root; done < ${closure}/store-paths
+            cp ${closure}/registration root/nix-path-registration
+            cp ${installed.boot.kernelPackages.kernel}/${installed.system.boot.loader.kernelFile} root/boot/vmlinuz
+            cp ${installed.system.build.initialRamdisk}/${installed.system.boot.loader.initrdFile} root/boot/initramfs
+            ln -s ${installed.system.build.toplevel} root/run/current-system
+            ln -s ${installed.system.build.toplevel}/init root/init
+            du -sb root | cut -f1 > "$out/root-bytes"
+            tar --sort=name --mtime=@1 --owner=0 --group=0 --numeric-owner -C root -cf - . | gzip -n > "$out/floatlab-root.tar.gz"
+          '';
           squashfs = pkgs.callPackage (nixpkgs + "/nixos/lib/make-squashfs.nix") {
             storeContents = cfg.isoImage.storeContents;
             comp = cfg.isoImage.squashfsCompression;
@@ -45,34 +75,41 @@
             python3 - <<'PYMANIFEST' > "$out"
             import hashlib, json, os
             files = {
-                "${kernel}": "${cfg.boot.kernelPackages.kernel}/${cfg.system.boot.loader.kernelFile}",
-                "${initrd}": "${cfg.system.build.initialRamdisk}/${cfg.system.boot.loader.initrdFile}",
-                "nix-store.squashfs": "${squashfs}",
+                "floatlab-root.tar.gz": "${root}/floatlab-root.tar.gz",
+                "zfsbootmenu.EFI": "${zfsbootmenu}",
             }
             hashes = {}
             for name, source in files.items():
                 with open(source, "rb") as stream:
                     hashes[name] = hashlib.file_digest(stream, "sha256").hexdigest()
-            print(json.dumps({"kernel": "${kernel}", "initrd": "${initrd}", "init": "${cfg.system.build.toplevel}/init",
+            print(json.dumps({"version": "${floatlab-version}", "init": "${installed.system.build.toplevel}/init",
+                              "root_bytes": int(open("${root}/root-bytes").read()),
                               "files": hashes, "bytes": sum(os.stat(p).st_size for p in files.values())}))
             PYMANIFEST
           '';
         in cfg.system.build.isoImage.overrideAttrs (old: {
-          sources = old.sources ++ [ manifest ];
-          targets = old.targets ++ [ "/floatlab-manifest.json" ];
+          sources = old.sources ++ [ manifest "${root}/floatlab-root.tar.gz" zfsbootmenu ];
+          targets = old.targets ++ [ "/floatlab-manifest.json" "/floatlab-root.tar.gz" "/zfsbootmenu.EFI" ];
           squashfsCommand = "cp ${squashfs} \"$out\"";
         });
     in {
       nixosConfigurations.floatlab-iso = nixpkgs.lib.nixosSystem {
         inherit system;
         modules = [ ./nixos/iso.nix ];
+        pkgs = pkgs;
         specialArgs = { inherit floatlab-binaries floatlab-control-image floatlab-version; floatlab-development = false; };
       };
 
       nixosConfigurations.floatlab-dev-iso = nixpkgs.lib.nixosSystem {
         inherit system;
         modules = [ ./nixos/iso.nix ];
+        pkgs = pkgs;
         specialArgs = { inherit floatlab-binaries floatlab-control-image floatlab-version; floatlab-development = true; };
+      };
+      nixosConfigurations.floatlab-installed = nixpkgs.lib.nixosSystem {
+        inherit system pkgs;
+        modules = [ ./nixos/installed.nix ];
+        specialArgs = { inherit floatlab-binaries floatlab-control-image floatlab-version; floatlab-development = false; };
       };
       packages.${system} = {
         iso = makeISO self.nixosConfigurations.floatlab-iso;
@@ -90,11 +127,27 @@
       };
 
       checks.${system} = {
+        zfsbootmenu-efi = pkgs.runCommand "floatlab-zfsbootmenu-efi-check" {} ''
+          mkdir -p "$out"
+          export PATH=${pkgs.lib.makeBinPath [ pkgs.floatlab-zbm-kcl ]}
+          zbm-kcl -r spl_hostid -r zbm.prefer -r zbm.import_policy -r zbm.timeout -r console \
+            -a 'spl_hostid=12345678 zbm.prefer=floatlab!! zbm.import_policy=strict zbm.timeout=5 console=tty0 console=ttyS0,115200n8' \
+            -o "$out/BOOTX64.EFI" ${zfsbootmenu}
+          cmdline=$(zbm-kcl "$out/BOOTX64.EFI")
+          case "$cmdline" in
+            *'spl_hostid=12345678 zbm.prefer=floatlab!! zbm.import_policy=strict zbm.timeout=5 console=tty0 console=ttyS0,115200n8'*) ;;
+            *) exit 1 ;;
+          esac
+        '';
+        os-live = pkgs.runCommand "floatlab-os-live-check" { nativeBuildInputs = [ pkgs.python3 pkgs.bash ]; } ''
+          python3 ${./tests/os-live.py} ${./nixos/modules/os-live.sh}
+          touch "$out"
+        '';
         host-network = import ./tests/network.nix { inherit pkgs floatlab-binaries; };
         image-trim =
         let
           configurations = map (name: self.nixosConfigurations.${name}.config)
-            [ "floatlab-iso" "floatlab-dev-iso" ];
+            [ "floatlab-iso" "floatlab-dev-iso" "floatlab-installed" ];
           trimmed = cfg:
             !cfg.documentation.enable && !cfg.services.rsyslogd.enable
             && !cfg.hardware.bluetooth.enable && !cfg.networking.wireless.enable
@@ -115,11 +168,22 @@
              touch "$out"
            '';
         installer-boot-config =
-        let cfg = self.nixosConfigurations.floatlab-iso.config;
-        in assert cfg.fileSystems."/iso".fsType == "auto";
-           assert cfg.fileSystems."/iso".device == "/dev/root";
-           assert builtins.elem "ext4" cfg.boot.initrd.kernelModules;
+        let
+          cfg = self.nixosConfigurations.floatlab-iso.config;
+          installed = self.nixosConfigurations.floatlab-installed.config;
+        in assert cfg.fileSystems."/iso".fsType == "iso9660";
            assert !cfg.boot.initrd.systemd.enable;
+           assert installed.fileSystems."/".fsType == "zfs";
+           assert installed.fileSystems."/".device == "floatlab/os/live";
+           assert installed.hardware.enableAllHardware;
+           assert pkgs.lib.all (name: builtins.elem name installed.boot.initrd.availableKernelModules)
+             [ "virtio_blk" "virtio_scsi" "nvme" "ahci" "uas" "hpsa" "hv_storvsc" ];
+           assert !(builtins.hasAttr "/iso" installed.fileSystems);
+           assert !installed.boot.loader.grub.enable;
+           assert !installed.boot.zfs.forceImportRoot;
+           assert !installed.boot.initrd.systemd.enable;
+           assert pkgs.lib.hasInfix "os/live" installed.boot.initrd.postResumeCommands;
+           assert !(builtins.hasAttr "floatlab-install-discovery" installed.systemd.services);
            assert cfg.networking.hostName == "";
            assert cfg.systemd.services."floatlab-installer-console@".serviceConfig.RestartForceExitStatus == "SIGHUP";
            assert pkgs.lib.hasSuffix "/bin/install-tui" cfg.systemd.services."floatlab-installer-console@".serviceConfig.ExecStart;
