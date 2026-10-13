@@ -23,6 +23,11 @@ floatlab                 # interactive prompt
 
 The web interface exposes the same commands through the command palette: press <kbd>Alt</kbd>+<kbd>/</kbd>.
 
+## Installer development
+
+See the [installer developer guide](floatlab-appliance-image/DEVELOPMENT.md) for
+running the TUI in mock mode with Go, choosing test scenarios, and running checks.
+
 ## Development VM
 
 The repository's Nix development shell provides the VM tooling. Host libvirt must be installed, running, and accessible to your user.

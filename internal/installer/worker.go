@@ -48,14 +48,19 @@ type Submission struct {
 	VerificationPassword string                `json:"verification_password"` // encrypted; only retained in /run until success.
 }
 type Status struct {
-	Phase        string    `json:"phase"`
-	Completed    []string  `json:"completed"`
-	Started      time.Time `json:"started"`
-	PoolReady    bool      `json:"pool_ready"`
-	StorageReady bool      `json:"storage_ready"`
-	Ready        bool      `json:"ready"`
-	Error        string    `json:"error,omitempty"`
-	Address      string    `json:"address,omitempty"`
+	Phase          string    `json:"phase"`
+	Completed      []string  `json:"completed"`
+	Started        time.Time `json:"started"`
+	PoolReady      bool      `json:"pool_ready"`
+	StorageReady   bool      `json:"storage_ready"`
+	Ready          bool      `json:"ready"`
+	Error          string    `json:"error,omitempty"`
+	Address        string    `json:"address,omitempty"`
+	Progress       float64   `json:"progress"`
+	Copied         int64     `json:"copied"`
+	Total          int64     `json:"total"`
+	BytesPerSecond float64   `json:"bytes_per_second"`
+	Activity       string    `json:"activity,omitempty"`
 }
 
 var hostname = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
@@ -115,6 +120,14 @@ func run(ctx context.Context, name string, args ...string) error {
 	return err
 }
 func copyVerified(source, target, checksum string) error {
+	return copyVerifiedProgress(source, target, checksum, nil)
+}
+
+type copyProgressWriter struct{ write func(int) }
+
+func (w copyProgressWriter) Write(b []byte) (int, error) { w.write(len(b)); return len(b), nil }
+
+func copyVerifiedProgress(source, target, checksum string, progress func(int)) error {
 	input, err := os.Open(source)
 	if err != nil {
 		return err
@@ -128,7 +141,11 @@ func copyVerified(source, target, checksum string) error {
 		return err
 	}
 	hash := sha256.New()
-	_, err = io.Copy(io.MultiWriter(output, hash), input)
+	writers := []io.Writer{output, hash}
+	if progress != nil {
+		writers = append(writers, copyProgressWriter{progress})
+	}
+	_, err = io.Copy(io.MultiWriter(writers...), input)
 	if err == nil {
 		err = output.Sync()
 	}
@@ -161,12 +178,26 @@ func GRUB(p Payload, uuid string, a Appliance) string {
 	return fmt.Sprintf("set timeout=3\nserial --unit=0 --speed=115200\nterminal_input console serial\nterminal_output console serial\nmenuentry 'FloatLab' {\n search --no-floppy --fs-uuid --set=root %s\n linux /%s init=%s root=UUID=%s console=ttyS0,115200n8 spl.spl_hostid=0x%s floatlab.installed=1\n initrd /%s\n}\n", uuid, p.Kernel, p.Init, uuid, a.HostID, p.Initrd)
 }
 
-// Worker is owned by systemd, not by the console's lifetime. Destructive work is
-// allowed only from a newly confirmed operation, never from a saved checkpoint.
-func Worker(ctx context.Context) error {
-	return worker(ctx, Runtime, Persistent, "/iso", Inventory)
+func worker(ctx context.Context, runtimeDir, persistentDir, mediaDir string, inventory func(context.Context) ([]Disk, error)) error {
+	return installWorker(ctx, runtimeDir, persistentDir, mediaDir, inventory, nil)
 }
-func worker(ctx context.Context, runtimeDir, persistentDir, mediaDir string, inventory func(context.Context) ([]Disk, error)) (err error) {
+
+// stopCtx is checked between operations. An active operation finishes before cleanup.
+func installWorker(stopCtx context.Context, runtimeDir, persistentDir, mediaDir string, inventory func(context.Context) ([]Disk, error), emit func(Status)) (err error) {
+	ctx := context.WithoutCancel(stopCtx)
+	runStep := func(name string, args ...string) error {
+		if err := stopCtx.Err(); err != nil {
+			return err
+		}
+		return run(ctx, name, args...)
+	}
+	outputStep := func(name string, args ...string) ([]byte, error) {
+		if err := stopCtx.Err(); err != nil {
+			return nil, err
+		}
+		return Output(ctx, name, args...)
+	}
+
 	lock, err := Lock(runtimeDir + "/worker.lock")
 	if err != nil {
 		return err
@@ -188,6 +219,11 @@ func worker(ctx context.Context, runtimeDir, persistentDir, mediaDir string, inv
 		return err
 	}
 	var status Status
+	publish := func() {
+		if emit != nil {
+			emit(status)
+		}
+	}
 	loadErr := credentials.ReadPrivate(runtimeDir+"/status.json", &status)
 	if loadErr != nil && !os.IsNotExist(loadErr) {
 		return loadErr
@@ -211,11 +247,28 @@ func worker(ctx context.Context, runtimeDir, persistentDir, mediaDir string, inv
 				cancel()
 			}
 			_ = saveStatusAt(runtimeDir, persistentDir, status)
+			publish()
 		}
 	}()
 	phase := func(name string, action func() error) error {
+		if e := stopCtx.Err(); e != nil {
+			return e
+		}
 		status.Phase = name
-		fmt.Println("Installation phase:", name)
+		status.Activity = name
+		switch name {
+		case "Partition and format disks":
+			status.Progress = 0.01
+		case "Create ZFS storage volume":
+			status.Progress = 0.06
+		case "Copy image and install EFI bootloaders":
+			status.Progress = 0.1
+		case "Persist and apply host configuration":
+			status.Progress = 0.92
+		case "Fetch images and verify FloatLab services":
+			status.Progress = 0.96
+		}
+		publish()
 		status.Error = ""
 		if err := saveStatusAt(runtimeDir, persistentDir, status); err != nil {
 			return err
@@ -243,7 +296,13 @@ func worker(ctx context.Context, runtimeDir, persistentDir, mediaDir string, inv
 		}
 		if err = phase("Partition and format disks", func() error {
 			for _, d := range op.Disks {
-				if e := run(ctx, "wipefs", "--all", d.Path); e != nil {
+				if e := stopCtx.Err(); e != nil {
+					return e
+				}
+				if e := runStep("wipefs", "--all", d.Path); e != nil {
+					return e
+				}
+				if e := stopCtx.Err(); e != nil {
 					return e
 				}
 				cmd := exec.CommandContext(ctx, "sfdisk", "--wipe", "always", d.Path)
@@ -251,13 +310,13 @@ func worker(ctx context.Context, runtimeDir, persistentDir, mediaDir string, inv
 				if output, e := cmd.CombinedOutput(); e != nil {
 					return fmt.Errorf("partition %s: %w: %s", d.Path, e, Diagnostic(output))
 				}
-				if e := run(ctx, "udevadm", "settle"); e != nil {
+				if e := runStep("udevadm", "settle"); e != nil {
 					return e
 				}
-				if e := run(ctx, "mkfs.vfat", "-F", "32", d.Path+"-part1"); e != nil {
+				if e := runStep("mkfs.vfat", "-F", "32", d.Path+"-part1"); e != nil {
 					return e
 				}
-				if e := run(ctx, "mkfs.ext4", "-F", d.Path+"-part2"); e != nil {
+				if e := runStep("mkfs.ext4", "-F", d.Path+"-part2"); e != nil {
 					return e
 				}
 			}
@@ -266,18 +325,21 @@ func worker(ctx context.Context, runtimeDir, persistentDir, mediaDir string, inv
 			return err
 		}
 		if err = phase("Create ZFS storage volume", func() error {
-			if e := run(ctx, "zpool", args...); e != nil {
+			if _, e := dryRunPool(ctx, args); e != nil {
+				return e
+			}
+			if e := runStep("zpool", args...); e != nil {
 				return e
 			}
 			// Start only the existing dataset reconciliation service; the stack remains gated.
-			return run(ctx, "systemctl", "restart", "floatlab-zfs-import.service", "floatlab-datasets.service")
+			return runStep("systemctl", "restart", "floatlab-zfs-import.service", "floatlab-datasets.service")
 		}); err != nil {
 			return err
 		}
 
 		for i := range op.Disks {
 			for partition := 1; partition <= 3; partition++ {
-				id, e := Output(ctx, "blkid", "-s", "PARTUUID", "-o", "value", fmt.Sprintf("%s-part%d", op.Disks[i].Path, partition))
+				id, e := outputStep("blkid", "-s", "PARTUUID", "-o", "value", fmt.Sprintf("%s-part%d", op.Disks[i].Path, partition))
 				if e != nil {
 					return e
 				}
@@ -292,7 +354,7 @@ func worker(ctx context.Context, runtimeDir, persistentDir, mediaDir string, inv
 			return err
 		}
 		for _, path := range []string{filepath.Dir(persistentDir), persistentDir} {
-			if err = run(ctx, "mountpoint", "-q", path); err != nil {
+			if err = runStep("mountpoint", "-q", path); err != nil {
 				return fmt.Errorf("persistent storage is not mounted: %w", err)
 			}
 		}
@@ -324,7 +386,13 @@ func worker(ctx context.Context, runtimeDir, persistentDir, mediaDir string, inv
 				files = append(files, name)
 			}
 			sort.Strings(files)
+			status.Total = payload.Bytes * int64(len(op.Disks))
+			copyStarted := time.Now()
+			lastProgress := time.Time{}
 			for i, d := range op.Disks {
+				if e := stopCtx.Err(); e != nil {
+					return e
+				}
 				diskErr := func() (diskErr error) {
 					image := fmt.Sprintf("%s/image-%d", runtimeDir, i)
 					efi := fmt.Sprintf("%s/efi-%d", runtimeDir, i)
@@ -333,7 +401,7 @@ func worker(ctx context.Context, runtimeDir, persistentDir, mediaDir string, inv
 							return e
 						}
 					}
-					if e := run(ctx, "mount", d.Path+"-part2", image); e != nil {
+					if e := runStep("mount", d.Path+"-part2", image); e != nil {
 						return e
 					}
 					defer func() {
@@ -341,7 +409,7 @@ func worker(ctx context.Context, runtimeDir, persistentDir, mediaDir string, inv
 						defer cancel()
 						diskErr = errors.Join(diskErr, run(cleanup, "umount", image))
 					}()
-					if e := run(ctx, "mount", d.Path+"-part1", efi); e != nil {
+					if e := runStep("mount", d.Path+"-part1", efi); e != nil {
 						return e
 					}
 					defer func() {
@@ -350,11 +418,30 @@ func worker(ctx context.Context, runtimeDir, persistentDir, mediaDir string, inv
 						diskErr = errors.Join(diskErr, run(cleanup, "umount", efi))
 					}()
 					for _, name := range files {
-						if e := copyVerified(filepath.Join(mediaDir, name), filepath.Join(image, name), payload.Files[name]); e != nil {
+						if e := stopCtx.Err(); e != nil {
+							return e
+						}
+						status.Phase = "Installing Floatlab"
+						status.Activity = "Copying and verifying " + name + " to " + d.Device
+						if e := copyVerifiedProgress(filepath.Join(mediaDir, name), filepath.Join(image, name), payload.Files[name], func(n int) {
+							status.Copied += int64(n)
+							status.Progress = 0.1 + 0.8*float64(status.Copied)/float64(status.Total)
+							status.BytesPerSecond = float64(status.Copied) / time.Since(copyStarted).Seconds()
+							if time.Since(lastProgress) >= 100*time.Millisecond {
+								publish()
+								lastProgress = time.Now()
+							}
+						}); e != nil {
 							return e
 						}
 					}
-					uuid, e := Output(ctx, "blkid", "-s", "UUID", "-o", "value", d.Path+"-part2")
+					if e := stopCtx.Err(); e != nil {
+						return e
+					}
+					status.Phase = "Installing bootloader"
+					status.Activity = "Installing UEFI bootloader on " + d.Device
+					publish()
+					uuid, e := outputStep("blkid", "-s", "UUID", "-o", "value", d.Path+"-part2")
 					if e != nil {
 						return e
 					}
@@ -367,7 +454,7 @@ func worker(ctx context.Context, runtimeDir, persistentDir, mediaDir string, inv
 					if e = credentials.WriteBytes(image+"/boot/grub/grub.cfg", []byte(GRUB(payload, strings.TrimSpace(string(uuid)), op.Identity))); e != nil {
 						return e
 					}
-					if e = run(ctx, "grub-install", "--target=x86_64-efi", "--removable", "--no-nvram", "--efi-directory="+efi, "--boot-directory="+image+"/boot"); e != nil {
+					if e = runStep("grub-install", "--target=x86_64-efi", "--removable", "--no-nvram", "--efi-directory="+efi, "--boot-directory="+image+"/boot"); e != nil {
 						return e
 					}
 					return nil
@@ -385,7 +472,13 @@ func worker(ctx context.Context, runtimeDir, persistentDir, mediaDir string, inv
 			return err
 		}
 	}
+	if e := stopCtx.Err(); e != nil {
+		return e
+	}
+	status.Progress = 0.9
 	status.Phase = "Waiting for host settings and credentials"
+	status.Activity = "Waiting for valid configuration"
+	publish()
 	status.Error = ""
 	if err = saveStatusAt(runtimeDir, persistentDir, status); err != nil {
 		return err
@@ -400,8 +493,8 @@ func worker(ctx context.Context, runtimeDir, persistentDir, mediaDir string, inv
 			return err
 		}
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-stopCtx.Done():
+			return stopCtx.Err()
 		case <-time.After(time.Second):
 		}
 	}
@@ -440,23 +533,26 @@ func worker(ctx context.Context, runtimeDir, persistentDir, mediaDir string, inv
 		if e = credentials.WriteBytes(runtimeDir+"/finalizing", []byte("1")); e != nil {
 			return e
 		}
-		if e = run(ctx, "hostnamectl", "--transient", "set-hostname", sub.Host.NodeName); e != nil {
+		if e = runStep("hostnamectl", "--transient", "set-hostname", sub.Host.NodeName); e != nil {
 			return e
 		}
-		if e = run(ctx, "timedatectl", "set-timezone", sub.Host.Timezone); e != nil {
+		if e = runStep("timedatectl", "set-timezone", sub.Host.Timezone); e != nil {
 			return e
 		}
-		return run(ctx, "systemctl", "restart", "floatlab-network-config.service")
+		return runStep("systemctl", "restart", "floatlab-network-config.service")
 	}); err != nil {
 		return err
 	}
 	if err = phase("Fetch images and verify FloatLab services", func() error {
-		if e := run(ctx, "systemctl", "restart", "floatlab-core-stack.service"); e != nil {
+		if e := runStep("systemctl", "restart", "floatlab-core-stack.service"); e != nil {
 			return e
 		}
 		return verifyStack(ctx, sub)
 	}); err != nil {
 		return err
+	}
+	if e := stopCtx.Err(); e != nil {
+		return e
 	}
 	if err = credentials.WriteBytes(persistentDir+"/installed", []byte("complete\n")); err != nil {
 		return err
@@ -465,9 +561,15 @@ func worker(ctx context.Context, runtimeDir, persistentDir, mediaDir string, inv
 		return err
 	}
 	status.Ready = true
+	status.Progress = 1
+	status.Activity = "Installation verified"
 	status.Phase = "Installation complete"
 	status.Address = managementAddress(ctx, sub.Host)
-	return saveStatusAt(runtimeDir, persistentDir, status)
+	if err = saveStatusAt(runtimeDir, persistentDir, status); err != nil {
+		return err
+	}
+	publish()
+	return nil
 }
 func verifyStack(ctx context.Context, sub Submission) error {
 	key, err := os.ReadFile(Persistent + "/credential.key")

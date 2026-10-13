@@ -20,8 +20,8 @@
             && !pkgs.lib.hasPrefix (toString ../integration) (toString path)
             && builtins.baseNameOf path != "node_modules";
         };
-        subPackages = [ "cmd/floatlab-hostd" "cmd/floatlab-control" "cmd/floatlab-installer" ];
-        vendorHash = "sha256-H4NtzJzlurs58QjcEqEnJMx+avNiYcyGT3m4u58QZFs=";
+        subPackages = [ "cmd/floatlab-hostd" "cmd/floatlab-control" "cmd/install-tui" "cmd/install-service" "cmd/install-service-mock" ];
+        vendorHash = "sha256-MMOB4sWq/0Rj/7IGkOuvvBLRcoVVVqbhnyqiLSJQRF8=";
       };
       floatlab-control-image = pkgs.dockerTools.buildLayeredImage {
         name = "floatlab-control";
@@ -97,6 +97,9 @@
            assert !cfg.boot.initrd.systemd.enable;
            assert cfg.networking.hostName == "";
            assert cfg.systemd.services."floatlab-installer-console@".serviceConfig.RestartForceExitStatus == "SIGHUP";
+           assert pkgs.lib.hasSuffix "/bin/install-tui" cfg.systemd.services."floatlab-installer-console@".serviceConfig.ExecStart;
+           assert cfg.systemd.services."floatlab-installer-console@".serviceConfig.TimeoutStopSec == "infinity";
+           assert !(builtins.hasAttr "floatlab-install-worker" cfg.systemd.services);
            assert builtins.elem "--interface=floatlab-lan:routable" cfg.systemd.network.wait-online.extraArgs;
            pkgs.runCommand "floatlab-installer-boot-config" {} "touch $out";
       };
