@@ -349,6 +349,15 @@ def run_case(args, count):
             output = guest_command(guest_socket, "hostname; timedatectl show -p Timezone --value; "
                                    "test ! -e /floatlab/system/etc/bootstrap.json && echo SETTINGS_OK")
             assert output.splitlines() == [name, args.timezone, "SETTINGS_OK"], output
+            marker = "floatlab-journal-test-" + str(time.time_ns())
+            guest_command(guest_socket, "logger -t floatlab-journal-test " + shlex.quote(marker))
+            wait_guest(guest_socket, "curl -fsSG --data-urlencode " + shlex.quote('query=_msg:"' + marker + '"') +
+                       " --data-urlencode limit=1 http://127.0.0.1:9428/select/logsql/query | grep -q " + shlex.quote(marker), child)
+            guest_command(guest_socket, "test -s /run/floatlab/journal.cursor; systemctl restart floatlab-hostd; "
+                          "test -s /run/floatlab/journal.cursor")
+            # Restarting hostd also restarts its dependent core stack.
+            wait_guest(guest_socket, "systemctl is-active --quiet floatlab-core-stack; "
+                       "curl -fsS http://127.0.0.1:9428/health >/dev/null", child)
             guest_command(guest_socket, 'test "$(systemctl is-active floatlab-installer-console@ttyS0.service)" != active; '
                           '! pgrep -x install-service')
             if not legacy:

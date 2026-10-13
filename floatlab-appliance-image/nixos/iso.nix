@@ -3,6 +3,7 @@
   imports = [
     (modulesPath + "/installer/cd-dvd/installation-cd-minimal.nix")
     ./modules/base.nix
+    ./modules/image-trim.nix
     ./modules/zfs.nix
     ./modules/persistence.nix
     ./modules/networking.nix

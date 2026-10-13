@@ -20,7 +20,9 @@ The standard NixOS live ISO supplies the Linux kernel, initrd, systemd, compress
 6. The bundled `docker-compose.yml` is copied only when the persistent copy is absent, and the image's locally built control-plane image is loaded into Docker.
 7. `floatlab-hostd.service` starts the native host daemon and creates its Unix socket.
 8. `floatlab-core-stack.service` starts rqlite, VictoriaMetrics, VictoriaLogs, and the control plane with `docker compose up -d`.
-9. journald forwards host, kernel (`dmesg`), and Docker logs through rsyslog to VictoriaLogs' loopback-only syslog listener.
+9. Hostd forwards host, kernel, and Docker journal entries to VictoriaLogs over its loopback-only HTTP endpoint. It batches entries and advances a cursor in `/run/floatlab` only after successful delivery, retrying when VictoriaLogs is unavailable. Journal storage is ephemeral and capped at 256 MiB; retries can duplicate an acknowledged batch if checkpointing is interrupted.
+
+The live ISO and installed appliance share the same trimmed kernel, initrd, and squashfs. Firmware is selected from wired-network and storage drivers, with Intel and AMD CPU microcode retained. Wi-Fi, Bluetooth, audio, and DVB/camera modules and firmware are omitted, along with bundled manuals and w3m. Nano is the recovery editor. Console graphics and USB keyboard support remain available.
 
 The import service deliberately does **not** use `zpool import -f`. A pool that appears active elsewhere should fail into maintenance, not risk simultaneous writers.
 

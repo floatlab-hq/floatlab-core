@@ -29,9 +29,7 @@ services:
     command:
       - -storageDataPath=/victoria-logs-data
       - -retentionPeriod=30d
-      - -syslog.listenAddr.tcp=:29514
     ports:
-      - "127.0.0.1:29514:29514"
       - "127.0.0.1:9428:9428"
     volumes:
       - /floatlab/system/victoria-logs:/victoria-logs-data

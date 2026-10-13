@@ -37,6 +37,8 @@ func NewServer(log *zap.Logger) *Server {
 }
 
 func (s *Server) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	if err := os.MkdirAll("/run/floatlab", 0750); err != nil {
 		return fmt.Errorf("hostd: mkdir /run/floatlab: %w", err)
 	}
@@ -45,6 +47,7 @@ func (s *Server) Run(ctx context.Context) error {
 		return fmt.Errorf("hostd: network startup: %w", err)
 	}
 	go s.dispatcher.network.Watch(ctx, s.log)
+	go s.forwardJournal(ctx)
 	// Register all command handlers on the IPC server.
 	s.dispatcher.register()
 	if s.dispatcher.docker != nil {

@@ -28,7 +28,7 @@
     pciutils
     tmux
     usbutils
-    vim
+    nano
   ];
 
   systemd.tmpfiles.rules = [
@@ -37,18 +37,10 @@
     "d /run/systemd/network 0755 root root -"
   ];
 
-  # Keep the journal ephemeral and forward system, kernel and container logs to
-  # the local VictoriaLogs syslog listener exposed by the management stack.
+  # Hostd forwards the ephemeral journal to VictoriaLogs over HTTP.
   services.journald.extraConfig = ''
     Storage=volatile
     RuntimeMaxUse=256M
-    ForwardToSyslog=yes
+    ForwardToSyslog=no
   '';
-
-  services.rsyslogd = {
-    enable = true;
-    extraConfig = ''
-      *.* @@127.0.0.1:29514;RSYSLOG_SyslogProtocol23Format
-    '';
-  };
 }

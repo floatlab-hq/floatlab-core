@@ -91,6 +91,29 @@
 
       checks.${system} = {
         host-network = import ./tests/network.nix { inherit pkgs floatlab-binaries; };
+        image-trim =
+        let
+          configurations = map (name: self.nixosConfigurations.${name}.config)
+            [ "floatlab-iso" "floatlab-dev-iso" ];
+          trimmed = cfg:
+            !cfg.documentation.enable && !cfg.services.rsyslogd.enable
+            && !cfg.hardware.bluetooth.enable && !cfg.networking.wireless.enable
+            && cfg.hardware.cpu.intel.updateMicrocode && cfg.hardware.cpu.amd.updateMicrocode
+            && builtins.elem "nano" (map pkgs.lib.getName cfg.environment.systemPackages)
+            && !(pkgs.lib.any (p: builtins.elem (pkgs.lib.getName p) [ "vim" "w3m" "rsyslog" ]) cfg.environment.systemPackages);
+          closure = pkgs.closureInfo { rootPaths = map (cfg: cfg.system.build.toplevel) configurations; };
+        in assert pkgs.lib.all trimmed configurations;
+           pkgs.runCommand "floatlab-image-trim-check" {} ''
+             if grep -E -- '-(linux-firmware|alsa-firmware|sof-firmware|libreelec-dvb-firmware|rsyslog|vim|w3m|nixos-manual-html)-' ${closure}/store-paths; then
+               echo "Untrimmed packages remain in the appliance closure" >&2
+               exit 1
+             fi
+             if grep -Fx '${pkgs.lib.getOutput "modules" (builtins.head configurations).boot.kernelPackages.kernel}' ${closure}/store-paths; then
+               echo "The original kernel module tree remains in the appliance closure" >&2
+               exit 1
+             fi
+             touch "$out"
+           '';
         installer-boot-config =
         let cfg = self.nixosConfigurations.floatlab-iso.config;
         in assert cfg.fileSystems."/iso".fsType == "auto";
