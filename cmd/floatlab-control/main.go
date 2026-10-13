@@ -28,6 +28,7 @@ import (
 
 var (
 	listenAddr        string
+	uiDir             string
 	rqliteURL         string
 	raftNodeID        string
 	raftBindAddr      string
@@ -56,7 +57,8 @@ func main() {
 		RunE:  run,
 	}
 
-	root.Flags().StringVar(&listenAddr, "listen", ":8080", "HTTP API listen address")
+	root.Flags().StringVar(&listenAddr, "listen", ":8080", "HTTP API and UI listen address")
+	root.Flags().StringVar(&uiDir, "ui-dir", "ui/dist", "Built UI directory")
 	root.Flags().StringVar(&rqliteURL, "rqlite-url", "http://localhost:4001", "rqlite base URL")
 	root.Flags().StringVar(&raftNodeID, "raft-id", "node1", "Unique Raft node ID")
 	root.Flags().StringVar(&raftBindAddr, "raft-bind", "0.0.0.0:7000", "Raft TCP bind address")
@@ -244,6 +246,7 @@ func run(cmd *cobra.Command, args []string) error {
 	// HTTP control server.
 	srv := control.NewServer(&control.Config{
 		ListenAddr:    listenAddr,
+		UIDir:         uiDir,
 		RQLiteURL:     rqliteURL,
 		VLogsURL:      vlogsURL,
 		VMetricsURL:   vmetricsURL,

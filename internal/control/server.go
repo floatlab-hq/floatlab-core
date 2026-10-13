@@ -43,6 +43,7 @@ type Server struct {
 
 type Config struct {
 	ListenAddr    string
+	UIDir         string
 	RaftConfig    floatraft.Config
 	RQLiteURL     string
 	VLogsURL      string
@@ -111,6 +112,10 @@ func (s *Server) buildRouter() *chi.Mux {
 		r.Group(func(r chi.Router) { r.Use(s.requireAdminJWT); registerEventRoutes(r, s) })
 		registerConfigRoutes(r, s)
 	})
+
+	if s.cfg.UIDir != "" {
+		r.Mount("/", http.FileServer(http.Dir(s.cfg.UIDir)))
+	}
 
 	return r
 }
