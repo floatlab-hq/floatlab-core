@@ -3,7 +3,7 @@ import eslintPluginVue from 'eslint-plugin-vue'
 import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
-  { ignores: ['dist', '.histoire', 'coverage', 'storybook-static', 'src/vendor/avatar-engine.js'] },
+  { ignores: ['dist', 'coverage', 'storybook-static', 'src/vendor/avatar-engine.js'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   ...eslintPluginVue.configs['flat/recommended'],

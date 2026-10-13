@@ -53,13 +53,38 @@ result/iso/floatlab-installer-{version}.iso
 
 `version` is the Git tag pointing at HEAD, or the short Git commit hash when HEAD
 is untagged. Tags must be present locally (fetch tags first in shallow CI checkouts).
-Uncommitted changes retain HEAD's version.
+Uncommitted changes retain HEAD's version. Set `FLOATLAB_INSTALLER_VERSION` to
+override the version explicitly; the release workflow uses the triggering tag.
 
 Direct Nix builds use the short commit hash; use the helper above for tag naming:
 
 ```bash
 nix build .#iso --print-build-logs
 ```
+
+## Tagged releases
+
+Branch and pull-request CI runs lint, typechecks, contract checks and tests.
+Production builds run only when a version tag is pushed, such as `v1.0.0`,
+`v0.1.0-alpha.0` or `v0.1.0-rc`. The release workflow runs the same CI checks
+before building the UI, Storybook, CLI binaries and production ISO. It checks
+the installer's boot configuration and publishes the four Linux/macOS CLI
+binaries, `floatlab-installer-{tag}.iso` and `SHA256SUMS` to a GitHub release.
+Tags with a prerelease suffix create a GitHub prerelease.
+
+The first planned test tag is `v0.1.0-alpha.0`. Once the release changes are
+committed to the release commit, create and push that tag:
+
+```bash
+git tag v0.1.0-alpha.0
+git push origin v0.1.0-alpha.0
+```
+
+Release checks use the existing `docker04` runner. Builds run on a GitHub-hosted
+Ubuntu runner with Nix installed by the workflow. The first ISO build can take
+longer while dependencies are downloaded and compiled. These checks do not run
+the opt-in appliance installation VM suites. ZFS stream releases are deferred
+until the ISO release path is validated.
 
 ## Console installation
 

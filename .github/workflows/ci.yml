@@ -5,6 +5,7 @@ on:
     branches: [main, Testing]
   pull_request:
     branches: [main]
+  workflow_call:
 
 jobs:
   build-and-test:
@@ -45,31 +46,17 @@ jobs:
       - name: Typecheck and test TypeScript workspace
         run: pnpm --filter @floatlab/client typecheck && pnpm --filter floatlab-cli typecheck && pnpm --recursive test
 
-      - name: Build UI
-        run: pnpm --dir ui lint && pnpm --dir ui build
+      - name: Check UI
+        run: pnpm --dir ui lint && pnpm --dir ui typecheck
 
-      - name: Build component galleries
-        run: pnpm --dir ui storybook:build && pnpm --dir ui story:build
-
-      - name: Build CLI release targets
-        run: |
-          bun build --compile --define '__FLOATLAB_VERSION__="ci"' --target=bun-linux-x64-baseline cli/src/main.ts --outfile /tmp/floatlab-linux-x64
-          bun build --compile --define '__FLOATLAB_VERSION__="ci"' --target=bun-linux-arm64 cli/src/main.ts --outfile /tmp/floatlab-linux-arm64
-          bun build --compile --define '__FLOATLAB_VERSION__="ci"' --target=bun-darwin-x64-baseline cli/src/main.ts --outfile /tmp/floatlab-darwin-x64
-          bun build --compile --define '__FLOATLAB_VERSION__="ci"' --target=bun-darwin-arm64 cli/src/main.ts --outfile /tmp/floatlab-darwin-arm64
-          test "$(/tmp/floatlab-linux-x64 --version)" = ci
+      - name: Test release tag validation
+        run: bash scripts/check-release-tag.test.sh
 
       - name: Download modules
         run: go mod download
 
       - name: Vet
         run: go vet ./...
-
-      - name: Build floatlab-control
-        run: go build -v ./cmd/floatlab-control/...
-
-      - name: Build floatlab-hostd
-        run: go build -v ./cmd/floatlab-hostd/...
 
       - name: Test
         run: go test -race -count=1 ./pkg/... ./internal/... ./api/openapi ./integration

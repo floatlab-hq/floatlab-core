@@ -23,7 +23,7 @@
             && builtins.baseNameOf path != "node_modules";
         };
         subPackages = [ "cmd/floatlab-hostd" "cmd/floatlab-control" "cmd/install-tui" "cmd/install-service" "cmd/install-service-mock" ];
-        vendorHash = "sha256-MMOB4sWq/0Rj/7IGkOuvvBLRcoVVVqbhnyqiLSJQRF8=";
+        vendorHash = "sha256-P7u7guQRMa0D3Zlm79PqLU92oZFHuXMhClurkAAyd9s=";
       };
       floatlab-control-image = pkgs.dockerTools.buildLayeredImage {
         name = "floatlab-control";

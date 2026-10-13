@@ -1,6 +1,6 @@
 # FloatLab UI
 
-The live Vue dashboard and component galleries live in the core pnpm workspace.
+The live Vue dashboard and component gallery live in the core pnpm workspace.
 
 Run `pnpm install` from the repository root, then `pnpm --dir ui dev`.
 Sign in with the backend administrator credentials; bearer tokens remain in memory
@@ -23,11 +23,11 @@ local specifications. Commit both outputs; CI rejects drift.
 Run `pnpm --dir ui test`, `pnpm --dir ui typecheck`, `pnpm --dir ui lint`
 and `pnpm --dir ui build`. Tests run once by default.
 
-## Component galleries
+## Component gallery
 
 `pnpm --dir ui storybook` starts Storybook; `storybook:build` writes
-storybook-static/. `story:dev` and `story:build` retain Histoire.
-Both galleries use fixtures and never require live infrastructure credentials.
+storybook-static/.
+The gallery uses fixtures and never require live infrastructure credentials.
 Themes, fonts and original component documentation are preserved.
 
 ## Publish Storybook locally

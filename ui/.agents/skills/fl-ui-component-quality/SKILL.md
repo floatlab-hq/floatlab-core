@@ -1,15 +1,15 @@
 ---
 name: fl-ui-component-quality
-description: Enforce FloatLab Vue component quality and relational design-system structure with Primitive-first composition, numbered Primitive, Pattern, or Layout Histoire filing, colocated stories, Vitest coverage, type safety, and clean linting. Use whenever creating, changing, refactoring, reviewing, classifying, or diagnosing UI components, component stories, or component tests in this repository.
+description: Enforce FloatLab Vue component quality and relational design-system structure with Primitive-first composition, numbered Primitive, Pattern, or Layout Storybook filing, colocated stories, Vitest coverage, type safety, and clean linting. Use whenever creating, changing, refactoring, reviewing, classifying, or diagnosing UI components, component stories, or component tests in this repository.
 ---
 
 # FloatLab UI Component Quality
 
-Follow the repository's existing Vue, Histoire, and Vitest patterns. Keep changes scoped to the requested behavior.
+Follow the repository's existing Vue, Storybook, and Vitest patterns. Keep changes scoped to the requested behavior.
 
-## Classify every Histoire story
+## Classify every Storybook story
 
-Use exactly one numbered top-level title so Histoire keeps the hierarchy ordered: `1. Primitive/Name`, `2. Pattern/Name`, or `3. Layout/Name`. Classify by responsibility, not size or DOM complexity:
+Use exactly one numbered top-level title to match the Storybook sort order: `1. Primitive/Name`, `2. Pattern/Name`, or `3. Layout/Name`. Classify by responsibility, not size or DOM complexity:
 
 1. **Primitive:** File here as a context-agnostic visual or interactive foundation. Examples: buttons, inputs, icons, badges, avatars, text, and basic displays. It may manage only its own state, such as hover, focus, active, or disabled.
 2. **Pattern:** File here when the component solves a user task, represents domain data, or combines controls into a functional workflow. Examples: data tables, search headers, form groups, date pickers, and media cards.
@@ -27,8 +27,8 @@ Choose Pattern for a task or domain responsibility; otherwise choose Layout for 
 
 ## Build the complete component change
 
-1. Inspect the component, its callers, its `*.story.vue`, its `*.spec.ts`, and the nearest comparable component before editing.
-2. Add a colocated Histoire story and Vitest spec for every new component.
+1. Inspect the component, its callers, its `*.stories.ts`, its `*.spec.ts`, and the nearest comparable component before editing.
+2. Add a colocated Storybook story and Vitest spec for every new component.
 3. Update the existing story and tests whenever a component change affects behavior, states, props, events, or interactions.
 4. Give every story its classified `1. Primitive/Name`, `2. Pattern/Name`, or `3. Layout/Name` title and demonstrate the meaningful supported states and interactions. Do not add duplicate stories for cosmetic implementation details.
 5. Test every function and branch introduced or changed, including prop-driven states, emitted events, and user interactions. Assert observable behavior instead of private implementation details.
@@ -39,10 +39,10 @@ Choose Pattern for a task or domain responsibility; otherwise choose Layout for 
 Run all checks from the repository root:
 
 ```sh
-pnpm test --run
-pnpm typecheck
-pnpm lint
-pnpm story:build
+pnpm --dir ui test
+pnpm --dir ui typecheck
+pnpm --dir ui lint
+pnpm --dir ui storybook:build
 ```
 
 Do not claim completion while a check fails. Fix failures caused by the change; report unrelated pre-existing failures without expanding scope.
@@ -52,4 +52,4 @@ Do not claim completion while a check fails. Fix failures caused by the change; 
 - Every new or changed component has a current story and tests.
 - Every story is filed under `1. Primitive`, `2. Pattern`, or `3. Layout` using the responsibility rules above.
 - Tests cover every new or changed function and behavior.
-- Tests, typecheck, lint, and the Histoire build pass.
+- Tests, typecheck, lint, and the Storybook build pass.
