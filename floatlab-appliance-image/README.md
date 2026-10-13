@@ -80,8 +80,8 @@ git tag v0.1.0-alpha.0
 git push origin v0.1.0-alpha.0
 ```
 
-Release checks use the existing `docker04` runner. Builds run on a GitHub-hosted
-Ubuntu runner with Nix installed by the workflow. The first ISO build can take
+Checks and builds run on GitHub-hosted Ubuntu runners, with Nix installed by
+the release workflow. The first ISO build can take
 longer while dependencies are downloaded and compiled. These checks do not run
 the opt-in appliance installation VM suites. ZFS stream releases are deferred
 until the ISO release path is validated.
