@@ -60,16 +60,18 @@ command parsing and host, network, and account validation still run.
    the preview. Type `ERASE ALL DATA` to confirm the simulated disk layout.
 3. Enter host settings. Open the timezone list with Enter and type to filter it.
    Select DHCP or Static with Left/Right or Space. Static address fields appear
-   only for Static. Submit the network settings to validate them before account
+   only for Static. Select Next to validate network settings before account
    setup opens.
-4. Set up the administrator account, review the configuration, and submit it.
+4. Set up the administrator account. The password strength meter updates as you
+   type using zxcvbn. Select Next to review the configuration, then submit it.
    Optional TOTP enrollment includes an authenticator code and confirmation that
    the recovery codes have been saved.
 5. Watch the six-line progress footer. On success, P or Space pauses the countdown;
    R or Enter reboots. Mock reboot exits the installer. Failures remain visible
    until you choose Reboot.
 
-Tab and Shift+Tab move between form fields. Alt+Up/Down scroll the main area.
+Up/Down or Tab/Shift+Tab move between form fields and the Next button in the
+bottom action bar. Enter or Space activates Next. Alt+Up/Down scroll the main area.
 Ctrl+R quits mock mode from any screen. In a real installation, Ctrl+R reboots
 only after completion or failure. Ctrl+C and Ctrl+D are ignored by the TUI.
 

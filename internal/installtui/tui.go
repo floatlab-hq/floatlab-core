@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/floatlab/floatlab-core/internal/hostnetwork"
 	"github.com/floatlab/floatlab-core/internal/installer"
+	"github.com/nbutton23/zxcvbn-go"
 )
 
 type client struct {
@@ -53,6 +54,7 @@ type Model struct {
 	selected       map[int]bool
 	cursor         int
 	fields         []textinput.Model
+	passwordScore  int
 	labels         []string
 	focus          int
 	command        textarea.Model
@@ -235,6 +237,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.enrollment = nil
 			m.totpCode = ""
+			m.passwordScore = 0
 			m.confirmation.SetValue("")
 		case "failed":
 			m.terminal = true
@@ -423,6 +426,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, cmd
 		case "settings", "account":
+			if m.focus == len(m.fields) && v.String() == " " {
+				v = tea.KeyMsg{Type: tea.KeyEnter}
+			}
 			if m.stage == "settings" && m.focus == 1 && (v.String() == "enter" || v.String() == " ") {
 				m.openTimezone()
 				return m, textinput.Blink
@@ -460,7 +466,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "enter":
 				visible := m.visibleFields()
-				if m.focus == visible[len(visible)-1] {
+				if m.focus == len(m.fields) || m.focus == visible[len(visible)-1] {
 					if m.stage == "settings" {
 						config := m.config()
 						return m, m.send(installer.Request{Type: "validate-host", Config: &config})
@@ -473,12 +479,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.moveFocus(1)
 				return m, textinput.Blink
 			}
-			if m.stage == "settings" && (m.focus == 1 || m.focus == 2) {
+			if m.focus == len(m.fields) || (m.stage == "settings" && (m.focus == 1 || m.focus == 2)) {
 				return m, nil
 			}
-			var cmd tea.Cmd
-			m.fields[m.focus], cmd = m.fields[m.focus].Update(v)
-			return m, cmd
+			return m, m.updateField(v)
 
 		case "review":
 			if v.String() == "esc" {
@@ -555,8 +559,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "timezone":
 		m.timezoneSearch, cmd = m.timezoneSearch.Update(msg)
 	case "settings", "account":
-		if m.focus != 1 && m.focus != 2 {
-			m.fields[m.focus], cmd = m.fields[m.focus].Update(msg)
+		if m.focus < len(m.fields) && m.focus != 1 && m.focus != 2 {
+			cmd = m.updateField(msg)
 		}
 	}
 	return m, cmd
@@ -602,14 +606,14 @@ func (m *Model) setFocus(index int) {
 		m.fields[i].Blur()
 	}
 	m.focus = index
-	if index != 1 && index != 2 {
+	if index < len(m.fields) && index != 1 && index != 2 {
 		m.fields[index].Focus()
 	}
 	m.manualScroll = false
 	m.scroll = 0
 }
 func (m *Model) moveFocus(delta int) {
-	fields := m.visibleFields()
+	fields := append(m.visibleFields(), len(m.fields))
 	position := 0
 	for i, index := range fields {
 		if index == m.focus {
@@ -622,10 +626,43 @@ func (m *Model) moveFocus(delta int) {
 func (m *Model) focusedLine() int {
 	for i, index := range m.visibleFields() {
 		if index == m.focus {
-			return 3 + i*3
+			line := 3 + i*3
+			if m.stage == "account" && index > 8 {
+				line++
+			}
+			return line
 		}
 	}
 	return 3
+}
+
+func (m *Model) updateField(msg tea.Msg) tea.Cmd {
+	old := m.fields[m.focus].Value()
+	var cmd tea.Cmd
+	m.fields[m.focus], cmd = m.fields[m.focus].Update(msg)
+	if old != m.fields[m.focus].Value() && (m.focus == 0 || m.focus == 7 || m.focus == 8) {
+		m.passwordScore = 0
+		if m.fields[8].Value() != "" {
+			m.passwordScore = zxcvbn.PasswordStrength(m.fields[8].Value(), []string{m.fields[0].Value(), m.fields[7].Value(), "floatlab"}).Score
+		}
+	}
+	return cmd
+}
+
+func (m *Model) passwordStrength() string {
+	if m.fields[8].Value() == "" {
+		return "Strength: [·····] Enter a password"
+	}
+	labels := []string{"Very weak", "Weak", "Fair", "Strong", "Very strong"}
+	return fmt.Sprintf("Strength: [%s%s] %s", strings.Repeat("█", m.passwordScore+1), strings.Repeat("·", 4-m.passwordScore), labels[m.passwordScore])
+}
+
+func (m *Model) nextButton() string {
+	button := lipgloss.NewStyle().Foreground(m.currentTheme().background).Background(m.currentTheme().accent).Bold(true).Render("[ Next → ]")
+	if m.focus == len(m.fields) {
+		return "> " + button
+	}
+	return button
 }
 
 func (m *Model) resize() {
@@ -708,10 +745,10 @@ func (m *Model) body() string {
 		return m.timezoneBody()
 	case "settings", "account":
 		title := "Configure FloatLab while installation runs"
-		help := "Tab: next field   Enter: choose / validate network   Alt-↑/↓: scroll"
+		help := "↑/↓ or Tab: focus   Enter: choose / next   Alt-↑/↓: scroll"
 		if m.stage == "account" {
 			title = "Set up administrator"
-			help = "Tab: next field   Enter: next / review   Esc: network settings"
+			help = "↑/↓ or Tab: focus   Enter: next / review   Esc: network settings"
 		}
 		lines = []string{title, help, ""}
 		for _, i := range m.visibleFields() {
@@ -732,7 +769,11 @@ func (m *Model) body() string {
 					value += "   ←/→ or Space to select"
 				}
 			}
-			lines = append(lines, label, value, "")
+			lines = append(lines, label, value)
+			if i == 8 {
+				lines = append(lines, m.passwordStrength())
+			}
+			lines = append(lines, "")
 		}
 		if m.stage == "account" && !m.ntp {
 			lines = append(lines, "TOTP requires synchronized time; password authentication is available.")
@@ -801,6 +842,9 @@ func (m *Model) View() string {
 	offset := m.scroll
 	if (m.stage == "settings" || m.stage == "account") && !m.manualScroll {
 		offset = max(0, m.focusedLine()-bodyHeight+3)
+		if m.focus == len(m.fields) {
+			offset = max(0, len(lines)-bodyHeight)
+		}
 	}
 	if m.stage == "disks" && !m.manualScroll {
 		offset = max(0, 3+m.cursor*2-bodyHeight+3)
@@ -856,7 +900,11 @@ func (m *Model) footer(width int) string {
 	if m.mock {
 		rebootHelp = "Ctrl+R Quit"
 	}
-	rows := []string{spinner + "  " + phase, bar, copied, speed, config, activity, "Ctrl+T Change Theme   " + rebootHelp}
+	actions := "Ctrl+T Change Theme   " + rebootHelp
+	if !m.choosingTheme && (m.stage == "settings" || m.stage == "account") {
+		actions = m.nextButton() + "   ↑/↓ Focus · Enter Next   " + actions
+	}
+	rows := []string{spinner + "  " + phase, bar, copied, speed, config, activity, actions}
 	style := lipgloss.NewStyle().Background(m.currentTheme().panel).Foreground(m.currentTheme().foreground)
 	for i, row := range rows {
 		row = ansi.Truncate(strings.ReplaceAll(row, "\n", " "), width-4, "…")
@@ -883,6 +931,9 @@ func (m *Model) scrollBy(delta int) {
 		switch m.stage {
 		case "settings", "account":
 			m.scroll = max(0, m.focusedLine()-height+3)
+			if m.focus == len(m.fields) {
+				m.scroll = max(0, lines-height)
+			}
 		case "disks":
 			m.scroll = max(0, 3+m.cursor*2-height+3)
 		case "confirm", "totp":

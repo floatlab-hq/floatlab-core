@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/floatlab/floatlab-core/internal/installer"
@@ -63,6 +64,74 @@ func TestCtrlRUsesRebootServiceOnlyWhenTerminal(t *testing.T) {
 }
 
 func key(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
+
+func TestPasswordStrengthUpdatesWithoutExposingPassword(t *testing.T) {
+	m := New("unused", nil)
+	m.settings()
+	m.stage = "account"
+	m.setFocus(8)
+	if !strings.Contains(m.View(), "Enter a password") {
+		t.Fatal("missing empty password meter")
+	}
+	m.Update(key("password"))
+	weak := m.passwordScore
+	if !strings.Contains(m.View(), "Very weak") || m.fields[8].EchoMode != textinput.EchoPassword || m.fields[9].EchoMode != textinput.EchoPassword {
+		t.Fatal("weak password meter is missing")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	password := "vN7!qZ2@bL9#sR4$xT6"
+	m.Update(key(password))
+	if m.passwordScore <= weak || !strings.Contains(m.View(), "Very strong") {
+		t.Fatal("meter did not update for a strong password")
+	}
+	if strings.Contains(m.View(), password) || m.fields[8].Value() != password {
+		t.Fatal("password was exposed or changed")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	if !strings.Contains(m.View(), "Enter a password") {
+		t.Fatal("meter was not cleared")
+	}
+}
+
+func TestNextButtonsNavigateAndValidate(t *testing.T) {
+	for _, stage := range []string{"settings", "account"} {
+		m := New("unused", nil)
+		m.settings()
+		m.stage = stage
+		fields := m.visibleFields()
+		m.setFocus(fields[len(fields)-1])
+		rows := strings.Split(ansi.Strip(m.View()), "\n")
+		if !strings.Contains(rows[len(rows)-1], "[ Next → ]") {
+			t.Fatalf("%s: Next button is missing from the bottom action bar", stage)
+		}
+		if !strings.Contains(ansi.Strip(m.View()), "[ Next → ]") {
+			t.Fatalf("%s: Next button is hidden", stage)
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		if m.focus != len(m.fields) || !strings.Contains(ansi.Strip(m.View()), "> [ Next → ]") {
+			t.Fatalf("%s: Next button is not focusable", stage)
+		}
+		m.Update(key("x"))
+		m.Update(tick{})
+		m.Update(tea.KeyMsg{Type: tea.KeyUp})
+		if m.focus != fields[len(fields)-1] {
+			t.Fatal("cannot navigate back from Next")
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		_, cmd := m.Update(key(" "))
+		if stage == "settings" {
+			if cmd == nil || !m.pending || m.stage != "settings" {
+				t.Fatal("Next bypassed network validation")
+			}
+			m.Update(received{event: installer.Event{ID: m.requestID, Type: "error", Error: "Invalid network"}})
+			if m.pending || m.stage != "settings" || !strings.Contains(m.View(), "Next") {
+				t.Fatal("rejected network did not remain editable")
+			}
+		} else if cmd != nil || m.stage != "review" {
+			t.Fatal("Next did not open account review")
+		}
+	}
+}
 
 func TestFooterUsesExactlySevenFullWidthLines(t *testing.T) {
 	m := New("unused", nil)
