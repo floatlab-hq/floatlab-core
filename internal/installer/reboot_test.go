@@ -33,6 +33,13 @@ func TestRebootDoesNotExportMountedZFSRoot(t *testing.T) {
 			if !strings.Contains(string(commands), "systemctl reboot") {
 				t.Fatal("reboot was not requested")
 			}
+			if fs == "tmpfs" {
+				stop := strings.Index(string(commands), "systemctl stop floatlab-installer-root.service")
+				export := strings.Index(string(commands), "zpool export")
+				if stop < 0 || stop > export || strings.Contains(string(commands), "docker.socket") {
+					t.Fatalf("runtime was not stopped before export:\n%s", commands)
+				}
+			}
 		})
 	}
 }

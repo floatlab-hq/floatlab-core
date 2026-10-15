@@ -1,5 +1,17 @@
-{ lib, ... }:
+{ config, pkgs, ... }:
 {
+  environment.systemPackages = [ pkgs.docker-compose (pkgs.writeShellApplication {
+    name = "floatlab-installer-docker";
+    runtimeInputs = [ pkgs.docker pkgs.kmod config.boot.zfs.package ];
+    text = ''
+      exec dockerd --config-file=${pkgs.writeText "floatlab-installer-docker.json" (builtins.toJSON
+        (config.virtualisation.docker.daemon.settings // {
+          hosts = [ "unix:///run/docker.sock" ];
+          group = "root";
+          "live-restore" = false;
+        }))}
+    '';
+  }) ];
   virtualisation.docker = {
     enable = true;
     enableOnBoot = true;

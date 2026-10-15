@@ -1,4 +1,4 @@
-{ lib, modulesPath, floatlab-version, ... }:
+{ lib, modulesPath, floatlab-version, floatlab-development ? false, ... }:
 {
   imports = [
     (modulesPath + "/installer/cd-dvd/installation-cd-minimal.nix")
@@ -7,11 +7,12 @@
     ./modules/zfs.nix
     ./modules/persistence.nix
     ./modules/networking.nix
+    ./modules/dev-provision.nix
+    ./modules/installer.nix
+  ] ++ lib.optionals floatlab-development [
     ./modules/docker.nix
     ./modules/hostd.nix
     ./modules/core-stack.nix
-    ./modules/dev-provision.nix
-    ./modules/installer.nix
   ];
 
   image.baseName = lib.mkForce "floatlab-installer-${floatlab-version}";
@@ -21,6 +22,12 @@
   # an ephemeral writable root layer. We intentionally retain that mechanism.
   installer.cloneConfig = false;
   isoImage.forceTextMode = true;
+
+  programs.git.enable = lib.mkForce false;
+  system.disableInstallerTools = true;
+  system.installer.channel.enable = false;
+  # Fetch expressions on demand instead of bundling the entire Nixpkgs tree.
+  nix.nixPath = lib.mkForce [ "nixpkgs=https://channels.nixos.org/nixos-26.05/nixexprs.tar.xz" ];
 
   system.stateVersion = "26.05";
 }

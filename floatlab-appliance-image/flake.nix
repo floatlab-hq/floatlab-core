@@ -41,7 +41,7 @@
             && builtins.baseNameOf path != "node_modules";
         };
         subPackages = [ "cmd/floatlab-hostd" "cmd/floatlab-control" "cmd/install-tui" "cmd/install-service" "cmd/install-service-mock" ];
-        vendorHash = "sha256-P7u7guQRMa0D3Zlm79PqLU92oZFHuXMhClurkAAyd9s=";
+        vendorHash = "sha256-xdvnEJ1wrYitQUAfuW4/mGHUdU2lOelYyfW08ytwW3k=";
       };
       floatlab-control-image = pkgs.dockerTools.buildLayeredImage {
         name = "floatlab-control";
@@ -143,6 +143,22 @@
           python3 ${./tests/os-live.py} ${./nixos/modules/os-live.sh}
           touch "$out"
         '';
+        installer-runtime =
+        let
+          cfg = self.nixosConfigurations.floatlab-iso.config;
+          closure = pkgs.closureInfo { rootPaths = [ cfg.system.build.toplevel ]; };
+        in pkgs.runCommand "floatlab-installer-runtime-check" { nativeBuildInputs = [ pkgs.python3 pkgs.bash ]; } ''
+          python3 ${./tests/installer-root.py} ${./nixos/modules/installer-root.sh}
+          if grep -E -- '-(docker|docker-buildx|docker-compose|docker-containerd|docker-runc|moby)-[0-9]|-floatlab-control\.tar' ${closure}/store-paths; then
+            echo "Container runtime remains in the live installer closure" >&2
+            exit 1
+          fi
+          if grep -E -- '-(git|git-minimal)-[0-9]|-nixos-[0-9]' ${closure}/store-paths; then
+            echo "Git or bundled Nixpkgs remains in the live installer closure" >&2
+            exit 1
+          fi
+          touch "$out"
+        '';
         host-network = import ./tests/network.nix { inherit pkgs floatlab-binaries; };
         image-trim =
         let
@@ -173,6 +189,17 @@
           installed = self.nixosConfigurations.floatlab-installed.config;
         in assert cfg.fileSystems."/iso".fsType == "iso9660";
            assert !cfg.boot.initrd.systemd.enable;
+           assert !cfg.virtualisation.docker.enable;
+           assert !cfg.programs.git.enable;
+           assert cfg.system.disableInstallerTools;
+           assert !cfg.system.installer.channel.enable;
+           assert cfg.nix.enable;
+           assert installed.virtualisation.docker.enable;
+           assert cfg.systemd.services.docker.serviceConfig.RootDirectory == "/run/floatlab-installer/root";
+           assert cfg.systemd.services.docker.serviceConfig.PrivateMounts;
+           assert !cfg.systemd.services.docker.serviceConfig.MountAPIVFS;
+           assert cfg.systemd.services.floatlab-hostd.environment.SYSTEMD_OFFLINE == "0";
+           assert builtins.elem "floatlab-installer-root.service" cfg.systemd.services.floatlab-core-stack.requires;
            assert installed.fileSystems."/".fsType == "zfs";
            assert installed.fileSystems."/".device == "floatlab/os/live";
            assert installed.hardware.enableAllHardware;

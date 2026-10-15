@@ -18,9 +18,7 @@
     coreutils
     curl
     dig
-    docker-compose
     ethtool
-    gitMinimal
     htop
     iproute2
     jq

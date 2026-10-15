@@ -1,5 +1,8 @@
 { config, lib, pkgs, floatlab-binaries, floatlab-development ? false, ... }:
 let
+  root = "/run/floatlab-installer/root";
+  chroot = "${pkgs.coreutils}/bin/chroot ${root} /run/current-system/sw/bin";
+  rootSetup = pkgs.writeShellScript "floatlab-installer-root" (builtins.readFile ./installer-root.sh);
   gate = pkgs.writeShellScript "floatlab-installed-gate" ''
     test -e /floatlab/system/etc/installed || test -e /run/floatlab-installer/finalizing ||
       { test -e /floatlab/system/docker-compose.yml && ! test -e /floatlab/system/etc/install-operation.json; }
@@ -105,9 +108,68 @@ in {
     networkctl reload
   '';
 
-  systemd.services.docker = lib.mkIf (!floatlab-development) { wantedBy = lib.mkForce []; serviceConfig.ExecCondition = gate; };
-  systemd.services.floatlab-hostd = lib.mkIf (!floatlab-development) { wantedBy = lib.mkForce []; serviceConfig.ExecCondition = gate; };
-
-  systemd.services.floatlab-core-stack = lib.mkIf (!floatlab-development) { wantedBy = lib.mkForce []; serviceConfig.ExecCondition = gate; };
-  systemd.sockets.docker.wantedBy = lib.mkIf (!floatlab-development) (lib.mkForce []);
+  # Keep kernel support on the live host; userspace comes from the installed root.
+  boot.kernelModules = lib.mkIf (!floatlab-development) [ "bridge" "veth" "br_netfilter" "xt_nat" ];
+  boot.kernel.sysctl."net.ipv4.conf.all.forwarding" = lib.mkIf (!floatlab-development) true;
+  boot.kernel.sysctl."net.ipv4.conf.default.forwarding" = lib.mkIf (!floatlab-development) true;
+  systemd.services.floatlab-installer-root = lib.mkIf (!floatlab-development) {
+    description = "Temporary installed root for installer verification";
+    requires = [ "floatlab-datasets.service" ];
+    after = [ "floatlab-datasets.service" ];
+    path = with pkgs; [ coreutils util-linux zfs ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = "${rootSetup} prepare";
+      ExecStopPost = "${rootSetup} cleanup";
+      TimeoutStopSec = "120s";
+    };
+  };
+  systemd.services.docker = lib.mkIf (!floatlab-development) {
+    description = "Installed Docker daemon for installer verification";
+    requires = [ "floatlab-installer-root.service" ];
+    after = [ "floatlab-installer-root.service" "floatlab-network-config.service" ];
+    serviceConfig = {
+      Type = "notify";
+      NotifyAccess = "all";
+      # Docker exec requires a real root switch, not only chroot(2).
+      RootDirectory = root;
+      PrivateMounts = true;
+      MountAPIVFS = false;
+      ExecStart = "/run/current-system/sw/bin/floatlab-installer-docker";
+      Delegate = true;
+      TasksMax = "infinity";
+      KillMode = "control-group";
+      TimeoutStartSec = "120s";
+      TimeoutStopSec = "120s";
+    };
+  };
+  systemd.services.floatlab-hostd = lib.mkIf (!floatlab-development) {
+    environment.SYSTEMD_OFFLINE = "0";
+    requires = [ "floatlab-installer-root.service" "floatlab-network-config.service" ];
+    after = [ "floatlab-installer-root.service" "floatlab-network-config.service" ];
+    serviceConfig = {
+      ExecStart = "${chroot}/floatlab-installer-hostd";
+      RuntimeDirectory = "floatlab";
+      RuntimeDirectoryPreserve = "restart";
+      RuntimeDirectoryMode = "0750";
+      EnvironmentFile = "-/floatlab/system/etc/hostd.env";
+      Restart = "on-failure";
+      RestartSec = 2;
+    };
+  };
+  systemd.services.floatlab-core-stack = lib.mkIf (!floatlab-development) {
+    requires = [ "floatlab-installer-root.service" "docker.service" "floatlab-hostd.service" "floatlab-network-config.service" ];
+    after = [ "floatlab-installer-root.service" "docker.service" "floatlab-hostd.service" "floatlab-network-config.service" "network-online.target" ];
+    wants = [ "network-online.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = "${chroot}/floatlab-start-core-stack";
+      # ExecStopPost also tears down a partially started stack after startup fails.
+      ExecStopPost = "${chroot}/docker-compose -f /floatlab/system/docker-compose.yml down";
+      TimeoutStartSec = "10min";
+      TimeoutStopSec = "120s";
+    };
+  };
 }

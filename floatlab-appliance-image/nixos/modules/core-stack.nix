@@ -23,6 +23,7 @@ let
     runtimeInputs = [ pkgs.curl pkgs.docker pkgs.docker-compose pkgs.coreutils pkgs.gnugrep pkgs.jq ];
     text = ''
       set -euo pipefail
+      ${seedCompose}/bin/floatlab-seed-core-stack
       for _ in $(seq 1 30); do
         [ -S /run/floatlab/hostd.sock ] && break
         sleep 1
@@ -58,6 +59,7 @@ let
     '';
   };
 in {
+  environment.systemPackages = [ startStack ];
   systemd.services.floatlab-core-stack-seed = {
     description = "Seed the FloatLab core Compose project when absent";
     requires = [ "floatlab-datasets.service" ];

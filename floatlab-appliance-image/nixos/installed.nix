@@ -25,6 +25,6 @@
   '';
   fileSystems."/" = { device = "floatlab/os/live"; fsType = "zfs"; };
   services.timesyncd.enable = true;
-  environment.systemPackages = [ pkgs.zfs ];
+  environment.systemPackages = [ pkgs.zfs pkgs.gitMinimal ];
   system.stateVersion = "26.05";
 }

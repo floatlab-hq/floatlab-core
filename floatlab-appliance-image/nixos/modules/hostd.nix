@@ -1,5 +1,10 @@
-{ floatlab-binaries, pkgs, ... }:
+{ config, floatlab-binaries, pkgs, ... }:
 {
+  environment.systemPackages = [ (pkgs.writeShellApplication {
+    name = "floatlab-installer-hostd";
+    runtimeInputs = config.systemd.services.floatlab-hostd.path;
+    text = ''exec ${floatlab-binaries}/bin/floatlab-hostd'';
+  }) ];
   systemd.services.floatlab-hostd = {
     description = "FloatLab host daemon";
     path = with pkgs; [ coreutils docker inetutils iproute2 openssh zfs systemd ethtool ];

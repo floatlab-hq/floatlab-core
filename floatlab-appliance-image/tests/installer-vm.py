@@ -228,6 +228,11 @@ def run_case(args, count):
     early_return = False
     try:
         child.expect("Press Enter to begin", timeout=600)
+        guest_command(guest_socket, "set -e; test ! -x /run/current-system/sw/bin/docker; "
+                      "test ! -x /run/current-system/sw/bin/docker-compose; "
+                      "test ! -x /run/current-system/sw/bin/git; "
+                      "test -x /run/current-system/sw/bin/nix-shell; "
+                      "test ! -e /run/floatlab-installer/root/run/docker.sock")
         if args.before_storage or args.failures:
             environment = shlex.split(guest_command(guest_socket, "systemctl show -p Environment --value floatlab-installer-console@ttyS0"))
             worker_path = next(value[5:] for value in environment if value.startswith("PATH="))
@@ -315,6 +320,9 @@ def run_case(args, count):
         child.send("p")
         child.expect("Automatic reboot paused")
         node_id, verified_step = wait_stack(base, name, secret=secret)
+        guest_command(guest_socket, 'set -e; systemctl is-active --quiet floatlab-installer-root; '
+                      'test "$(findmnt -n -o SOURCE /run/floatlab-installer/root)" = floatlab/os/installer; '
+                      'chroot /run/floatlab-installer/root /run/current-system/sw/bin/docker info >/dev/null')
         if secret:
             rejected_login(base, {"totp_code": totp(secret, verified_step)})
             login(base, {"recovery_code": recovery_codes[0]})
@@ -331,7 +339,9 @@ def run_case(args, count):
         child.expect(pexpect.EOF)
     except Exception:
         try:
-            print(guest_command(guest_socket, "systemctl status floatlab-installer-console@ttyS0.service --no-pager; journalctl -u floatlab-installer-console@ttyS0 -n 20 --no-pager; tail -n 20 /tmp/install-tui-*.log"), flush=True)
+            print(guest_command(guest_socket, "journalctl -u floatlab-installer-console@ttyS0 "
+                                "-u floatlab-installer-root -u docker -u floatlab-hostd -u floatlab-core-stack "
+                                "-n 80 --no-pager; tail -n 20 /tmp/install-tui-*.log"), flush=True)
         except Exception as diagnostic:
             print("Guest diagnostics unavailable:", diagnostic, flush=True)
         raise
@@ -358,6 +368,7 @@ def run_case(args, count):
                                    "test ! -e /floatlab/system/etc/bootstrap.json && echo SETTINGS_OK")
             assert output.splitlines() == [name, args.timezone, "SETTINGS_OK"], output
             output = guest_command(guest_socket, 'set -e; test "$(findmnt -n -o SOURCE /)" = floatlab/os/live; '
+                                   '! zfs list floatlab/os/installer >/dev/null 2>&1; '
                                    'test ! -e /os-ephemeral-test; '
                                    'test "$(cat /floatlab/system/etc/os-persistence-test)" = persistent; '
                                    'origin=$(zfs get -H -o value origin floatlab/os/current); '

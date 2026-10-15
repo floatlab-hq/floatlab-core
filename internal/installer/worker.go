@@ -242,13 +242,13 @@ func installWorker(stopCtx context.Context, runtimeDir, persistentDir, mediaDir 
 	}
 	defer func() {
 		if err != nil {
-			status.Error = err.Error()
 			_ = os.Remove(runtimeDir + "/finalizing")
 			if status.PoolReady || status.StorageReady {
-				cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				_ = run(cleanup, "systemctl", "stop", "--no-block", "floatlab-core-stack.service")
+				cleanup, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				err = errors.Join(err, run(cleanup, "systemctl", "stop", "floatlab-installer-root.service"))
 				cancel()
 			}
+			status.Error = err.Error()
 			_ = saveStatusAt(runtimeDir, persistentDir, status)
 			publish()
 		}

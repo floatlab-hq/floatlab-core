@@ -16,7 +16,7 @@ func reboot(ctx context.Context) error {
 	if strings.TrimSpace(string(root)) == "zfs" {
 		return run(ctx, "systemctl", "reboot")
 	}
-	if err := run(ctx, "systemctl", "stop", "floatlab-core-stack.service", "docker.service", "docker.socket", "floatlab-hostd.service"); err != nil {
+	if err := run(ctx, "systemctl", "stop", "floatlab-installer-root.service"); err != nil {
 		return err
 	}
 	pools, err := exec.CommandContext(ctx, "zpool", "list", "-H", "-o", "name").CombinedOutput()
