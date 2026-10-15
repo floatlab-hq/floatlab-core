@@ -27,7 +27,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
-	if err := installtui.Run(ctx, *service, args); err != nil {
+	if err := installtui.Run(ctx, *service, args, *mock); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

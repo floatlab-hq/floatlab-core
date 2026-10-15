@@ -1,6 +1,8 @@
 package installtui
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +11,56 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/floatlab/floatlab-core/internal/installer"
 )
+
+func TestCtrlRQuitsMockFromAnyScreen(t *testing.T) {
+	for _, stage := range []string{"welcome", "connecting", "disks", "command", "confirm", "settings", "account", "review", "totp", "timezone", "waiting", "complete", "failed", "unavailable"} {
+		m := New("unused", nil)
+		m.mock, m.pending, m.choosingTheme = true, true, true
+		m.stage = stage
+		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+		if cmd == nil {
+			t.Fatalf("%s: Ctrl+R did not quit", stage)
+		}
+		if _, ok := cmd().(tea.QuitMsg); !ok || m.rebooting {
+			t.Fatalf("%s: Ctrl+R did not safely quit mock mode", stage)
+		}
+		if !strings.Contains(m.footer(80), "Ctrl+R Quit") {
+			t.Fatal("mock quit shortcut is missing")
+		}
+	}
+}
+
+func TestCtrlRUsesRebootServiceOnlyWhenTerminal(t *testing.T) {
+	m := New("unused", nil)
+	var output bytes.Buffer
+	m.client = &client{encoder: json.NewEncoder(&output)}
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	if cmd != nil || m.rebooting || m.validation == "" {
+		t.Fatal("Ctrl+R allowed reboot before completion or failure")
+	}
+	for _, stage := range []string{"complete", "failed"} {
+		m.stage, m.terminal, m.pending, m.rebooting = stage, true, false, false
+		output.Reset()
+		_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+		if cmd == nil || !m.rebooting || !m.paused {
+			t.Fatal("Ctrl+R did not request reboot")
+		}
+		if result := cmd().(sent); result.err != nil {
+			t.Fatal(result.err)
+		}
+		var request installer.Request
+		if err := json.Unmarshal(output.Bytes(), &request); err != nil || request.Type != "reboot" {
+			t.Fatalf("unexpected reboot request: %s, %v", output.String(), err)
+		}
+		_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+		if cmd != nil {
+			t.Fatal("repeated Ctrl+R sent another reboot")
+		}
+	}
+	if !strings.Contains(m.footer(80), "Ctrl+R Reboot") {
+		t.Fatal("reboot shortcut is missing")
+	}
+}
 
 func key(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
 

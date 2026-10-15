@@ -43,6 +43,7 @@ type Model struct {
 	theme          int
 	themeCursor    int
 	choosingTheme  bool
+	mock           bool
 	service        string
 	args           []string
 	client         *client
@@ -99,8 +100,9 @@ func New(service string, args []string) *Model {
 	m.styleInputs()
 	return m
 }
-func Run(ctx context.Context, service string, args []string) error {
+func Run(ctx context.Context, service string, args []string, mock bool) error {
 	m := New(service, args)
+	m.mock = mock
 	defer func() {
 		if m.client != nil {
 			m.client.input.Close()
@@ -273,6 +275,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Ctrl-C/Ctrl-D are deliberately not quit actions in the installer.
 		if v.String() == "ctrl+c" || v.String() == "ctrl+d" {
 			return m, nil
+		}
+		if v.String() == "ctrl+r" {
+			if m.mock {
+				return m, tea.Quit
+			}
+			if m.pending || m.rebooting {
+				return m, nil
+			}
+			if !m.terminal || m.client == nil {
+				m.validation = "Reboot is available after installation completes or fails."
+				return m, nil
+			}
+			return m, m.reboot()
 		}
 		if v.String() == "ctrl+t" {
 			m.choosingTheme = !m.choosingTheme
@@ -837,7 +852,11 @@ func (m *Model) footer(width int) string {
 	} else if m.validation != "" {
 		activity = m.validation
 	}
-	rows := []string{spinner + "  " + phase, bar, copied, speed, config, activity, "Ctrl+T Change Theme"}
+	rebootHelp := "Ctrl+R Reboot"
+	if m.mock {
+		rebootHelp = "Ctrl+R Quit"
+	}
+	rows := []string{spinner + "  " + phase, bar, copied, speed, config, activity, "Ctrl+T Change Theme   " + rebootHelp}
 	style := lipgloss.NewStyle().Background(m.currentTheme().panel).Foreground(m.currentTheme().foreground)
 	for i, row := range rows {
 		row = ansi.Truncate(strings.ReplaceAll(row, "\n", " "), width-4, "…")

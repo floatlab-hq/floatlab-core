@@ -70,7 +70,8 @@ command parsing and host, network, and account validation still run.
    until you choose Reboot.
 
 Tab and Shift+Tab move between form fields. Alt+Up/Down scroll the main area.
-The installer has no quit action; Ctrl+C and Ctrl+D are ignored by the TUI.
+Ctrl+R quits mock mode from any screen. In a real installation, Ctrl+R reboots
+only after completion or failure. Ctrl+C and Ctrl+D are ignored by the TUI.
 
 ## Build standalone executables
 
