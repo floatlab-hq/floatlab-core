@@ -12,7 +12,7 @@ import (
 
 func key(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
 
-func TestFooterUsesExactlySixFullWidthLines(t *testing.T) {
+func TestFooterUsesExactlySevenFullWidthLines(t *testing.T) {
 	m := New("unused", nil)
 	m.stage = "settings"
 	m.settings()
@@ -21,7 +21,7 @@ func TestFooterUsesExactlySixFullWidthLines(t *testing.T) {
 		m.width, m.height = width, 24
 		m.resize()
 		rows := strings.Split(m.footer(width), "\n")
-		if len(rows) != 6 {
+		if len(rows) != 7 {
 			t.Fatal(len(rows))
 		}
 		for _, row := range rows {

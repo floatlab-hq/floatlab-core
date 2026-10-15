@@ -48,6 +48,7 @@ func (m *Model) openTimezone() {
 	m.timezoneSearch.Prompt = "Search: "
 	m.timezoneSearch.CharLimit = 128
 	m.timezoneSearch.Focus()
+	m.styleInputs()
 	m.resize()
 	m.timezoneCursor = 0
 	for i, zone := range timezones {
@@ -59,7 +60,7 @@ func (m *Model) openTimezone() {
 }
 func (m *Model) timezoneBody() string {
 	matches := m.timezoneMatches()
-	rows := max(1, m.height-15)
+	rows := max(1, m.height-16)
 	start := max(0, m.timezoneCursor-rows/2)
 	start = min(start, max(0, len(matches)-rows))
 	lines := []string{"Choose timezone", "Type to filter   ↑/↓: select   Enter: confirm   Esc: back", "", m.timezoneSearch.View(), ""}

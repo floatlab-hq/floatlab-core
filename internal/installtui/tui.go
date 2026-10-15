@@ -40,6 +40,9 @@ type sent struct{ err error }
 type tick time.Time
 
 type Model struct {
+	theme          int
+	themeCursor    int
+	choosingTheme  bool
 	service        string
 	args           []string
 	client         *client
@@ -87,7 +90,14 @@ func New(service string, args []string) *Model {
 	confirmation := textinput.New()
 	confirmation.Prompt = ""
 	confirmation.CharLimit = 64
-	return &Model{service: service, args: args, stage: "welcome", width: 80, height: 24, selected: map[int]bool{}, command: command, confirmation: confirmation, status: installer.Status{Phase: "Waiting for disk layout"}}
+	m := &Model{service: service, args: args, stage: "welcome", width: 80, height: 24, selected: map[int]bool{}, command: command, confirmation: confirmation, status: installer.Status{Phase: "Waiting for disk layout"}}
+	for i, theme := range themes {
+		if theme.name == "Everforest" {
+			m.theme = i
+		}
+	}
+	m.styleInputs()
+	return m
 }
 func Run(ctx context.Context, service string, args []string) error {
 	m := New(service, args)
@@ -264,8 +274,29 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.String() == "ctrl+c" || v.String() == "ctrl+d" {
 			return m, nil
 		}
+		if v.String() == "ctrl+t" {
+			m.choosingTheme = !m.choosingTheme
+			m.themeCursor = m.theme
+			m.styleInputs()
+			return m, nil
+		}
+		if m.choosingTheme {
+			switch v.String() {
+			case "up", "k":
+				m.themeCursor = max(0, m.themeCursor-1)
+			case "down", "j":
+				m.themeCursor = min(len(themes)-1, m.themeCursor+1)
+			case "enter":
+				m.theme = m.themeCursor
+				m.choosingTheme = false
+			case "esc":
+				m.choosingTheme = false
+			}
+			m.styleInputs()
+			return m, nil
+		}
 		if m.stage == "timezone" && (v.String() == "pgup" || v.String() == "pgdown") {
-			delta := max(1, m.height-15)
+			delta := max(1, m.height-16)
 			if v.String() == "pgup" {
 				delta = -delta
 			}
@@ -273,11 +304,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if v.String() == "pgup" {
-			m.scrollBy(-max(1, m.height-8))
+			m.scrollBy(-max(1, m.height-9))
 			return m, nil
 		}
 		if v.String() == "pgdown" {
-			m.scrollBy(max(1, m.height-8))
+			m.scrollBy(max(1, m.height-9))
 			return m, nil
 		}
 		if v.String() == "alt+up" {
@@ -538,6 +569,7 @@ func (m *Model) settings() {
 	}
 	m.focus = 0
 	m.fields[0].Focus()
+	m.styleInputs()
 	m.resize()
 }
 func (m *Model) visibleFields() []int {
@@ -650,7 +682,7 @@ func (m *Model) body() string {
 			}
 		}
 	case "command":
-		lines = []string{"Edit the complete pool command", "Enter: new line   Ctrl+S: validate / preview   Esc: back", "", lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#537279")).Padding(0, 1).Render(m.command.View()), "", "Whole-disk references will become ZFS partition references.", "Edit mirror to raidz, raidz2, or another supported topology."}
+		lines = []string{"Edit the complete pool command", "Enter: new line   Ctrl+S: validate / preview   Esc: back", "", lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.currentTheme().accent).Padding(0, 1).Render(m.command.View()), "", "Whole-disk references will become ZFS partition references.", "Edit mirror to raidz, raidz2, or another supported topology."}
 	case "confirm":
 		lines = []string{"Confirm disk layout", "Esc: edit command", ""}
 		for _, d := range m.preview.Disks {
@@ -739,11 +771,18 @@ func (m *Model) View() string {
 	}
 	width := m.width
 	step := map[string]string{"welcome": "Welcome", "connecting": "Starting installer", "disks": "1 · Disk selection", "command": "1 · Pool command", "confirm": "1 · Confirm layout", "settings": "2 · Host and network settings", "timezone": "2 · Choose timezone", "account": "3 · Administrator account", "review": "3 · Review configuration", "totp": "3 · Authenticator enrollment", "waiting": "4 · Installing", "complete": "Complete", "failed": "Failed", "unavailable": "Service unavailable"}[m.stage]
-	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7CD4C5")).Width(width).Render(ansi.Truncate("  FloatLab  ·  "+step, width, "…"))
-	bodyHeight := m.height - 8
+	if m.choosingTheme {
+		step = "Change theme"
+	}
+	header := lipgloss.NewStyle().Bold(true).Foreground(m.currentTheme().accent).Width(width).Render(ansi.Truncate("  FloatLab  ·  "+step, width, "…"))
+	bodyHeight := m.height - 9
 	bodyWidth := width - 4
 	// Wrap first so long commands, inventory rows, and errors remain readable.
-	lines := strings.Split(ansi.Wrap(m.body(), bodyWidth, ""), "\n")
+	body := m.body()
+	if m.choosingTheme {
+		body = m.themeBody()
+	}
+	lines := strings.Split(ansi.Wrap(body, bodyWidth, ""), "\n")
 	offset := m.scroll
 	if (m.stage == "settings" || m.stage == "account") && !m.manualScroll {
 		offset = max(0, m.focusedLine()-bodyHeight+3)
@@ -753,6 +792,9 @@ func (m *Model) View() string {
 	}
 	if (m.stage == "confirm" || m.stage == "totp") && !m.manualScroll {
 		offset = max(offset, len(lines)-bodyHeight)
+	}
+	if m.choosingTheme {
+		offset = 0
 	}
 	offset = min(offset, max(0, len(lines)-bodyHeight))
 	var visible []string
@@ -764,7 +806,7 @@ func (m *Model) View() string {
 		visible = append(visible, "  "+line)
 	}
 	footer := m.footer(width)
-	return header + "\n\n" + strings.Join(visible, "\n") + "\n" + footer
+	return lipgloss.NewStyle().Background(m.currentTheme().background).Foreground(m.currentTheme().foreground).Width(width).Render(header + "\n\n" + strings.Join(visible, "\n") + "\n" + footer)
 }
 func (m *Model) footer(width int) string {
 	phase := m.status.Phase
@@ -795,8 +837,8 @@ func (m *Model) footer(width int) string {
 	} else if m.validation != "" {
 		activity = m.validation
 	}
-	rows := []string{spinner + "  " + phase, bar, copied, speed, config, activity}
-	style := lipgloss.NewStyle().Background(lipgloss.Color("#182529")).Foreground(lipgloss.Color("#C9D8DC"))
+	rows := []string{spinner + "  " + phase, bar, copied, speed, config, activity, "Ctrl+T Change Theme"}
+	style := lipgloss.NewStyle().Background(m.currentTheme().panel).Foreground(m.currentTheme().foreground)
 	for i, row := range rows {
 		row = ansi.Truncate(strings.ReplaceAll(row, "\n", " "), width-4, "…")
 		rows[i] = style.Render("  " + row + strings.Repeat(" ", max(0, width-2-ansi.StringWidth(row))))
@@ -816,7 +858,7 @@ func ServicePath(name string) string {
 }
 
 func (m *Model) scrollBy(delta int) {
-	height := max(1, m.height-8)
+	height := max(1, m.height-9)
 	lines := len(strings.Split(ansi.Wrap(m.body(), max(1, m.width-4), ""), "\n"))
 	if !m.manualScroll {
 		switch m.stage {
