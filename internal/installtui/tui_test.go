@@ -17,14 +17,14 @@ func TestRemovedShortcutsDoNotQuitPauseOrReboot(t *testing.T) {
 	for _, stage := range []string{"disks", "complete", "failed"} {
 		m := New("unused", nil)
 		m.stage, m.terminal, m.countdown = stage, stage != "disks", 120
-		for _, key := range []tea.KeyMsg{{Type: tea.KeyCtrlR}, {Type: tea.KeyCtrlC}, {Type: tea.KeyCtrlD}, {Type: tea.KeyRunes, Runes: []rune("p")}, {Type: tea.KeyRunes, Runes: []rune("r")}} {
+		for _, key := range []tea.KeyMsg{{Type: tea.KeyCtrlC}, {Type: tea.KeyCtrlD}, {Type: tea.KeyRunes, Runes: []rune("p")}, {Type: tea.KeyRunes, Runes: []rune("r")}} {
 			_, cmd := m.Update(key)
 			if cmd != nil || m.rebooting || m.paused {
 				t.Fatalf("%s: removed shortcut still acts", stage)
 			}
 		}
 		footer := ansi.Strip(m.footer(80))
-		if strings.Contains(footer, "Ctrl+R") || strings.Contains(footer, "Quit") || strings.Contains(footer, "Pause") {
+		if strings.Contains(footer, "Quit") || strings.Contains(footer, "Pause") {
 			t.Fatal("removed shortcuts remain in footer")
 		}
 	}
@@ -330,5 +330,33 @@ func TestAccountStepWaitsForNetworkValidation(t *testing.T) {
 	_, _ = m.Update(received{event: installer.Event{ID: m.requestID, Type: "validate-host"}})
 	if m.stage != "account" || m.focus != 7 {
 		t.Fatal("valid network did not open account setup")
+	}
+}
+
+func TestCtrlRRebootsOnlyAfterCompletionOrFailure(t *testing.T) {
+	for _, stage := range []string{"disks", "settings", "account", "review", "waiting", "complete", "failed"} {
+		m := New("unused", nil)
+		m.stage, m.terminal = stage, stage == "complete" || stage == "failed"
+		var output bytes.Buffer
+		m.client = &client{encoder: json.NewEncoder(&output)}
+		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+		if !m.terminal {
+			if cmd != nil || m.rebooting || strings.Contains(m.helpBar(88), "Ctrl+R") {
+				t.Fatalf("%s: reboot enabled before terminal state", stage)
+			}
+			continue
+		}
+		if cmd == nil || !m.rebooting || !strings.Contains(ansi.Strip(m.helpBar(88)), "Ctrl+R Reboot") {
+			t.Fatal("terminal reboot shortcut is missing")
+		}
+		cmd()
+		var request installer.Request
+		if err := json.Unmarshal(output.Bytes(), &request); err != nil || request.Type != "reboot" {
+			t.Fatal("Ctrl+R did not send a reboot request")
+		}
+		_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+		if cmd != nil {
+			t.Fatal("repeated Ctrl+R sent duplicate reboot request")
+		}
 	}
 }

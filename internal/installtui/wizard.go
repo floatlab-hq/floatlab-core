@@ -252,6 +252,9 @@ func (m *Model) helpBar(width int) string {
 	case m.stage == "waiting" || m.stage == "connecting":
 		help = "Installing…"
 	}
+	if m.terminal {
+		help += "  Ctrl+R Reboot"
+	}
 	help = ansi.Truncate(help, max(1, width-4), "…")
 	t := m.currentTheme()
 	keyStyle := lipgloss.NewStyle().Foreground(t.foreground).Background(t.background)

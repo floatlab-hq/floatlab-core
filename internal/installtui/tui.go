@@ -285,6 +285,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.String() == "ctrl+c" || v.String() == "ctrl+d" {
 			return m, nil
 		}
+		if v.String() == "ctrl+r" {
+			if m.terminal && !m.pending && !m.rebooting {
+				return m, m.reboot()
+			}
+			return m, nil
+		}
 		if m.stage == "timezone" && (v.String() == "pgup" || v.String() == "pgdown") {
 			delta := max(1, m.height-16)
 			if v.String() == "pgup" {
@@ -656,6 +662,9 @@ func (m *Model) body() string {
 	case "disks":
 		lines = append(lines, "Select installation disks", "Choose one disk, or several disks for a mirror.", "")
 		for i, d := range m.disks {
+			if !d.Eligible && i > 0 {
+				lines = append(lines, "")
+			}
 			mark := "[ ]"
 			if m.selected[i] {
 				mark = "[x]"
@@ -668,12 +677,16 @@ func (m *Model) body() string {
 				prefix = "> "
 			}
 			row := prefix + mark + " " + diskSummary(d)
-			if i == m.cursor && m.actionFocus == 0 {
+			if d.Eligible && i == m.cursor && m.actionFocus == 0 {
 				row = lipgloss.NewStyle().Foreground(m.currentTheme().accent).Background(m.currentTheme().background).Render(row)
+			}
+			muted := lipgloss.NewStyle().Foreground(m.currentTheme().darkForeground).Background(m.currentTheme().background)
+			if !d.Eligible {
+				row = muted.Render(row)
 			}
 			lines = append(lines, row)
 			if !d.Eligible {
-				lines = append(lines, "      Unavailable: "+d.Reason)
+				lines = append(lines, muted.Render("      Unavailable: "+d.Reason))
 			}
 		}
 	case "command":

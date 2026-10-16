@@ -101,3 +101,22 @@ func TestFlatCanvasRestoresBackgroundAfterInlineAccents(t *testing.T) {
 		t.Fatal("restoring the background changed the row's content or width")
 	}
 }
+
+func TestTimezoneCursorUsesAccentColor(t *testing.T) {
+	profile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(profile) })
+	m := New("unused", nil)
+	m.settings()
+	m.openTimezone()
+	m.timezoneSearch.SetValue("Australia/")
+	m.timezoneCursor = 0
+	matches := m.timezoneMatches()
+	for _, cursor := range []int{0, 1} {
+		m.timezoneCursor = cursor
+		selected := lipgloss.NewStyle().Foreground(m.currentTheme().accent).Background(m.currentTheme().background).Render("> " + matches[cursor])
+		if !strings.Contains(m.timezoneBody(), selected) {
+			t.Fatal("current timezone row does not use the accent color")
+		}
+	}
+}

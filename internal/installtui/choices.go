@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/lipgloss"
 )
 
 //go:embed timezones.txt
@@ -69,10 +70,12 @@ func (m *Model) timezoneBody() string {
 	}
 	for i := start; i < min(len(matches), start+rows); i++ {
 		mark := "  "
+		style := lipgloss.NewStyle().Foreground(m.currentTheme().foreground).Background(m.currentTheme().background)
 		if i == m.timezoneCursor {
 			mark = "> "
+			style = style.Foreground(m.currentTheme().accent)
 		}
-		lines = append(lines, mark+matches[i])
+		lines = append(lines, style.Render(mark+matches[i]))
 	}
 	lines = append(lines, "", fmt.Sprintf("%d matching timezones", len(matches)))
 	return strings.Join(lines, "\n")
