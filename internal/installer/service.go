@@ -203,6 +203,8 @@ func (s *Service) Serve(parent context.Context, input io.Reader, output io.Write
 	var done chan error
 	started, accepted, terminal := false, false, false
 	rejectedOnce := false
+	workerCtx, stopWorker := context.WithCancel(ctx)
+	defer stopWorker()
 	workerStatus := make(chan Status, 64)
 	configured := make(chan struct{})
 	// Wait for an active operation to finish and clean up on EOF or signal.
@@ -312,15 +314,15 @@ func (s *Service) Serve(parent context.Context, input io.Reader, output io.Write
 				emit := func(st Status) {
 					select {
 					case workerStatus <- st:
-					case <-ctx.Done():
+					case <-workerCtx.Done():
 					}
 				}
 				go func() {
 					var e error
 					if s.Mock {
-						e = s.mockInstall(ctx, planned.disks, configured, emit)
+						e = s.mockInstall(workerCtx, planned.disks, configured, emit)
 					} else {
-						e = installWorker(ctx, s.runtimeDir, s.persistentDir, s.mediaDir, s.inventory, emit)
+						e = installWorker(workerCtx, s.runtimeDir, s.persistentDir, s.mediaDir, s.inventory, emit)
 					}
 					done <- e
 				}()
@@ -390,9 +392,11 @@ func (s *Service) Serve(parent context.Context, input io.Reader, output io.Write
 				s.verifiedTOTPCode = ""
 				send(reply)
 			case "reboot":
-				if !terminal {
-					fail(fmt.Errorf("reboot is available only after completion or failure"))
-					continue
+				if done != nil {
+					stopWorker()
+					<-done
+					done = nil
+					terminal = true
 				}
 				if e := s.reboot(ctx); e != nil {
 					fail(e)

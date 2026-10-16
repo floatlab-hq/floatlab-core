@@ -124,10 +124,10 @@ func confirmMock(t *testing.T, s *serviceTest) Event {
 	}
 	return preview
 }
-func TestServiceRequiresPreviewAndBlocksRebootWhileActive(t *testing.T) {
+func TestServiceRequiresPreview(t *testing.T) {
 	s := mockSession(t, "success")
 	s.event(t, "inventory")
-	for _, req := range []Request{{Type: "confirm", Confirmation: "ERASE ALL DATA"}, {Type: "reboot"}} {
+	for _, req := range []Request{{Type: "confirm", Confirmation: "ERASE ALL DATA"}} {
 		if e := s.request(t, req); e.Type != "error" {
 			t.Fatal("unsafe action accepted", e)
 		}
@@ -243,8 +243,8 @@ func TestHostValidationBeforeAccountSetup(t *testing.T) {
 		t.Fatal("valid network rejected", e)
 	}
 	// Host validation neither requires account credentials nor starts finalization.
-	if e := s.request(t, Request{Type: "reboot"}); e.Type != "error" {
-		t.Fatal("host validation completed installation", e)
+	if e := s.request(t, Request{Type: "validate-host", Config: &config}); e.Type != "validate-host" {
+		t.Fatal("host validation finalized the installation", e)
 	}
 }
 
@@ -290,5 +290,27 @@ func TestAccountAndAuthenticatorValidateBeforeReview(t *testing.T) {
 	config.RecoverySaved = true
 	if e := s.request(t, Request{Type: "configure", Config: &config}); e.Type != "configure" {
 		t.Fatal("verified configuration rejected", e)
+	}
+}
+
+func TestServiceRebootsBeforeAndDuringInstallation(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		s := mockSession(t, "success")
+		if active {
+			confirmMock(t, s)
+		} else {
+			s.event(t, "inventory")
+		}
+		if event := s.request(t, Request{Type: "reboot"}); event.Type != "reboot" {
+			t.Fatal("reboot was rejected", event)
+		}
+		select {
+		case err := <-s.done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("reboot did not stop the worker and close the service")
+		}
 	}
 }

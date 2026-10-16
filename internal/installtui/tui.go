@@ -166,6 +166,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.client = v.client
+		if m.rebooting {
+			return m, tea.Batch(m.read(), m.reboot())
+		}
 		return m, m.read()
 	case sent:
 		if v.err != nil {
@@ -191,6 +194,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if e.ID == m.requestID && e.ID != 0 {
 			m.pending = false
+		}
+		if m.rebooting && e.Type != "reboot" && !(e.Type == "error" && e.ID == m.requestID) {
+			return m, m.read()
 		}
 		previousStage := m.stage
 		switch e.Type {
@@ -286,10 +292,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if v.String() == "ctrl+r" {
-			if m.terminal && !m.pending && !m.rebooting {
-				return m, m.reboot()
+			if m.rebooting {
+				return m, nil
 			}
-			return m, nil
+			if m.client == nil {
+				m.rebooting = true
+				return m, nil
+			}
+			return m, m.reboot()
 		}
 		if m.stage == "timezone" && (v.String() == "pgup" || v.String() == "pgdown") {
 			delta := max(1, m.height-16)

@@ -252,10 +252,13 @@ func (m *Model) helpBar(width int) string {
 	case m.stage == "waiting" || m.stage == "connecting":
 		help = "Installing…"
 	}
-	if m.terminal {
-		help += "  Ctrl+R Reboot"
+	shortcut := "Ctrl+R Reboot"
+	space := width - 4 - ansi.StringWidth(shortcut) - 2
+	if space > 0 {
+		help = ansi.Truncate(help, space, "…") + "  " + shortcut
+	} else {
+		help = shortcut
 	}
-	help = ansi.Truncate(help, max(1, width-4), "…")
 	t := m.currentTheme()
 	keyStyle := lipgloss.NewStyle().Foreground(t.foreground).Background(t.background)
 	labelStyle := lipgloss.NewStyle().Foreground(t.darkForeground).Background(t.background)

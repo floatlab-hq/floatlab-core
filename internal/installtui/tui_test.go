@@ -333,21 +333,16 @@ func TestAccountStepWaitsForNetworkValidation(t *testing.T) {
 	}
 }
 
-func TestCtrlRRebootsOnlyAfterCompletionOrFailure(t *testing.T) {
-	for _, stage := range []string{"disks", "settings", "account", "review", "waiting", "complete", "failed"} {
+func TestCtrlRRebootsFromEveryScreen(t *testing.T) {
+	for _, stage := range []string{"connecting", "disks", "command", "confirm", "timezone", "settings", "account", "totp", "review", "waiting", "complete", "failed", "unavailable"} {
 		m := New("unused", nil)
 		m.stage, m.terminal = stage, stage == "complete" || stage == "failed"
 		var output bytes.Buffer
 		m.client = &client{encoder: json.NewEncoder(&output)}
+		m.pending = true // Reboot must also interrupt a pending form request.
 		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
-		if !m.terminal {
-			if cmd != nil || m.rebooting || strings.Contains(m.helpBar(88), "Ctrl+R") {
-				t.Fatalf("%s: reboot enabled before terminal state", stage)
-			}
-			continue
-		}
 		if cmd == nil || !m.rebooting || !strings.Contains(ansi.Strip(m.helpBar(88)), "Ctrl+R Reboot") {
-			t.Fatal("terminal reboot shortcut is missing")
+			t.Fatal("reboot shortcut is missing")
 		}
 		cmd()
 		var request installer.Request
@@ -358,5 +353,21 @@ func TestCtrlRRebootsOnlyAfterCompletionOrFailure(t *testing.T) {
 		if cmd != nil {
 			t.Fatal("repeated Ctrl+R sent duplicate reboot request")
 		}
+	}
+}
+
+func TestCtrlRQueuesUntilServiceConnects(t *testing.T) {
+	m := New("unused", nil)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	if cmd != nil || !m.rebooting {
+		t.Fatal("startup reboot was not queued")
+	}
+	var output bytes.Buffer
+	_, cmd = m.Update(connected{client: &client{encoder: json.NewEncoder(&output)}})
+	commands := cmd().(tea.BatchMsg)
+	commands[1]()
+	var request installer.Request
+	if err := json.Unmarshal(output.Bytes(), &request); err != nil || request.Type != "reboot" {
+		t.Fatal("startup reboot was not sent after connection")
 	}
 }

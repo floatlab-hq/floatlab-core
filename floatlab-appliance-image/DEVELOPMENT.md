@@ -150,8 +150,9 @@ progress indicator and help bar all use that palette. Wider terminals center the
 area with aligned field/value tables. Taller terminals also show the FloatLab
 logo and FloatLab Installer title at the left of that column. Compact consoles retain stacked fields and automatic scrolling.
 
-Use the Reboot button or Ctrl+R after completion or failure. There are no quit or
-pause shortcuts. Ctrl+C and Ctrl+D are ignored by the TUI.
+Ctrl+R reboots from any screen, stopping an active installation and waiting for
+cleanup first. The Reboot button also appears after completion or failure. There
+are no quit or pause shortcuts. Ctrl+C and Ctrl+D are ignored by the TUI.
 
 ## Build standalone executables
 
