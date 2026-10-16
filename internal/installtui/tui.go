@@ -41,10 +41,6 @@ type sent struct{ err error }
 type tick time.Time
 
 type Model struct {
-	theme          int
-	themeCursor    int
-	choosingTheme  bool
-	mock           bool
 	service        string
 	args           []string
 	client         *client
@@ -57,6 +53,7 @@ type Model struct {
 	passwordScore  int
 	labels         []string
 	focus          int
+	actionFocus    int // 0: content, 1: Back, 2: Next, 3: Customise zpool.
 	command        textarea.Model
 	confirmation   textinput.Model
 	preview        installer.Event
@@ -67,7 +64,6 @@ type Model struct {
 	requestID      int
 	failure        string
 	validation     string
-	configured     bool
 	terminal       bool
 	countdown      int
 	paused         bool
@@ -76,7 +72,6 @@ type Model struct {
 	rebooting      bool
 	totpCode       string
 	manualScroll   bool
-	imageBytes     int64
 	timezoneSearch textinput.Model
 	timezoneCursor int
 }
@@ -93,18 +88,12 @@ func New(service string, args []string) *Model {
 	confirmation := textinput.New()
 	confirmation.Prompt = ""
 	confirmation.CharLimit = 64
-	m := &Model{service: service, args: args, stage: "welcome", width: 80, height: 24, selected: map[int]bool{}, command: command, confirmation: confirmation, status: installer.Status{Phase: "Waiting for disk layout"}}
-	for i, theme := range themes {
-		if theme.name == "Everforest" {
-			m.theme = i
-		}
-	}
+	m := &Model{service: service, args: args, stage: "connecting", width: 80, height: 24, selected: map[int]bool{}, command: command, confirmation: confirmation, status: installer.Status{Phase: "Waiting for disk layout"}}
 	m.styleInputs()
 	return m
 }
-func Run(ctx context.Context, service string, args []string, mock bool) error {
+func Run(ctx context.Context, service string, args []string) error {
 	m := New(service, args)
-	m.mock = mock
 	defer func() {
 		if m.client != nil {
 			m.client.input.Close()
@@ -116,7 +105,7 @@ func Run(ctx context.Context, service string, args []string, mock bool) error {
 	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx)).Run()
 	return err
 }
-func (m *Model) Init() tea.Cmd { return ticking() }
+func (m *Model) Init() tea.Cmd { return tea.Batch(ticking(), connect(m.service, m.args)) }
 func ticking() tea.Cmd {
 	return tea.Tick(250*time.Millisecond, func(t time.Time) tea.Msg { return tick(t) })
 }
@@ -203,17 +192,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if e.ID == m.requestID && e.ID != 0 {
 			m.pending = false
 		}
+		previousStage := m.stage
 		switch e.Type {
 		case "inventory":
 			m.disks = e.Disks
 			m.ntp = e.NTP
-			m.imageBytes = installer.ImageSize(e.PayloadBytes)
 			m.stage = "disks"
 		case "preview":
 			m.preview = e
 			m.stage = "confirm"
-			m.confirmation.SetValue("")
-			m.confirmation.Focus()
 			m.resize()
 		case "confirm":
 			m.stage = "settings"
@@ -221,7 +208,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "validate-host":
 			m.stage = "account"
 			m.setFocus(7)
+		case "validate-account":
+			m.enrollment = nil
+			m.totpCode = ""
+			m.confirmation.SetValue("")
+			config := m.config()
+			if config.TOTP {
+				return m, tea.Batch(m.send(installer.Request{Type: "enroll", Config: &config}), m.read())
+			}
+			m.stage = "review"
+			m.scroll, m.manualScroll = 0, false
+		case "verify-totp":
+			m.focus = 1
+			m.confirmation.SetValue("")
+			m.confirmation.Focus()
+			m.validation = ""
+			m.scroll, m.manualScroll = 0, false
 		case "enroll":
+			m.totpCode = ""
 			m.enrollment = e.Enrollment
 			m.stage = "totp"
 			m.focus = 0
@@ -230,7 +234,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scroll = 0
 			m.manualScroll = true
 		case "configure":
-			m.configured = true
 			m.stage = "waiting"
 			for i := range m.fields {
 				m.fields[i].SetValue("")
@@ -261,6 +264,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "reboot":
 			return m, tea.Quit
 		}
+		if m.stage != previousStage {
+			m.actionFocus = 0
+		}
 		return m, tea.Batch(m.read(), textinput.Blink)
 	case tick:
 		m.frame++
@@ -277,40 +283,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Ctrl-C/Ctrl-D are deliberately not quit actions in the installer.
 		if v.String() == "ctrl+c" || v.String() == "ctrl+d" {
-			return m, nil
-		}
-		if v.String() == "ctrl+r" {
-			if m.mock {
-				return m, tea.Quit
-			}
-			if m.pending || m.rebooting {
-				return m, nil
-			}
-			if !m.terminal || m.client == nil {
-				m.validation = "Reboot is available after installation completes or fails."
-				return m, nil
-			}
-			return m, m.reboot()
-		}
-		if v.String() == "ctrl+t" {
-			m.choosingTheme = !m.choosingTheme
-			m.themeCursor = m.theme
-			m.styleInputs()
-			return m, nil
-		}
-		if m.choosingTheme {
-			switch v.String() {
-			case "up", "k":
-				m.themeCursor = max(0, m.themeCursor-1)
-			case "down", "j":
-				m.themeCursor = min(len(themes)-1, m.themeCursor+1)
-			case "enter":
-				m.theme = m.themeCursor
-				m.choosingTheme = false
-			case "esc":
-				m.choosingTheme = false
-			}
-			m.styleInputs()
 			return m, nil
 		}
 		if m.stage == "timezone" && (v.String() == "pgup" || v.String() == "pgdown") {
@@ -340,12 +312,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pending {
 			return m, nil
 		}
+		if handled, cmd := m.wizardKey(v); handled {
+			return m, cmd
+		}
 		switch m.stage {
-		case "welcome":
-			if v.String() == "enter" {
-				m.stage = "connecting"
-				return m, connect(m.service, m.args)
-			}
 		case "disks":
 			switch v.String() {
 			case "up", "k":
@@ -355,30 +325,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case " ":
 				if m.cursor >= 0 && m.cursor < len(m.disks) && m.disks[m.cursor].Eligible {
 					m.selected[m.cursor] = !m.selected[m.cursor]
+					m.command.SetValue("")
 				}
 			case "enter":
-				var selected []installer.Disk
-				for i, d := range m.disks {
-					if m.selected[i] {
-						selected = append(selected, d)
-					}
-				}
-				if len(selected) == 0 {
-					m.validation = "Select at least one disk"
+				if !m.preparePoolCommand() {
 					return m, nil
 				}
-				m.command.SetValue(formatPoolCommand(installer.ZPoolCommand(selected)))
-				m.command.Focus()
-				m.stage = "command"
-				m.resize()
-				return m, textinput.Blink
+				return m, m.send(installer.Request{Type: "preview", Command: m.command.Value()})
 			}
 		case "command":
-			if v.String() == "esc" {
-				m.stage = "disks"
-				m.validation = ""
-				return m, nil
-			}
 			if v.String() == "ctrl+s" {
 				return m, m.send(installer.Request{Type: "preview", Command: m.command.Value()})
 			}
@@ -386,24 +341,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.command, cmd = m.command.Update(v)
 			return m, cmd
 		case "confirm":
-			if v.String() == "esc" {
-				m.stage = "command"
-				m.validation = ""
-				return m, nil
-			}
 			if v.String() == "enter" {
-				return m, m.send(installer.Request{Type: "confirm", Command: m.preview.Command, Confirmation: m.confirmation.Value()})
+				return m, m.send(installer.Request{Type: "confirm", Command: m.preview.Command, Confirmation: "ERASE ALL DATA"})
 			}
-			var cmd tea.Cmd
-			m.confirmation, cmd = m.confirmation.Update(v)
-			return m, cmd
+			return m, nil
 		case "timezone":
 			matches := m.timezoneMatches()
 			switch v.String() {
-			case "esc":
-				m.stage = "settings"
-				m.manualScroll = false
-				return m, nil
 			case "up":
 				m.timezoneCursor = max(0, m.timezoneCursor-1)
 				return m, nil
@@ -433,19 +377,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.openTimezone()
 				return m, textinput.Blink
 			}
-			if m.stage == "settings" && m.focus == 2 {
+			if m.stage == "settings" && m.focus == 2 || m.stage == "account" && m.focus == 10 {
+				left, right := "dhcp", "static"
+				if m.focus == 10 {
+					left, right = "yes", "no"
+				}
 				switch v.String() {
 				case "left":
-					m.fields[2].SetValue("dhcp")
+					m.validation = ""
+					m.fields[m.focus].SetValue(left)
 					return m, nil
 				case "right":
-					m.fields[2].SetValue("static")
+					m.validation = ""
+					m.fields[m.focus].SetValue(right)
 					return m, nil
 				case " ":
-					if m.fields[2].Value() == "dhcp" {
-						m.fields[2].SetValue("static")
+					m.validation = ""
+					if m.fields[m.focus].Value() == left {
+						m.fields[m.focus].SetValue(right)
 					} else {
-						m.fields[2].SetValue("dhcp")
+						m.fields[m.focus].SetValue(left)
 					}
 					return m, nil
 				}
@@ -457,13 +408,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "shift+tab", "up":
 				m.moveFocus(-1)
 				return m, textinput.Blink
-			case "esc":
-				if m.stage == "account" {
-					m.stage = "settings"
-					m.setFocus(6)
-					m.validation = ""
-				}
-				return m, nil
 			case "enter":
 				visible := m.visibleFields()
 				if m.focus == len(m.fields) || m.focus == visible[len(visible)-1] {
@@ -471,81 +415,53 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						config := m.config()
 						return m, m.send(installer.Request{Type: "validate-host", Config: &config})
 					}
-					m.stage = "review"
-					m.scroll = 0
-					m.manualScroll = false
-					return m, nil
+					config := m.config()
+					return m, m.send(installer.Request{Type: "validate-account", Config: &config})
 				}
 				m.moveFocus(1)
 				return m, textinput.Blink
 			}
-			if m.focus == len(m.fields) || (m.stage == "settings" && (m.focus == 1 || m.focus == 2)) {
+			if m.focus == len(m.fields) || m.focus == 10 || (m.stage == "settings" && (m.focus == 1 || m.focus == 2)) {
 				return m, nil
 			}
 			return m, m.updateField(v)
 
 		case "review":
-			if v.String() == "esc" {
-				m.stage = "account"
-				return m, nil
-			}
 			if v.String() == "enter" {
 				config := m.config()
-				if config.TOTP {
-					return m, m.send(installer.Request{Type: "enroll", Config: &config})
-				}
 				return m, m.send(installer.Request{Type: "configure", Config: &config})
 			}
 		case "totp":
 			m.manualScroll = false
 			m.scroll = 0
-			if v.String() == "tab" || v.String() == "shift+tab" {
-				if m.focus == 0 {
-					m.totpCode = m.confirmation.Value()
-					m.focus = 1
-					m.confirmation.SetValue("")
-				} else {
-					m.focus = 0
-					m.confirmation.SetValue(m.totpCode)
-				}
-				m.manualScroll = false
-				m.scroll = 0
-				return m, textinput.Blink
-			}
-			if v.String() == "esc" {
-				m.stage = "account"
-				m.setFocus(10)
-				m.enrollment = nil
-				m.scroll = 0
-				m.manualScroll = false
-				return m, nil
-			}
 			if v.String() == "enter" {
 				if m.focus == 0 {
 					m.totpCode = m.confirmation.Value()
-					m.focus = 1
-					m.confirmation.SetValue("")
-					m.confirmation.Focus()
-					return m, textinput.Blink
+					config := m.config()
+					return m, m.send(installer.Request{Type: "verify-totp", Config: &config})
 				}
-				config := m.config()
-				config.TOTPCode = m.totpCode
-				config.RecoverySaved = m.confirmation.Value() == "SAVED"
-				return m, m.send(installer.Request{Type: "configure", Config: &config})
-			}
-			var cmd tea.Cmd
-			m.confirmation, cmd = m.confirmation.Update(v)
-			return m, cmd
-		case "complete":
-			if v.String() == "p" || v.String() == " " {
-				m.paused = true
+				if m.confirmation.Value() != "SAVED" {
+					m.validation = "Type SAVED after recording your recovery codes."
+					return m, nil
+				}
+				m.stage = "review"
+				m.validation = ""
+				m.scroll, m.manualScroll = 0, false
 				return m, nil
 			}
-			if v.String() == "r" || v.String() == "enter" {
+			old := m.confirmation.Value()
+			var cmd tea.Cmd
+			m.confirmation, cmd = m.confirmation.Update(v)
+			if old != m.confirmation.Value() {
+				m.validation = ""
+			}
+			return m, cmd
+		case "complete":
+			if v.String() == "enter" {
 				return m, m.reboot()
 			}
 		case "failed":
-			if v.String() == "r" || v.String() == "enter" {
+			if v.String() == "enter" {
 				return m, m.reboot()
 			}
 		}
@@ -554,12 +470,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.stage {
 	case "command":
 		m.command, cmd = m.command.Update(msg)
-	case "confirm", "totp":
+	case "totp":
 		m.confirmation, cmd = m.confirmation.Update(msg)
 	case "timezone":
 		m.timezoneSearch, cmd = m.timezoneSearch.Update(msg)
 	case "settings", "account":
-		if m.focus < len(m.fields) && m.focus != 1 && m.focus != 2 {
+		if m.focus < len(m.fields) && m.focus != 1 && m.focus != 2 && m.focus != 10 {
 			cmd = m.updateField(msg)
 		}
 	}
@@ -572,7 +488,7 @@ func (m *Model) reboot() tea.Cmd {
 }
 
 func (m *Model) settings() {
-	m.labels = []string{"Node name", "Timezone", "IPv4 configuration", "IPv4 address (static only)", "Netmask (static only)", "Gateway (static only)", "DNS servers (comma separated)", "Administrator username", "Password", "Confirm password", "Set up TOTP (yes/no)"}
+	m.labels = []string{"Node name", "Timezone", "IPv4 configuration", "IPv4 address (static only)", "Netmask (static only)", "Gateway (static only)", "DNS servers (comma separated)", "Administrator username", "Password", "Confirm password", "Set up TOTP"}
 	defaults := []string{"floatlab", "UTC", "dhcp", "", "", "", "1.1.1.1,8.8.8.8", "admin", "", "", "no"}
 	m.fields = make([]textinput.Model, len(m.labels))
 	for i := range m.fields {
@@ -606,13 +522,22 @@ func (m *Model) setFocus(index int) {
 		m.fields[i].Blur()
 	}
 	m.focus = index
-	if index < len(m.fields) && index != 1 && index != 2 {
+	m.actionFocus = 0
+	if index == len(m.fields) {
+		m.focusAction(2)
+		return
+	}
+	if index < len(m.fields) && index != 1 && index != 2 && index != 10 {
 		m.fields[index].Focus()
 	}
 	m.manualScroll = false
 	m.scroll = 0
 }
 func (m *Model) moveFocus(delta int) {
+	if m.focus == m.visibleFields()[0] && delta < 0 && m.canBack() {
+		m.focusAction(1)
+		return
+	}
 	fields := append(m.visibleFields(), len(m.fields))
 	position := 0
 	for i, index := range fields {
@@ -624,13 +549,9 @@ func (m *Model) moveFocus(delta int) {
 	m.setFocus(fields[(position+delta+len(fields))%len(fields)])
 }
 func (m *Model) focusedLine() int {
-	for i, index := range m.visibleFields() {
-		if index == m.focus {
-			line := 3 + i*3
-			if m.stage == "account" && index > 8 {
-				line++
-			}
-			return line
+	for i, line := range strings.Split(ansi.Wrap(m.body(), m.contentWidth(), ""), "\n") {
+		if strings.HasPrefix(ansi.Strip(line), "> ") {
+			return i
 		}
 	}
 	return 3
@@ -640,6 +561,9 @@ func (m *Model) updateField(msg tea.Msg) tea.Cmd {
 	old := m.fields[m.focus].Value()
 	var cmd tea.Cmd
 	m.fields[m.focus], cmd = m.fields[m.focus].Update(msg)
+	if old != m.fields[m.focus].Value() {
+		m.validation = ""
+	}
 	if old != m.fields[m.focus].Value() && (m.focus == 0 || m.focus == 7 || m.focus == 8) {
 		m.passwordScore = 0
 		if m.fields[8].Value() != "" {
@@ -651,28 +575,41 @@ func (m *Model) updateField(msg tea.Msg) tea.Cmd {
 
 func (m *Model) passwordStrength() string {
 	if m.fields[8].Value() == "" {
-		return "Strength: [·····] Enter a password"
+		return ""
 	}
 	labels := []string{"Very weak", "Weak", "Fair", "Strong", "Very strong"}
-	return fmt.Sprintf("Strength: [%s%s] %s", strings.Repeat("█", m.passwordScore+1), strings.Repeat("·", 4-m.passwordScore), labels[m.passwordScore])
+	if m.inputColumnWidth() < 40 {
+		return labels[m.passwordScore]
+	}
+	return fmt.Sprintf("[%s%s] %s", strings.Repeat("█", m.passwordScore+1), strings.Repeat("·", 4-m.passwordScore), labels[m.passwordScore])
 }
 
-func (m *Model) nextButton() string {
-	button := lipgloss.NewStyle().Foreground(m.currentTheme().background).Background(m.currentTheme().accent).Bold(true).Render("[ Next → ]")
-	if m.focus == len(m.fields) {
-		return "> " + button
+func (m *Model) inputColumnWidth() int {
+	if m.tableLayout() {
+		return max(1, m.contentWidth()-m.labelWidth()-2)
 	}
-	return button
+	return m.contentWidth()
 }
 
 func (m *Model) resize() {
-	w := max(1, m.width-6)
-	m.command.SetWidth(max(1, m.width-8))
-	m.command.SetHeight(max(3, min(6, m.height-16)))
-	m.timezoneSearch.Width = w
+	w := m.contentWidth()
+	m.command.SetWidth(max(1, w-4))
+	m.command.SetHeight(max(3, min(6, m.bodyHeight()-7)))
+	m.timezoneSearch.Width = max(1, w-ansi.StringWidth(m.timezoneSearch.Prompt))
 	m.confirmation.Width = w
 	for i := range m.fields {
-		m.fields[i].Width = w
+		fieldWidth := m.inputColumnWidth()
+		switch i {
+		case 8:
+			reserve := 19
+			if fieldWidth < 40 {
+				reserve = min(11, max(1, fieldWidth-4))
+			}
+			fieldWidth -= reserve + 3
+		case 9:
+			fieldWidth -= 4
+		}
+		m.fields[i].Width = max(1, fieldWidth)
 	}
 }
 func (m *Model) config() installer.InstallConfig {
@@ -690,7 +627,7 @@ func (m *Model) config() installer.InstallConfig {
 			network.DNSServers = append(network.DNSServers, v)
 		}
 	}
-	return installer.InstallConfig{NodeName: value(0), Timezone: value(1), Network: network, Username: value(7), Password: value(8), PasswordConfirmation: value(9), TOTP: value(10) == "yes"}
+	return installer.InstallConfig{NodeName: value(0), Timezone: value(1), Network: network, Username: value(7), Password: value(8), PasswordConfirmation: value(9), TOTP: value(10) == "yes", TOTPCode: m.totpCode, RecoverySaved: m.enrollment != nil && m.confirmation.Value() == "SAVED"}
 }
 func size(bytes int64) string { return fmt.Sprintf("%.1f GiB", float64(bytes)/float64(installer.GiB)) }
 func partitions(d installer.Disk) string {
@@ -707,15 +644,17 @@ func partitions(d installer.Disk) string {
 	}
 	return strings.Join(parts, " + ")
 }
+
+func diskSummary(d installer.Disk) string {
+	return d.Device + " - " + strings.TrimSpace(d.Manufacturer+" "+d.Model) + " - " + partitions(d)
+}
 func (m *Model) body() string {
 	var lines []string
 	switch m.stage {
-	case "welcome":
-		return "Install FloatLab\n\nPress Enter to begin."
 	case "connecting":
 		return "Starting installation service…"
 	case "disks":
-		lines = append(lines, "Select installation disks", "Space: toggle   ↑/↓: move   Enter: edit pool command", "")
+		lines = append(lines, "Select installation disks", "Choose one disk, or several disks for a mirror.", "")
 		for i, d := range m.disks {
 			mark := "[ ]"
 			if m.selected[i] {
@@ -725,55 +664,84 @@ func (m *Model) body() string {
 				mark = "[–]"
 			}
 			prefix := "  "
-			if i == m.cursor {
+			if i == m.cursor && m.actionFocus == 0 {
 				prefix = "> "
 			}
-			lines = append(lines, prefix+mark+" "+d.Device+"  "+d.Manufacturer+"  "+d.Model+"  "+size(d.Size), "      "+partitions(d))
+			row := prefix + mark + " " + diskSummary(d)
+			if i == m.cursor && m.actionFocus == 0 {
+				row = lipgloss.NewStyle().Foreground(m.currentTheme().accent).Background(m.currentTheme().background).Render(row)
+			}
+			lines = append(lines, row)
 			if !d.Eligible {
 				lines = append(lines, "      Unavailable: "+d.Reason)
 			}
 		}
 	case "command":
-		lines = []string{"Edit the complete pool command", "Enter: new line   Ctrl+S: validate / preview   Esc: back", "", lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.currentTheme().accent).Padding(0, 1).Render(m.command.View()), "", "Whole-disk references will become ZFS partition references.", "Edit mirror to raidz, raidz2, or another supported topology."}
+		lines = []string{"Edit the complete pool command", "Choose Next to validate and preview the layout.", "", lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(m.currentTheme().accent).BorderBackground(m.currentTheme().background).Background(m.currentTheme().background).Padding(0, 1).Render(m.command.View()), "", "Whole-disk references will become ZFS partition references.", "Edit mirror to raidz, raidz2, or another supported topology."}
 	case "confirm":
-		lines = []string{"Confirm disk layout", "Esc: edit command", ""}
+		lines = []string{"Confirm disk layout", "All data on the selected disks will be erased. This cannot be undone.", ""}
 		for _, d := range m.preview.Disks {
-			lines = append(lines, d.Device+" — "+d.Manufacturer+" "+d.Model, "  Existing: "+partitions(d), "  Proposed: 512 MiB UEFI + remaining ZFS (OS reserve "+size(m.imageBytes)+")")
+			lines = append(lines, diskSummary(d))
 		}
-		lines = append(lines, "", "Final command:", formatPoolCommand(m.preview.Command), "", "Whole-disk dry-run:", m.preview.DryRun, "", "All data on these disks will be erased.", "Type ERASE ALL DATA and press Enter:", m.confirmation.View())
+		command := ansi.Wrap(formatPoolCommand(m.preview.Command), max(1, m.contentWidth()-4), "")
+		lines = append(lines, "", "Final zpool command:", command, "", m.button("Customise zpool", 3, !m.pending))
 	case "timezone":
 		return m.timezoneBody()
 	case "settings", "account":
 		title := "Configure FloatLab while installation runs"
-		help := "↑/↓ or Tab: focus   Enter: choose / next   Alt-↑/↓: scroll"
+		help := "Storage installation is running. Network settings remain editable."
 		if m.stage == "account" {
 			title = "Set up administrator"
-			help = "↑/↓ or Tab: focus   Enter: next / review   Esc: network settings"
+			help = "Create the account used to manage this appliance."
 		}
 		lines = []string{title, help, ""}
+		if m.tableLayout() {
+			lines = append(lines, m.tableHeader("FIELD", "VALUE")...)
+		}
 		for _, i := range m.visibleFields() {
-			label := m.labels[i]
-			if i == m.focus {
-				label = "> " + label
+			label := "  " + m.labels[i]
+			if i == m.focus && m.actionFocus == 0 {
+				label = lipgloss.NewStyle().Foreground(m.currentTheme().accent).Background(m.currentTheme().background).Render("> " + m.labels[i])
 			}
 			value := m.fields[i].View()
+			indicator := ""
+			if i == 8 {
+				indicator = m.passwordStrength()
+			} else if i == 9 && m.fields[9].Value() != "" {
+				indicator = "✗"
+				if m.fields[8].Value() == m.fields[9].Value() {
+					indicator = "✓"
+				}
+			}
+			if indicator != "" {
+				width := m.inputColumnWidth()
+				indicator = ansi.Truncate(indicator, max(1, width-4), "…")
+				value = ansi.Truncate(value, max(1, width-ansi.StringWidth(indicator)-2), "…")
+				value += strings.Repeat(" ", max(1, width-ansi.StringWidth(value)-ansi.StringWidth(indicator))) + indicator
+			}
 			if i == 1 {
-				value = m.fields[1].Value() + " ▾  (Enter: choose timezone)"
+				value = m.fields[1].Value() + " ▾"
 			}
 			if i == 2 {
 				value = "(●) DHCP    ( ) Static"
 				if m.fields[2].Value() == "static" {
 					value = "( ) DHCP    (●) Static"
 				}
-				if m.focus == 2 {
-					value += "   ←/→ or Space to select"
+			}
+			if i == 10 {
+				value = "( ) Yes    (●) No"
+				if m.fields[10].Value() == "yes" {
+					value = "(●) Yes    ( ) No"
 				}
 			}
-			lines = append(lines, label, value)
-			if i == 8 {
-				lines = append(lines, m.passwordStrength())
+			if m.tableLayout() {
+				lines = append(lines, m.tableRow(label, value))
+			} else {
+				lines = append(lines, label, value)
 			}
-			lines = append(lines, "")
+			if !m.tableLayout() {
+				lines = append(lines, "")
+			}
 		}
 		if m.stage == "account" && !m.ntp {
 			lines = append(lines, "TOTP requires synchronized time; password authentication is available.")
@@ -781,26 +749,64 @@ func (m *Model) body() string {
 
 	case "review":
 		c := m.config()
-		lines = []string{"Review configuration", "Node: " + c.NodeName, "Timezone: " + c.Timezone, "IPv4: " + c.Network.IPv4.Mode, "Administrator: " + c.Username, fmt.Sprintf("TOTP: %t", c.TOTP), "", "Enter: validate and submit   Esc: edit settings"}
+		lines = []string{"Review configuration", "Confirm the settings for your FloatLab appliance.", ""}
+		var rows [][2]string
+		for _, disk := range m.preview.Disks {
+			rows = append(rows, [2]string{"Installation disk", diskSummary(disk)})
+		}
+		rows = append(rows, [2]string{"Node", c.NodeName}, [2]string{"Timezone", c.Timezone}, [2]string{"IPv4", strings.ToUpper(c.Network.IPv4.Mode)})
 		if c.Network.IPv4.Mode == "static" {
-			lines = append(lines, "Address: "+c.Network.IPv4.Address, "Netmask: "+c.Network.IPv4.Netmask, "Gateway: "+c.Network.IPv4.Gateway)
+			rows = append(rows, [2]string{"Address", c.Network.IPv4.Address}, [2]string{"Netmask", c.Network.IPv4.Netmask}, [2]string{"Gateway", c.Network.IPv4.Gateway})
 		}
-		lines = append(lines, "DNS: "+strings.Join(c.Network.DNSServers, ", "))
+		password := "Not set"
+		if c.Password != "" && c.Password == c.PasswordConfirmation {
+			password = "Set and confirmed"
+		}
+		totp := "Disabled"
+		if c.TOTP {
+			totp = "Enabled and verified"
+		}
+		rows = append(rows, [2]string{"DNS", strings.Join(c.Network.DNSServers, ", ")},
+			[2]string{"Administrator", c.Username}, [2]string{"Password", password}, [2]string{"TOTP", totp})
+		if c.TOTP {
+			recovery := "Not saved"
+			if c.RecoverySaved {
+				recovery = "Saved"
+			}
+			rows = append(rows, [2]string{"Recovery codes", recovery})
+		}
+		if m.tableLayout() {
+			lines = append(lines, m.tableHeader("FIELD", "VALUE")...)
+		}
+		for _, row := range rows {
+			if m.tableLayout() {
+				lines = append(lines, m.tableRow(row[0], row[1]))
+			} else {
+				lines = append(lines, row[0]+": "+row[1])
+			}
+		}
+		if m.preview.Command != "" {
+			lines = append(lines, "", "Final zpool command:", formatPoolCommand(m.preview.Command))
+		}
+		lines = append(lines, "", "Choose Finish to apply this configuration.")
 	case "totp":
-		lines = []string{"Enroll your authenticator", "Esc: edit settings   Alt-↑/↓: scroll", ""}
-		if m.enrollment != nil {
-			lines = append(lines, m.enrollment.URI, "Manual secret: "+m.enrollment.Secret, "", "Record these single-use recovery codes:")
-			lines = append(lines, m.enrollment.RecoveryCodes...)
-		}
 		if m.focus == 0 {
+			lines = []string{"Enroll your authenticator"}
+			if m.enrollment != nil {
+				lines = append(lines, "Manual secret: "+m.enrollment.Secret, "", m.enrollmentQR())
+			}
 			lines = append(lines, "", "Enter the six-digit authenticator code:", m.confirmation.View())
 		} else {
+			lines = []string{"Save your recovery codes", "Keep these single-use codes somewhere safe before continuing.", ""}
+			if m.enrollment != nil {
+				lines = append(lines, m.enrollment.RecoveryCodes...)
+			}
 			lines = append(lines, "", "Type SAVED after recording the recovery codes:", m.confirmation.View())
 		}
 	case "waiting":
 		return "Configuration accepted.\n\nInstallation and verification are still running."
 	case "complete":
-		lines = []string{"Installation complete", "Management: " + m.status.Address, "", "Remove installation media before rebooting.", "R / Enter: reboot now   P / Space: pause countdown"}
+		lines = []string{"Installation complete", "Management: " + m.status.Address, "", "Remove installation media before rebooting."}
 		if m.paused {
 			lines = append(lines, "Automatic reboot paused.")
 		} else {
@@ -808,12 +814,15 @@ func (m *Model) body() string {
 		}
 	case "failed", "unavailable":
 		lines = []string{"Installation failed", "Stage: " + m.status.Phase, "", m.failure}
-		if m.terminal {
-			lines = append(lines, "", "R / Enter: reboot when ready")
-		}
 	}
 	if m.validation != "" {
-		lines = append(lines, "", "Validation: "+m.validation)
+		t := m.currentTheme()
+		box := lipgloss.NewStyle().
+			Foreground(t.red).Background(t.background).
+			Border(lipgloss.NormalBorder()).BorderForeground(t.red).BorderBackground(t.background).
+			Padding(0, 1).Width(m.contentWidth() - 2).
+			Render(m.validation)
+		lines = append(lines, "", box)
 	}
 	if m.pending {
 		lines = append(lines, "", "Waiting for installer…")
@@ -825,47 +834,48 @@ func (m *Model) View() string {
 	if m.width < 20 || m.height < 12 {
 		return "Enlarge the terminal to at least 20 columns × 12 rows.\nInstallation continues in the background."
 	}
-	width := m.width
-	step := map[string]string{"welcome": "Welcome", "connecting": "Starting installer", "disks": "1 · Disk selection", "command": "1 · Pool command", "confirm": "1 · Confirm layout", "settings": "2 · Host and network settings", "timezone": "2 · Choose timezone", "account": "3 · Administrator account", "review": "3 · Review configuration", "totp": "3 · Authenticator enrollment", "waiting": "4 · Installing", "complete": "Complete", "failed": "Failed", "unavailable": "Service unavailable"}[m.stage]
-	if m.choosingTheme {
-		step = "Change theme"
-	}
-	header := lipgloss.NewStyle().Bold(true).Foreground(m.currentTheme().accent).Width(width).Render(ansi.Truncate("  FloatLab  ·  "+step, width, "…"))
-	bodyHeight := m.height - 9
-	bodyWidth := width - 4
+	t := m.currentTheme()
+	bodyHeight := m.bodyHeight()
+	bodyWidth := m.contentWidth()
 	// Wrap first so long commands, inventory rows, and errors remain readable.
 	body := m.body()
-	if m.choosingTheme {
-		body = m.themeBody()
-	}
 	lines := strings.Split(ansi.Wrap(body, bodyWidth, ""), "\n")
+	if len(lines) > 0 {
+		lines[0] = lipgloss.NewStyle().Foreground(t.foreground).Background(t.background).Bold(true).Render(lines[0])
+	}
 	offset := m.scroll
 	if (m.stage == "settings" || m.stage == "account") && !m.manualScroll {
 		offset = max(0, m.focusedLine()-bodyHeight+3)
-		if m.focus == len(m.fields) {
+		if m.actionFocus != 0 {
 			offset = max(0, len(lines)-bodyHeight)
 		}
 	}
 	if m.stage == "disks" && !m.manualScroll {
-		offset = max(0, 3+m.cursor*2-bodyHeight+3)
+		offset = max(0, m.diskLine()-bodyHeight+3)
 	}
-	if (m.stage == "confirm" || m.stage == "totp") && !m.manualScroll {
+	if m.stage == "confirm" && m.actionFocus == 3 {
+		offset = max(0, len(lines)-bodyHeight)
+	}
+	if m.stage == "totp" && !m.manualScroll {
 		offset = max(offset, len(lines)-bodyHeight)
 	}
-	if m.choosingTheme {
-		offset = 0
+	if m.validation != "" && !m.manualScroll {
+		offset = max(0, len(lines)-bodyHeight)
 	}
 	offset = min(offset, max(0, len(lines)-bodyHeight))
 	var visible []string
-	for i := 0; i < bodyHeight; i++ {
-		line := ""
-		if offset+i < len(lines) {
-			line = lines[offset+i]
-		}
-		visible = append(visible, "  "+line)
+	for i := offset; i < min(len(lines), offset+bodyHeight); i++ {
+		visible = append(visible, m.canvasLine(lines[i]))
 	}
-	footer := m.footer(width)
-	return lipgloss.NewStyle().Background(m.currentTheme().background).Foreground(m.currentTheme().foreground).Width(width).Render(header + "\n\n" + strings.Join(visible, "\n") + "\n" + footer)
+	for range m.actionSpacing() {
+		visible = append(visible, m.canvasLine(""))
+	}
+	visible = append(visible, m.canvasLine(m.actionBar()))
+	for len(visible) < bodyHeight+m.actionSpacing()+1 {
+		visible = append(visible, m.canvasLine(""))
+	}
+	view := m.header() + "\n" + strings.Join(visible, "\n") + "\n" + m.footer(m.width)
+	return view
 }
 func (m *Model) footer(width int) string {
 	phase := m.status.Phase
@@ -873,42 +883,34 @@ func (m *Model) footer(width int) string {
 		phase = "Failed: " + m.status.Phase
 	}
 	spinner := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}[m.frame%10]
-	if m.terminal || m.stage == "welcome" {
+	if m.terminal {
 		spinner = "●"
 	}
 	percent := max(0, min(1, m.status.Progress))
-	barWidth := max(1, width-13)
+	barWidth := max(1, m.contentWidth()-6)
 	filled := int(percent * float64(barWidth))
-	bar := "[" + strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled) + fmt.Sprintf("] %3.0f%%", percent*100)
-	copied := "Installer is active"
-	speed := ""
+	t := m.currentTheme()
+	bar := lipgloss.NewStyle().Foreground(t.accent).Background(t.background).Render(strings.Repeat("█", filled)) + lipgloss.NewStyle().Foreground(t.selection).Background(t.background).Render(strings.Repeat("░", barWidth-filled)) + fmt.Sprintf(" %3.0f%%", percent*100)
+	metrics := ""
 	if m.status.Total > 0 {
-		copied = "Copied: " + size(m.status.Copied) + " / " + size(m.status.Total)
-		speed = fmt.Sprintf("Speed: %.1f MiB/s", m.status.BytesPerSecond/float64(installer.MiB))
-	}
-	config := "Configuration: awaiting submission"
-	if m.configured {
-		config = "Configuration: accepted"
+		metrics = fmt.Sprintf("  %s / %s · %.0f MiB/s", size(m.status.Copied), size(m.status.Total), m.status.BytesPerSecond/float64(installer.MiB))
 	}
 	activity := m.status.Activity
 	if m.failure != "" {
 		activity = m.failure
-	} else if m.validation != "" {
-		activity = m.validation
 	}
-	rebootHelp := "Ctrl+R Reboot"
-	if m.mock {
-		rebootHelp = "Ctrl+R Quit"
+	if activity != "" {
+		phase = activity
 	}
-	actions := "Ctrl+T Change Theme   " + rebootHelp
-	if !m.choosingTheme && (m.stage == "settings" || m.stage == "account") {
-		actions = m.nextButton() + "   ↑/↓ Focus · Enter Next   " + actions
+	status := spinner + "  " + phase + metrics
+	if m.status.Total == 0 && m.failure == "" {
+		status, bar = "", ""
 	}
-	rows := []string{spinner + "  " + phase, bar, copied, speed, config, activity, actions}
-	style := lipgloss.NewStyle().Background(m.currentTheme().panel).Foreground(m.currentTheme().foreground)
+	divider := lipgloss.NewStyle().Foreground(t.foreground).Background(t.background).Faint(true).Render(strings.Repeat("─", m.contentWidth()))
+	rows := []string{status, bar, "", divider, m.helpBar(m.contentWidth() + 4), ""}
 	for i, row := range rows {
-		row = ansi.Truncate(strings.ReplaceAll(row, "\n", " "), width-4, "…")
-		rows[i] = style.Render("  " + row + strings.Repeat(" ", max(0, width-2-ansi.StringWidth(row))))
+		row = strings.ReplaceAll(row, "\n", " ")
+		rows[i] = m.canvasLine(row)
 	}
 	return strings.Join(rows, "\n")
 }
@@ -925,8 +927,8 @@ func ServicePath(name string) string {
 }
 
 func (m *Model) scrollBy(delta int) {
-	height := max(1, m.height-9)
-	lines := len(strings.Split(ansi.Wrap(m.body(), max(1, m.width-4), ""), "\n"))
+	height := max(1, m.bodyHeight())
+	lines := len(strings.Split(ansi.Wrap(m.body(), m.contentWidth(), ""), "\n"))
 	if !m.manualScroll {
 		switch m.stage {
 		case "settings", "account":
@@ -935,7 +937,7 @@ func (m *Model) scrollBy(delta int) {
 				m.scroll = max(0, lines-height)
 			}
 		case "disks":
-			m.scroll = max(0, 3+m.cursor*2-height+3)
+			m.scroll = max(0, m.diskLine()-height+3)
 		case "confirm", "totp":
 			m.scroll = max(0, lines-height)
 		}

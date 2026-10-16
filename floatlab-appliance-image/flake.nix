@@ -38,10 +38,11 @@
             pkgs.lib.cleanSourceFilter path type
             && !pkgs.lib.hasPrefix (toString ./.) (toString path)
             && !pkgs.lib.hasPrefix (toString ../integration) (toString path)
+            && builtins.baseNameOf path != ".local"
             && builtins.baseNameOf path != "node_modules";
         };
         subPackages = [ "cmd/floatlab-hostd" "cmd/floatlab-control" "cmd/install-tui" "cmd/install-service" "cmd/install-service-mock" ];
-        vendorHash = "sha256-xdvnEJ1wrYitQUAfuW4/mGHUdU2lOelYyfW08ytwW3k=";
+        vendorHash = "sha256-znUitkzi9j+N4oQrtwqqeaG6aPoODXWgfcIcS585JN0=";
       };
       floatlab-control-image = pkgs.dockerTools.buildLayeredImage {
         name = "floatlab-control";
@@ -97,23 +98,35 @@
         inherit system;
         modules = [ ./nixos/iso.nix ];
         pkgs = pkgs;
-        specialArgs = { inherit floatlab-binaries floatlab-control-image floatlab-version; floatlab-development = false; };
+        specialArgs = { inherit floatlab-binaries floatlab-control-image floatlab-version; floatlab-development = false; floatlab-installer-command = null; };
       };
 
       nixosConfigurations.floatlab-dev-iso = nixpkgs.lib.nixosSystem {
         inherit system;
         modules = [ ./nixos/iso.nix ];
         pkgs = pkgs;
-        specialArgs = { inherit floatlab-binaries floatlab-control-image floatlab-version; floatlab-development = true; };
+        specialArgs = { inherit floatlab-binaries floatlab-control-image floatlab-version; floatlab-development = true; floatlab-installer-command = null; };
       };
       nixosConfigurations.floatlab-installed = nixpkgs.lib.nixosSystem {
         inherit system pkgs;
         modules = [ ./nixos/installed.nix ];
         specialArgs = { inherit floatlab-binaries floatlab-control-image floatlab-version; floatlab-development = false; };
       };
+      nixosConfigurations.floatlab-installer-preview = nixpkgs.lib.nixosSystem {
+        inherit system pkgs;
+        modules = [ ./nixos/installer-preview.nix {
+          virtualisation.host.pkgs = import nixpkgs { system = builtins.currentSystem; };
+          virtualisation.qemu.package = (import nixpkgs { system = builtins.currentSystem; }).qemu;
+        } ];
+        specialArgs = {
+          inherit floatlab-binaries;
+          floatlab-installer-command = "/run/installer-preview/install-tui --mock --service /run/installer-preview/install-service-mock";
+        };
+      };
       packages.${system} = {
         iso = makeISO self.nixosConfigurations.floatlab-iso;
         dev-iso = makeISO self.nixosConfigurations.floatlab-dev-iso;
+        installer-preview = self.nixosConfigurations.floatlab-installer-preview.config.system.build.vm;
         installer-test = pkgs.writeShellApplication {
           name = "floatlab-installer-test";
           runtimeInputs = [ pkgs.qemu (pkgs.python3.withPackages (p: [ p.pexpect ])) ];
@@ -212,6 +225,11 @@
            assert pkgs.lib.hasInfix "os/live" installed.boot.initrd.postResumeCommands;
            assert !(builtins.hasAttr "floatlab-install-discovery" installed.systemd.services);
            assert cfg.networking.hostName == "";
+           assert pkgs.lib.hasInfix "/bin/kmscon" cfg.systemd.services.floatlab-installer-display.serviceConfig.ExecStart;
+           assert pkgs.lib.hasSuffix "/bin/install-tui" cfg.systemd.services.floatlab-installer-display.serviceConfig.ExecStart;
+           assert cfg.systemd.services.floatlab-installer-display.environment.COLORTERM == "truecolor";
+           assert cfg.fonts.fontconfig.defaultFonts.monospace == [ "FloatLab Braille" "IBM Plex Mono" "Unifont" ];
+           assert !cfg.isoImage.forceTextMode;
            assert cfg.systemd.services."floatlab-installer-console@".serviceConfig.RestartForceExitStatus == "SIGHUP";
            assert pkgs.lib.hasSuffix "/bin/install-tui" cfg.systemd.services."floatlab-installer-console@".serviceConfig.ExecStart;
            assert cfg.systemd.services."floatlab-installer-console@".serviceConfig.TimeoutStopSec == "infinity";

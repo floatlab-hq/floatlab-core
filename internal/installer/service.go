@@ -63,22 +63,42 @@ type layout struct {
 
 // Service runs the same session state machine for the real and mock backends.
 type Service struct {
-	Mock           bool
-	Scenario       string
-	StepDelay      time.Duration
-	runtimeDir     string
-	persistentDir  string
-	mediaDir       string
-	inventory      func(context.Context) ([]Disk, error)
-	previewPool    func(context.Context, []string) (string, error)
-	reboot         func(context.Context) error
-	disks          []Disk
-	payloadBytes   int64
-	identity       Appliance
-	key            []byte
-	ntp            bool
-	enrollment     *Enrollment
-	recoveryHashes []string
+	Mock             bool
+	Scenario         string
+	StepDelay        time.Duration
+	runtimeDir       string
+	persistentDir    string
+	mediaDir         string
+	inventory        func(context.Context) ([]Disk, error)
+	previewPool      func(context.Context, []string) (string, error)
+	reboot           func(context.Context) error
+	disks            []Disk
+	payloadBytes     int64
+	identity         Appliance
+	key              []byte
+	ntp              bool
+	enrollment       *Enrollment
+	recoveryHashes   []string
+	verifiedTOTPCode string
+}
+
+// Inventory is shared between consoles; the first preview claims the session.
+func (s *Service) claimSession() (*os.File, error) {
+	lock, err := Lock(s.runtimeDir + "/session.lock")
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range []string{s.runtimeDir + "/operation.json", s.runtimeDir + "/status.json", s.persistentDir + "/install-operation.json"} {
+		_, err = os.Stat(path)
+		if err == nil {
+			err = fmt.Errorf("an installation has already started; restart the console to inspect its status")
+		}
+		if !os.IsNotExist(err) {
+			lock.Close()
+			return nil, err
+		}
+	}
+	return lock, nil
 }
 
 func (s *Service) Serve(parent context.Context, input io.Reader, output io.Writer) error {
@@ -107,12 +127,6 @@ func (s *Service) Serve(parent context.Context, input io.Reader, output io.Write
 		}
 		s.setupMock()
 	} else {
-		lock, err := Lock(s.runtimeDir + "/session.lock")
-		if err != nil {
-			send(Event{Type: "fatal", Error: err.Error()})
-			return err
-		}
-		defer lock.Close()
 		if s.inventory == nil {
 			s.inventory = Inventory
 		}
@@ -123,7 +137,7 @@ func (s *Service) Serve(parent context.Context, input io.Reader, output io.Write
 			s.reboot = reboot
 		}
 		var previous Status
-		err = credentials.ReadPrivate(s.runtimeDir+"/status.json", &previous)
+		err := credentials.ReadPrivate(s.runtimeDir+"/status.json", &previous)
 		if err != nil && !os.IsNotExist(err) {
 			return s.terminal(ctx, input, send, Status{Phase: "Installer startup", Error: Diagnostic([]byte(err.Error()))})
 		}
@@ -179,6 +193,12 @@ func (s *Service) Serve(parent context.Context, input io.Reader, output io.Write
 	status := Status{Phase: "Waiting for disk layout", Activity: "Select disks and confirm the installation layout"}
 	send(Event{Type: "inventory", Disks: s.disks, PayloadBytes: s.payloadBytes, NTP: s.ntp, Status: &status})
 	requests := readRequests(ctx, input)
+	var sessionLock *os.File
+	defer func() {
+		if sessionLock != nil {
+			sessionLock.Close()
+		}
+	}()
 	var planned *layout
 	var done chan error
 	started, accepted, terminal := false, false, false
@@ -229,6 +249,14 @@ func (s *Service) Serve(parent context.Context, input io.Reader, output io.Write
 			fail := func(err error) { reply.Type = "error"; reply.Error = validationText(err.Error()); send(reply) }
 			switch req.Type {
 			case "preview":
+				if !s.Mock && sessionLock == nil {
+					var err error
+					sessionLock, err = s.claimSession()
+					if err != nil {
+						fail(err)
+						continue
+					}
+				}
 				if started {
 					fail(fmt.Errorf("disk layout is already confirmed"))
 					continue
@@ -306,6 +334,27 @@ func (s *Service) Serve(parent context.Context, input io.Reader, output io.Write
 					continue
 				}
 				send(reply)
+			case "validate-account", "verify-totp":
+				if !started || terminal || accepted || req.Config == nil {
+					fail(fmt.Errorf("account settings are unavailable in the current installation state"))
+					continue
+				}
+				if e := validateAccount(*req.Config); e != nil {
+					fail(e)
+					continue
+				}
+				if req.Type == "verify-totp" {
+					if s.enrollment == nil {
+						fail(fmt.Errorf("enroll your authenticator first"))
+						continue
+					}
+					if _, ok := credentials.Verify(s.enrollment.Secret, req.Config.TOTPCode, time.Now(), -1); !ok {
+						fail(fmt.Errorf("invalid or expired authenticator code"))
+						continue
+					}
+					s.verifiedTOTPCode = req.Config.TOTPCode
+				}
+				send(reply)
 
 			case "enroll", "configure":
 				if !started || terminal || accepted || req.Config == nil {
@@ -338,6 +387,7 @@ func (s *Service) Serve(parent context.Context, input io.Reader, output io.Write
 				close(configured)
 				s.enrollment = nil
 				s.recoveryHashes = nil
+				s.verifiedTOTPCode = ""
 				send(reply)
 			case "reboot":
 				if !terminal {
@@ -431,6 +481,25 @@ func checkFirmware() error {
 	return nil
 }
 
+func validateAccount(config InstallConfig) error {
+	if config.Username == "" {
+		return fmt.Errorf("enter an administrator username")
+	}
+	if config.Password == "" {
+		return fmt.Errorf("enter a password")
+	}
+	if config.PasswordConfirmation == "" {
+		return fmt.Errorf("confirm your password")
+	}
+	if config.Password != config.PasswordConfirmation {
+		return fmt.Errorf("passwords do not match")
+	}
+	if !credentials.Valid(config.Username, config.Password) {
+		return fmt.Errorf("username must be 1–64 characters without line breaks; password must be 1–72 bytes")
+	}
+	return nil
+}
+
 func (s *Service) submission(ctx context.Context, config InstallConfig, enroll bool) (Submission, error) {
 	var sub Submission
 	host, err := s.hostSettings(config)
@@ -438,8 +507,8 @@ func (s *Service) submission(ctx context.Context, config InstallConfig, enroll b
 		return sub, err
 	}
 	sub.Host = host
-	if config.Password != config.PasswordConfirmation || !credentials.Valid(config.Username, config.Password) {
-		return sub, fmt.Errorf("Credentials must match; username must be 1–64 characters and the credential must be 1–72 bytes")
+	if err := validateAccount(config); err != nil {
+		return sub, err
 	}
 	if enroll || config.TOTP {
 		if !s.Mock {
@@ -450,6 +519,7 @@ func (s *Service) submission(ctx context.Context, config InstallConfig, enroll b
 			return sub, fmt.Errorf("NTP must be synchronized for TOTP enrollment; use authentication without TOTP or try again")
 		}
 		if enroll {
+			s.verifiedTOTPCode = ""
 			secret, err := credentials.Secret()
 			if err != nil {
 				return sub, err
@@ -465,8 +535,10 @@ func (s *Service) submission(ctx context.Context, config InstallConfig, enroll b
 		if s.enrollment == nil || !config.RecoverySaved {
 			return sub, fmt.Errorf("enroll TOTP and confirm the recovery codes have been saved")
 		}
-		if _, ok := credentials.Verify(s.enrollment.Secret, config.TOTPCode, time.Now(), -1); !ok {
-			return sub, fmt.Errorf("invalid or expired authenticator code")
+		if s.verifiedTOTPCode == "" || s.verifiedTOTPCode != config.TOTPCode {
+			if _, ok := credentials.Verify(s.enrollment.Secret, config.TOTPCode, time.Now(), -1); !ok {
+				return sub, fmt.Errorf("invalid or expired authenticator code")
+			}
 		}
 		secret, err := credentials.Encrypt(s.key, s.enrollment.Secret)
 		if err != nil {

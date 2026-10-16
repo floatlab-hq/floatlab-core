@@ -103,18 +103,27 @@ until the ISO release path is validated.
 ## Console installation
 
 The production ISO runs the Bubble Tea `install-tui` on the appliance screen and
-serial console. Press Enter on either console to claim the single installation
-session. The TUI launches `install-service` and exchanges newline-delimited JSON
+serial console. Both open disk selection automatically; the first console to
+preview a disk layout claims the single installation session. The TUI launches `install-service` and exchanges newline-delimited JSON
 through stdin/stdout; service diagnostics go to a private temporary log.
+
+The local screen uses kmscon with Pango software rendering, IBM Plex Mono at
+16 pixels, FloatLab Braille for evenly spaced round dots, and Unifont for other Unicode. The ISO enables kernel mode
+setting for this display. The serial console remains available independently;
+its font is selected by the connecting terminal. For a VM preview using the
+same display configuration, run `./scripts/dev-installer-vm.sh` from the repository
+root and open [the localhost viewer](http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale).
+See the [developer guide](DEVELOPMENT.md#preview-the-iso-display-in-a-local-vm)
+for the edit/rebuild loop and cache locations.
 
 1. Select disks with checkboxes. Rows show the disk name, manufacturer, model,
    capacity, and existing partitions. One disk generates a single-disk pool command;
-   multiple disks generate a mirror. Edit the full command for raidz or other vdev
-   layouts. The bordered multiline editor groups the pool name, options, and
+   multiple disks generate a mirror. Next previews the layout; Customise zpool beneath the previewed command
+   opens the full command editor for raidz or other vdev layouts. The bordered multiline editor groups the pool name, options, and
    topology into three lines. Enter inserts a newline; Ctrl+S validates and previews.
    The service parses arguments without a shell and dry-runs against whole
-   disks. Inspect the rewritten command and partition plan, then type
-   `ERASE ALL DATA` to confirm.
+   disks. Inspect the rewritten command, then choose Erase All and continue
+   to confirm. No typed phrase is required.
 2. Installation starts immediately while you enter host and network settings.
    Choose a timezone from the searchable list and select DHCP or Static with the
    radio buttons. Static addressing fields appear only for Static. The service
@@ -124,18 +133,21 @@ through stdin/stdout; service diagnostics go to a private temporary log.
    at least 16 GiB of data. The service repeats the dry-run against the actual
    ZFS partitions before creating the pool. It copies and verifies the OS once
    into ZFS and installs each UEFI bootloader.
-3. Review and explicitly submit configuration. The service validates it immediately;
-   errors remain editable. Optionally enroll TOTP when NTP is synchronized and save
-   the ten single-use recovery codes. If copying finishes first, installation waits
+3. Account credentials validate before advancing. The same screen offers TOTP
+   Yes/No; if enabled, scan the compact theme-colored QR or enter its manual
+   secret when NTP is synchronized. Verify the code and save the ten single-use
+   recovery codes before reviewing and explicitly submitting the configuration. If copying finishes first, installation waits
    for valid configuration before applying settings and verifying the stack.
-4. Success shows a 30-second reboot countdown. Press P or Space to pause it, or R
-   or Enter to reboot immediately. Failure remains visible without a countdown;
+4. Success shows a 30-second reboot countdown. Choose Reboot to reboot immediately. Failure remains visible without a countdown;
    reboot manually after inspecting the error. There is no quit action or in-place
    installation retry.
 
-The header shows branding and the input step. The bottom six lines stay dedicated
-to installation status, activity, overall progress, copied bytes, and transfer speed.
-Copying accounts for most progress; other operations indicate activity and milestones.
+The header shows the selected 18 × 7 compact Braille logo with FloatLab Installer beneath it. Content is centered
+in a bounded column, with aligned tables on wider terminals and stacked fields on
+compact consoles. The compact footer shows activity, progress, copied bytes and
+transfer speed. Back/Next actions sit two blank lines below the content, and
+unavailable Back actions are hidden. Keyboard help sits one row above the bottom. Copying
+accounts for most progress; other operations indicate activity and milestones.
 
 Installation requires x86-64 UEFI with Secure Boot disabled and Internet access for
 initial container downloads. Installed boots use cached container images. On an

@@ -60,10 +60,10 @@ func (m *Model) openTimezone() {
 }
 func (m *Model) timezoneBody() string {
 	matches := m.timezoneMatches()
-	rows := max(1, m.height-16)
+	rows := max(1, m.bodyHeight()-7)
 	start := max(0, m.timezoneCursor-rows/2)
 	start = min(start, max(0, len(matches)-rows))
-	lines := []string{"Choose timezone", "Type to filter   ↑/↓: select   Enter: confirm   Esc: back", "", m.timezoneSearch.View(), ""}
+	lines := []string{"Choose timezone", "Choose the appliance's local timezone.", "", m.timezoneSearch.View(), ""}
 	if len(matches) == 0 {
 		lines = append(lines, "No matching timezones. Clear or change the search.")
 	}

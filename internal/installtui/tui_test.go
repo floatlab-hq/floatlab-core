@@ -13,65 +13,70 @@ import (
 	"github.com/floatlab/floatlab-core/internal/installer"
 )
 
-func TestCtrlRQuitsMockFromAnyScreen(t *testing.T) {
-	for _, stage := range []string{"welcome", "connecting", "disks", "command", "confirm", "settings", "account", "review", "totp", "timezone", "waiting", "complete", "failed", "unavailable"} {
+func TestRemovedShortcutsDoNotQuitPauseOrReboot(t *testing.T) {
+	for _, stage := range []string{"disks", "complete", "failed"} {
 		m := New("unused", nil)
-		m.mock, m.pending, m.choosingTheme = true, true, true
-		m.stage = stage
-		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
-		if cmd == nil {
-			t.Fatalf("%s: Ctrl+R did not quit", stage)
+		m.stage, m.terminal, m.countdown = stage, stage != "disks", 120
+		for _, key := range []tea.KeyMsg{{Type: tea.KeyCtrlR}, {Type: tea.KeyCtrlC}, {Type: tea.KeyCtrlD}, {Type: tea.KeyRunes, Runes: []rune("p")}, {Type: tea.KeyRunes, Runes: []rune("r")}} {
+			_, cmd := m.Update(key)
+			if cmd != nil || m.rebooting || m.paused {
+				t.Fatalf("%s: removed shortcut still acts", stage)
+			}
 		}
-		if _, ok := cmd().(tea.QuitMsg); !ok || m.rebooting {
-			t.Fatalf("%s: Ctrl+R did not safely quit mock mode", stage)
-		}
-		if !strings.Contains(m.footer(80), "Ctrl+R Quit") {
-			t.Fatal("mock quit shortcut is missing")
+		footer := ansi.Strip(m.footer(80))
+		if strings.Contains(footer, "Ctrl+R") || strings.Contains(footer, "Quit") || strings.Contains(footer, "Pause") {
+			t.Fatal("removed shortcuts remain in footer")
 		}
 	}
 }
 
-func TestCtrlRUsesRebootServiceOnlyWhenTerminal(t *testing.T) {
-	m := New("unused", nil)
-	var output bytes.Buffer
-	m.client = &client{encoder: json.NewEncoder(&output)}
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
-	if cmd != nil || m.rebooting || m.validation == "" {
-		t.Fatal("Ctrl+R allowed reboot before completion or failure")
-	}
+func TestRebootButtonUsesService(t *testing.T) {
 	for _, stage := range []string{"complete", "failed"} {
-		m.stage, m.terminal, m.pending, m.rebooting = stage, true, false, false
-		output.Reset()
-		_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
-		if cmd == nil || !m.rebooting || !m.paused {
-			t.Fatal("Ctrl+R did not request reboot")
+		m := New("unused", nil)
+		m.stage, m.terminal = stage, true
+		var output bytes.Buffer
+		m.client = &client{encoder: json.NewEncoder(&output)}
+		m.focusAction(2)
+		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		if cmd == nil || !m.rebooting {
+			t.Fatal("Reboot button did not request reboot")
 		}
-		if result := cmd().(sent); result.err != nil {
-			t.Fatal(result.err)
-		}
+		cmd()
 		var request installer.Request
 		if err := json.Unmarshal(output.Bytes(), &request); err != nil || request.Type != "reboot" {
-			t.Fatalf("unexpected reboot request: %s, %v", output.String(), err)
+			t.Fatal("Reboot button sent wrong request")
 		}
-		_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
-		if cmd != nil {
-			t.Fatal("repeated Ctrl+R sent another reboot")
-		}
-	}
-	if !strings.Contains(m.footer(80), "Ctrl+R Reboot") {
-		t.Fatal("reboot shortcut is missing")
 	}
 }
 
 func key(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
+
+func TestTOTPRadioUpdatesConfiguration(t *testing.T) {
+	m := New("unused", nil)
+	m.settings()
+	m.stage = "account"
+	m.setFocus(10)
+	for _, choice := range []struct {
+		key  tea.KeyMsg
+		want bool
+	}{{tea.KeyMsg{Type: tea.KeyLeft}, true}, {tea.KeyMsg{Type: tea.KeyRight}, false}, {key(" "), true}, {key("no"), true}} {
+		m.Update(choice.key)
+		if m.config().TOTP != choice.want {
+			t.Fatal("TOTP radio did not preserve the chosen configuration")
+		}
+	}
+	if !strings.Contains(m.body(), "(●) Yes    ( ) No") {
+		t.Fatal("TOTP radio selection is not visible")
+	}
+}
 
 func TestPasswordStrengthUpdatesWithoutExposingPassword(t *testing.T) {
 	m := New("unused", nil)
 	m.settings()
 	m.stage = "account"
 	m.setFocus(8)
-	if !strings.Contains(m.View(), "Enter a password") {
-		t.Fatal("missing empty password meter")
+	if m.passwordStrength() != "" {
+		t.Fatal("empty password has a strength indicator")
 	}
 	m.Update(key("password"))
 	weak := m.passwordScore
@@ -88,7 +93,7 @@ func TestPasswordStrengthUpdatesWithoutExposingPassword(t *testing.T) {
 		t.Fatal("password was exposed or changed")
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
-	if !strings.Contains(m.View(), "Enter a password") {
+	if m.passwordStrength() != "" {
 		t.Fatal("meter was not cleared")
 	}
 }
@@ -100,15 +105,14 @@ func TestNextButtonsNavigateAndValidate(t *testing.T) {
 		m.stage = stage
 		fields := m.visibleFields()
 		m.setFocus(fields[len(fields)-1])
-		rows := strings.Split(ansi.Strip(m.View()), "\n")
-		if !strings.Contains(rows[len(rows)-1], "[ Next → ]") {
-			t.Fatalf("%s: Next button is missing from the bottom action bar", stage)
+		if !strings.Contains(ansi.Strip(m.actionBar()), "Next →") {
+			t.Fatalf("%s: Next button is missing from the action bar", stage)
 		}
-		if !strings.Contains(ansi.Strip(m.View()), "[ Next → ]") {
+		if !strings.Contains(ansi.Strip(m.View()), "Next →") {
 			t.Fatalf("%s: Next button is hidden", stage)
 		}
 		m.Update(tea.KeyMsg{Type: tea.KeyDown})
-		if m.focus != len(m.fields) || !strings.Contains(ansi.Strip(m.View()), "> [ Next → ]") {
+		if m.focus != len(m.fields) || m.actionFocus != 2 || strings.Contains(ansi.Strip(m.actionBar()), ">") {
 			t.Fatalf("%s: Next button is not focusable", stage)
 		}
 		m.Update(key("x"))
@@ -127,13 +131,13 @@ func TestNextButtonsNavigateAndValidate(t *testing.T) {
 			if m.pending || m.stage != "settings" || !strings.Contains(m.View(), "Next") {
 				t.Fatal("rejected network did not remain editable")
 			}
-		} else if cmd != nil || m.stage != "review" {
-			t.Fatal("Next did not open account review")
+		} else if cmd == nil || !m.pending || m.stage != "account" {
+			t.Fatal("Next bypassed account validation")
 		}
 	}
 }
 
-func TestFooterUsesExactlySevenFullWidthLines(t *testing.T) {
+func TestFooterUsesExactlySixFullWidthLines(t *testing.T) {
 	m := New("unused", nil)
 	m.stage = "settings"
 	m.settings()
@@ -142,7 +146,7 @@ func TestFooterUsesExactlySevenFullWidthLines(t *testing.T) {
 		m.width, m.height = width, 24
 		m.resize()
 		rows := strings.Split(m.footer(width), "\n")
-		if len(rows) != 7 {
+		if len(rows) != 6 {
 			t.Fatal(len(rows))
 		}
 		for _, row := range rows {
@@ -166,23 +170,18 @@ func TestFailuresRemainVisibleAndHaveNoCountdown(t *testing.T) {
 	if m.rebooting || !strings.Contains(m.View(), m.failure) {
 		t.Fatal("failure disappeared or reboot started")
 	}
+	if !strings.Contains(ansi.Strip(m.footer(80)), "Enter Reboot") {
+		t.Fatal("failure footer does not describe its Reboot action")
+	}
 }
 
-func TestNoQuitKeysAndPausedCountdown(t *testing.T) {
+func TestCountdownContinuesWithoutPauseShortcut(t *testing.T) {
 	m := New("unused", nil)
 	m.stage, m.countdown, m.terminal = "complete", 120, true
-	for _, kind := range []tea.KeyType{tea.KeyCtrlC, tea.KeyCtrlD} {
-		_, cmd := m.Update(tea.KeyMsg{Type: kind})
-		if cmd != nil {
-			t.Fatal("quit key produced command")
-		}
-	}
-	_, _ = m.Update(key("p"))
-	for range 200 {
-		_, _ = m.Update(tick{})
-	}
-	if !m.paused || m.countdown != 120 || m.rebooting {
-		t.Fatal("paused countdown advanced")
+	m.Update(key("p"))
+	m.Update(tick{})
+	if m.paused || m.countdown != 119 || m.rebooting {
+		t.Fatal("removed pause shortcut stopped countdown")
 	}
 }
 
@@ -196,7 +195,7 @@ func TestDiskCheckboxesGenerateMirror(t *testing.T) {
 	m.cursor = 2
 	_, _ = m.Update(key(" "))
 	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if m.stage != "command" || !strings.Contains(m.command.Value(), "MIRROR /dev/disk/by-id/a /dev/disk/by-id/b") || m.selected[2] {
+	if !m.pending || m.stage != "disks" || !strings.Contains(m.command.Value(), "MIRROR /dev/disk/by-id/a /dev/disk/by-id/b") || m.selected[2] {
 		t.Fatal(m.command.Value(), m.selected)
 	}
 }
@@ -218,7 +217,7 @@ func TestEnrollmentCanScrollBackToSecretAndCorrectCode(t *testing.T) {
 	}
 	m.totpCode = "123456"
 	m.focus = 1
-	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if m.focus != 0 || m.confirmation.Value() != "123456" {
 		t.Fatal("cannot correct authenticator code")
 	}
@@ -255,7 +254,7 @@ func TestThreeLinePoolEditorPreservesArguments(t *testing.T) {
 	m.stage = "command"
 	m.command.SetValue(formatPoolCommand(installer.ZPoolCommand(disks)))
 	m.resize()
-	if !strings.Contains(m.body(), "╭") || !strings.Contains(m.body(), "╰") {
+	if !strings.Contains(m.body(), "┌") || !strings.Contains(m.body(), "└") {
 		t.Fatal("missing editor border")
 	}
 	before := strings.Count(m.command.Value(), "\n")

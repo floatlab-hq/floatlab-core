@@ -28,7 +28,7 @@ let
         if [ -f /floatlab/system/etc/install-status.json ]; then
           install -m 0600 /floatlab/system/etc/install-status.json /run/floatlab-installer/status.json
         fi
-        systemctl start --no-block floatlab-installer-console@tty1.service floatlab-installer-console@ttyS0.service
+        systemctl start --no-block floatlab-installer-display.service floatlab-installer-console@ttyS0.service
       fi
     '';
   };
@@ -79,6 +79,7 @@ in {
       RestartSec = 5;
     };
   };
+  systemd.services.floatlab-installer-display.path = [ pkgs.floatlab-zbm-kcl ];
   systemd.services.floatlab-install-discovery = lib.mkIf (!floatlab-development) {
     wantedBy = [ "multi-user.target" ];
     wants = [ "floatlab-datasets.service" ];

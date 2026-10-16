@@ -227,7 +227,7 @@ def run_case(args, count):
     recovery_codes = []
     early_return = False
     try:
-        child.expect("Press Enter to begin", timeout=600)
+        child.expect("Select installation disks", timeout=600)
         guest_command(guest_socket, "set -e; test ! -x /run/current-system/sw/bin/docker; "
                       "test ! -x /run/current-system/sw/bin/docker-compose; "
                       "test ! -x /run/current-system/sw/bin/git; "
@@ -245,25 +245,19 @@ def run_case(args, count):
                           "printf '%s\\n' '[Service]' " + shlex.quote('Environment="PATH=/run/floatlab-installer-test:' + worker_path + '"') +
                           " > /run/systemd/system/floatlab-installer-console@ttyS0.service.d/interruption.conf; "
                           "systemctl daemon-reload; systemctl restart floatlab-installer-console@ttyS0")
-            child.expect("Press Enter to begin")
+            child.expect("Select installation disks")
             partition_ids = guest_command(guest_socket, "lsblk -nro PARTUUID | sort")
-        child.sendline("")
-        child.expect("Select installation disks")
         for index in range(count):
             child.send(" ")
             if index + 1 < count:
                 child.send("\x1b[B")
         child.sendline("")
-        child.expect("Edit the complete pool command")
-        child.send("\x13")  # Ctrl+S validates the multiline command.
-        child.expect("Type ERASE ALL DATA")
-        child.sendline("ERASE ALL DATA")
+        child.expect("Erase All and continue")
+        child.sendline("")
         child.expect("Configure FloatLab while installation runs")
         if args.before_storage:
             wait_guest(guest_socket, "test -e /run/floatlab-installer-test/wipefs-entered", child)
             guest_command(guest_socket, "systemctl kill --signal=KILL --kill-whom=all floatlab-installer-console@ttyS0")
-            child.expect("Press Enter to begin")
-            child.sendline("")
             child.expect("Installation interrupted")
             assert guest_command(guest_socket, "lsblk -nro PARTUUID | sort") == partition_ids
             guest_command(guest_socket, "test ! -e /floatlab/system/etc/installed")
@@ -275,7 +269,7 @@ def run_case(args, count):
             partition_ids = guest_command(guest_socket, "lsblk -nro PARTUUID | sort")
             time.sleep(2)
             assert guest_command(guest_socket, "test ! -e /floatlab/system/etc/installed; lsblk -nro PARTUUID | sort") == partition_ids
-            child.send("r")
+            child.sendline("")
             child.expect(pexpect.EOF)
             print(f"PASS: {count}-disk failure stays visible until manual reboot", flush=True)
             early_return = True
@@ -297,28 +291,27 @@ def run_case(args, count):
         child.expect("Set up administrator")  # Network settings passed service validation.
         if args.totp:
             wait_guest(guest_socket, 'test "$(timedatectl show -p NTPSynchronized --value)" = yes', child)
-        for value in ["installer-test", "installer-test-password", "installer-test-password", "yes" if args.totp else "no"]:
+        for value in ["installer-test", "installer-test-password", "installer-test-password"]:
             fill(value)
-        child.expect("Review configuration")
+        child.send("\x1b[D" if args.totp else "\x1b[C")
         child.sendline("")
         if args.totp:
             child.expect("Enroll your authenticator")
-            child.send("\x1b[5~")  # Page up to the enrollment secret.
             child.expect(r"Manual secret: ([A-Z2-7]{32})")
             secret = child.match.group(1)
-            # Recovery codes are read from the rendered UI, never a credential file.
-            child.send("\x1b[6~")
-            child.expect("Record these single-use recovery codes:")
+            child.sendline(totp(secret, int(time.time()) // 30))
+            child.expect("Save your recovery codes")
             for _ in range(10):
                 child.expect(r"\b[0-9a-f]{32}\b")
                 recovery_codes.append(child.match.group(0))
-            child.sendline(totp(secret, int(time.time()) // 30))
             child.expect("Type SAVED")
             child.sendline("SAVED")
+        child.expect("Review configuration")
+        child.sendline("")
         if child.expect(["Rebooting in", "Installation failed"]) == 1:
             raise AssertionError("installer failed: " + guest_command(guest_socket, "cat /run/floatlab-installer/status.json"))
-        child.send("p")
-        child.expect("Automatic reboot paused")
+        # Suspend only the TUI while inspecting the installed stack before reboot.
+        guest_command(guest_socket, "systemctl kill --signal=STOP --kill-whom=main floatlab-installer-console@ttyS0")
         node_id, verified_step = wait_stack(base, name, secret=secret)
         guest_command(guest_socket, 'set -e; systemctl is-active --quiet floatlab-installer-root; '
                       'test "$(findmnt -n -o SOURCE /run/floatlab-installer/root)" = floatlab/os/installer; '
@@ -335,7 +328,8 @@ def run_case(args, count):
                       'test "$(lsblk -nr -o TYPE "$disk" | grep -cx part)" = 2; '
                       'test "$(blkid -s TYPE -o value "$disk-part2")" = zfs_member; done; '
                       'echo persistent > /floatlab/system/etc/os-persistence-test')
-        child.send("r")
+        guest_command(guest_socket, "systemctl kill --signal=CONT --kill-whom=main floatlab-installer-console@ttyS0")
+        child.sendline("")
         child.expect(pexpect.EOF)
     except Exception:
         try:

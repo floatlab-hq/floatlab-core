@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,37 @@ type serviceTest struct {
 	events chan Event
 	done   chan error
 	next   int
+}
+
+func TestConsoleSessionClaimIsExclusiveAndRejectsStartedInstallations(t *testing.T) {
+	root := t.TempDir()
+	s := &Service{runtimeDir: root + "/run", persistentDir: root + "/persistent"}
+	lock, err := s.claimSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other, err := s.claimSession(); err == nil {
+		other.Close()
+		t.Fatal("two consoles claimed the same session")
+	}
+	lock.Close()
+	for _, path := range []string{s.runtimeDir + "/operation.json", s.runtimeDir + "/status.json", s.persistentDir + "/install-operation.json"} {
+		if err := credentials.WriteBytes(path, []byte("{}")); err != nil {
+			t.Fatal(err)
+		}
+		if other, err := s.claimSession(); err == nil {
+			other.Close()
+			t.Fatal("a stale console claimed an installation that already started")
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		other, err := s.claimSession()
+		if err != nil {
+			t.Fatal("failed claim retained the session lock:", err)
+		}
+		other.Close()
+	}
 }
 
 func mockSession(t *testing.T, scenario string) *serviceTest {
@@ -213,5 +245,50 @@ func TestHostValidationBeforeAccountSetup(t *testing.T) {
 	// Host validation neither requires account credentials nor starts finalization.
 	if e := s.request(t, Request{Type: "reboot"}); e.Type != "error" {
 		t.Fatal("host validation completed installation", e)
+	}
+}
+
+func TestAccountAndAuthenticatorValidateBeforeReview(t *testing.T) {
+	s := mockSession(t, "success")
+	confirmMock(t, s)
+	for _, edit := range []func(*InstallConfig){
+		func(c *InstallConfig) { c.Username = "" },
+		func(c *InstallConfig) { c.Password = "" },
+		func(c *InstallConfig) { c.PasswordConfirmation = "" },
+		func(c *InstallConfig) { c.PasswordConfirmation = "different" },
+		func(c *InstallConfig) {
+			c.Password, c.PasswordConfirmation = strings.Repeat("a", 73), strings.Repeat("a", 73)
+		},
+	} {
+		config := validConfig()
+		edit(&config)
+		if e := s.request(t, Request{Type: "validate-account", Config: &config}); e.Type != "error" {
+			t.Fatal("invalid account passed validation", e)
+		}
+	}
+	config := validConfig()
+	if e := s.request(t, Request{Type: "validate-account", Config: &config}); e.Type != "validate-account" {
+		t.Fatal("valid account rejected", e)
+	}
+	config.TOTP = true
+	enrollment := s.request(t, Request{Type: "enroll", Config: &config})
+	if enrollment.Type != "enroll" || enrollment.Enrollment == nil {
+		t.Fatal("could not enroll authenticator", enrollment)
+	}
+	config.TOTPCode = "invalid"
+	if e := s.request(t, Request{Type: "verify-totp", Config: &config}); e.Type != "error" {
+		t.Fatal("invalid authenticator code accepted", e)
+	}
+	code, err := credentials.Code(enrollment.Enrollment.Secret, time.Now().Unix()/30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.TOTPCode = code
+	if e := s.request(t, Request{Type: "verify-totp", Config: &config}); e.Type != "verify-totp" {
+		t.Fatal("valid authenticator code rejected", e)
+	}
+	config.RecoverySaved = true
+	if e := s.request(t, Request{Type: "configure", Config: &config}); e.Type != "configure" {
+		t.Fatal("verified configuration rejected", e)
 	}
 }
