@@ -91,8 +91,9 @@ no longer trigger publication. Component numbers advance independently.
 Internal service and executable names remain `floatlab-control`.
 
 Configure GitHub secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`, and repository
-variable `DOCKERHUB_NAMESPACE`. The token must permit pushing to that namespace.
+variable `DOCKERHUB_NAMESPACE` (a secret with that name is also supported). The token must permit pushing to that namespace.
 GHCR uses `GITHUB_TOKEN` with package-write permission. Management builds once,
+checks the homepage, JavaScript, CSS and versioned API from the running image,
 pushes versioned tags to both registries and verifies matching image IDs before
 creating its GitHub release. Metadata records each registry's own digest.
 There is no mutable `latest` tag. A failed push can leave one registry populated;

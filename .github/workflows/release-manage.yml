@@ -6,6 +6,8 @@ on:
         type: boolean
         required: true
     secrets:
+      DOCKERHUB_NAMESPACE:
+        required: false
       DOCKERHUB_USERNAME:
         required: true
       DOCKERHUB_TOKEN:
@@ -22,7 +24,7 @@ jobs:
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
+          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_NAMESPACE }}
         run: |
           test -n "$DOCKERHUB_USERNAME" && test -n "$DOCKERHUB_TOKEN" && test -n "$DOCKERHUB_NAMESPACE"
           [[ "$DOCKERHUB_NAMESPACE" =~ ^[a-z0-9][a-z0-9_-]*$ ]]
@@ -62,11 +64,17 @@ jobs:
             bun build --compile --define "__FLOATLAB_VERSION__=\"$VERSION\"" --target="bun-$target" cli/src/main.ts --outfile "release-dist/floatlab-$name"
           done
           test "$(release-dist/floatlab-linux-x64 --version)" = "$VERSION"
-      - name: Build once and publish to both registries
+      - name: Build management image once
         run: |
-          docker buildx build --platform linux/amd64 --push --provenance=false --sbom=false \
+          docker buildx build --platform linux/amd64 --load --provenance=false --sbom=false \
             --build-arg VERSION="$VERSION" --build-arg GIT_COMMIT="$GITHUB_SHA" \
             --tag "$GHCR" --tag "$DOCKERHUB" --file docker/floatlab-control.Dockerfile .
+      - name: Verify management UI and API over HTTP
+        run: python3 scripts/check-manage-image.py "$GHCR" "$VERSION"
+      - name: Publish verified image to both registries
+        run: |
+          docker push "$GHCR"
+          docker push "$DOCKERHUB"
       - name: Verify registry images and publish metadata
         run: |
           mkdir -p release-dist
