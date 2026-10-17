@@ -27,6 +27,7 @@ import (
 )
 
 var (
+	devMode           bool
 	listenAddr        string
 	uiDir             string
 	rqliteURL         string
@@ -58,6 +59,7 @@ func main() {
 	}
 
 	root.Flags().StringVar(&listenAddr, "listen", ":8080", "HTTP API and UI listen address")
+	root.Flags().BoolVar(&devMode, "dev-mode", os.Getenv("FLOATLAB_DEV_MODE") == "true", "Identify this control plane as development mode")
 	root.Flags().StringVar(&uiDir, "ui-dir", "ui/dist", "Built UI directory")
 	root.Flags().StringVar(&rqliteURL, "rqlite-url", "http://localhost:4001", "rqlite base URL")
 	root.Flags().StringVar(&raftNodeID, "raft-id", "node1", "Unique Raft node ID")
@@ -245,6 +247,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 	// HTTP control server.
 	srv := control.NewServer(&control.Config{
+		DevMode:       devMode,
 		ListenAddr:    listenAddr,
 		UIDir:         uiDir,
 		RQLiteURL:     rqliteURL,

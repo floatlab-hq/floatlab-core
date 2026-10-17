@@ -1753,6 +1753,8 @@ export interface components {
             raft_state?: "Leader" | "Follower" | "Candidate" | "Shutdown" | null;
         };
         HealthStatus: {
+            /** @description This appliance is running the development control plane. */
+            dev_mode?: boolean;
             /** @enum {string} */
             status: "ok" | "degraded" | "unavailable";
             /** @example 0.1.0 */
@@ -1784,6 +1786,8 @@ export interface components {
             };
         };
         RaftHealth: {
+            /** @description This appliance is running the development control plane. */
+            dev_mode?: boolean;
             /**
              * @description Raft address of the current leader.
              * @example 192.168.1.10:7000

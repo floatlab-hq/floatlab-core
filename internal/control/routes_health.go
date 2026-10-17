@@ -21,7 +21,7 @@ func registerHealthRoutes(r chi.Router, s *Server) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]interface{}{"status": "ok", "version": "0.1.0", "uptime_seconds": int64(time.Since(s.startedAt).Seconds()), "raft_state": s.raft.State().String(), "leader": s.raft.Leader()})
+	writeJSON(w, 200, map[string]interface{}{"status": "ok", "version": "0.1.0", "dev_mode": s.cfg.DevMode, "uptime_seconds": int64(time.Since(s.startedAt).Seconds()), "raft_state": s.raft.State().String(), "leader": s.raft.Leader()})
 }
 
 func (s *Server) handleHealthReady(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +51,7 @@ func (s *Server) handleHealthRaft(w http.ResponseWriter, r *http.Request) {
 	commit, _ := strconv.ParseInt(stats["commit_index"], 10, 64)
 	last, _ := strconv.ParseInt(stats["last_log_index"], 10, 64)
 	applied, _ := strconv.ParseInt(stats["applied_index"], 10, 64)
-	writeJSON(w, 200, map[string]interface{}{"leader": s.raft.Leader(), "state": s.raft.State().String(), "peers": s.raft.Peers(), "commit_index": commit, "last_log_index": last, "applied_index": applied})
+	writeJSON(w, 200, map[string]interface{}{"leader": s.raft.Leader(), "state": s.raft.State().String(), "dev_mode": s.cfg.DevMode, "peers": s.raft.Peers(), "commit_index": commit, "last_log_index": last, "applied_index": applied})
 }
 
 func registerNodeRoutes(r chi.Router, s *Server) {

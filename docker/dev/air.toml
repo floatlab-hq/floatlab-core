@@ -1,0 +1,15 @@
+root = "/workspace"
+tmp_dir = "/tmp/floatlab-air"
+
+[build]
+cmd = "go build -o /tmp/floatlab-control ./cmd/floatlab-control"
+bin = "/tmp/floatlab-control-run"
+include_ext = ["go", "mod", "sum"]
+exclude_dir = [".git", "node_modules", "ui", "packages", "cli", "floatlab-appliance-image"]
+delay = 500
+send_interrupt = true
+kill_delay = "15s"
+stop_on_error = false
+
+[log]
+time = true

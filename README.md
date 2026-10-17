@@ -28,6 +28,118 @@ The web interface exposes the same commands through the command palette: press <
 See the [installer developer guide](floatlab-appliance-image/DEVELOPMENT.md) for
 running the TUI in mock mode with Go, choosing test scenarios, and running checks.
 
+## Iterating on an installed appliance
+
+Appliances built with the development-mode support can switch the management
+container and native host daemon without rebuilding the OS. Earlier appliances
+need one image update to install the systemd launcher, watcher and mode command.
+The mode switch is a root host command; it persists across reboots.
+
+Build from the repository root, then load the image on the appliance:
+
+```bash
+docker build -f docker/floatlab-dev.Dockerfile -t floatlab-dev:local .
+docker save floatlab-dev:local | ssh root@FLOATLAB_HOST docker load
+ssh root@FLOATLAB_HOST floatlab-mode dev
+```
+
+Alternatively, build directly on the host or pull a published dev image and tag
+it `floatlab-dev:local`. The build includes the current source tree, Go, Node,
+pnpm, Air, Git, GitHub CLI, code-server (headless VS Code), Codex and Claude Code.
+It fetches upstream Git history so commits made on the appliance can become PRs.
+`SOURCE_REPOSITORY` and `SOURCE_REF` build arguments select a fork or base branch.
+The image contains any uncommitted source changes present at build time; review
+the build context before sharing it. Tool versions can be selected with
+`CODEX_VERSION`, `CLAUDE_VERSION` and `CODE_SERVER_VERSION` build arguments.
+
+The management UI stays on port 8080, now served by Vite with hot module reload;
+Go runs behind it on container loopback port 8081 and Air rebuilds/restarts it
+when Go source changes. API authentication still uses the appliance credentials.
+The dashboard displays **Development mode** from the backend's reported mode.
+The installed identity, encryption key, database and Raft data remain in use.
+
+Source is seeded once into `/floatlab/system/dev/workspace`. The whole tool home
+is mounted from `/floatlab/system/dev/home` with mode 0700, retaining GitHub,
+Codex, Claude and editor credentials/configuration across container replacement
+and reboot. Rebuilding the image does not overwrite an existing workspace;
+use Git in that workspace to update its source. Failed Go builds are logged and
+leave the last successful control-plane process running.
+
+Open the editor through an SSH tunnel:
+
+```bash
+ssh -N -L 9090:127.0.0.1:9090 root@FLOATLAB_HOST
+# Open http://localhost:9090 in your browser.
+# On the appliance, retrieve the generated editor password:
+cat /floatlab/system/dev/home/.config/code-server/config.yaml
+```
+
+Use the editor terminal, or enter the dev container from the appliance:
+
+```bash
+docker compose -f /floatlab/system/docker-compose.yml exec floatlab-control bash
+gh auth login --hostname github.com --git-protocol https --web
+gh auth setup-git
+git config --global user.name 'Your Name'
+git config --global user.email 'YOUR_GITHUB_EMAIL'
+codex login --device-auth
+claude auth login
+```
+
+GitHub's browser/device flow and [Codex device authentication](https://developers.openai.com/codex/auth)
+work from a remote terminal. [code-server](https://coder.com/docs/code-server/guide)
+is password protected and its published port binds only to host loopback. The
+Vite server accepts IP access and the appliance's configured node name; for
+another DNS alias, set `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` in the container.
+The dev environment has root Docker/host access, so only trusted developers
+should access it. Credentials are persistent local files, not encrypted storage.
+
+After editing hostd, run this **inside the dev container**:
+
+```bash
+floatlab-dev-hostd
+```
+
+It builds a static Linux binary for the container's architecture, then atomically
+replaces `/floatlab/system/dev/bin/floatlab-hostd`. The host's systemd path unit
+restarts hostd with the host's normal ZFS/Docker/network tools and environment.
+A failed build preserves the running binary. Use a native-architecture dev image;
+cross-building through an emulated container does not target the host automatically.
+Hostd startup networking commands still use the packaged binary; changes to boot
+network initialization, systemd units, kernel or host tools require an OS image.
+
+Review and commit selected files before opening a PR:
+
+```bash
+git diff
+git add PATHS_YOU_REVIEWED
+git commit -m 'Describe the change'
+floatlab-dev-pr 'Describe the change'
+```
+
+The PR helper offers GitHub login if needed, pushes the current branch without
+force, and opens a draft PR. It requires a clean working tree and push access to
+`origin`; use a fork as origin if needed. It never stages or commits files.
+
+Return to production on the appliance, including recovery from a broken dev build:
+
+```bash
+floatlab-mode production
+floatlab-mode status
+```
+
+This restores packaged hostd and the production Compose image. It retains the
+workspace, secrets and dev binary for the next dev session. It does not roll back
+database migrations or workload/storage changes made by development code; take
+a backup before testing changes to persistent data. A failed mode switch reports
+an error and leaves the requested mode selected; rerun it or select production.
+
+Validation: `python3 scripts/dev-workflow.test.py` checks isolated mode/deployment
+and PR behavior plus Compose merging. After building the image,
+`bash scripts/dev-container-smoke.sh` tests the frontend, API, editor, tools, Go
+reload and restart persistence using disposable containers and volumes, with no
+appliance mounts or published ports.
+
 ## Development VM
 
 The repository's Nix development shell provides the VM tooling. Host libvirt must be installed, running, and accessible to your user.

@@ -1,0 +1,15 @@
+services:
+  floatlab-control:
+    image: floatlab-dev:local
+    environment:
+      FLOATLAB_DEV_MODE: "true"
+    volumes:
+      - /floatlab/system/dev/workspace:/workspace
+      - /floatlab/system/dev/home:/root
+    ports:
+      - "127.0.0.1:9090:9090"
+    healthcheck:
+      # Probe Go through Vite, rather than accepting a listening frontend as ready.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/v1/health"]
+      start_period: 180s
+      retries: 24
