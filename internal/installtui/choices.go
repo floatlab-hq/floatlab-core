@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/floatlab/floatlab-core/internal/installer"
 )
 
 //go:embed timezones.txt
@@ -29,6 +30,30 @@ func formatPoolCommand(command string) string {
 		}
 	}
 	return "zpool create floatlab\n" + options + "\n" + strings.Join(words, " ")
+}
+
+// Short aliases are presentation-only; the service resolves them to stable IDs.
+func shortPoolCommand(command string, disks []installer.Disk) string {
+	words := strings.Fields(command)
+	for i, word := range words {
+		for _, disk := range disks {
+			if disk.Device == "" {
+				continue
+			}
+			switch word {
+			case disk.Path:
+				words[i] = disk.Device
+			case installer.DataPartition(disk):
+				suffix := "2"
+				last := disk.Device[len(disk.Device)-1]
+				if last >= '0' && last <= '9' {
+					suffix = "p2"
+				}
+				words[i] = disk.Device + suffix
+			}
+		}
+	}
+	return formatPoolCommand(strings.Join(words, " "))
 }
 
 func (m *Model) timezoneMatches() []string {

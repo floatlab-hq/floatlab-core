@@ -195,7 +195,7 @@ func TestDiskCheckboxesGenerateMirror(t *testing.T) {
 	m.cursor = 2
 	_, _ = m.Update(key(" "))
 	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if !m.pending || m.stage != "disks" || !strings.Contains(m.command.Value(), "MIRROR /dev/disk/by-id/a /dev/disk/by-id/b") || m.selected[2] {
+	if !m.pending || m.stage != "disks" || !strings.Contains(m.command.Value(), "MIRROR /dev/sda /dev/sdb") || m.selected[2] {
 		t.Fatal(m.command.Value(), m.selected)
 	}
 }
@@ -369,5 +369,48 @@ func TestCtrlRQueuesUntilServiceConnects(t *testing.T) {
 	var request installer.Request
 	if err := json.Unmarshal(output.Bytes(), &request); err != nil || request.Type != "reboot" {
 		t.Fatal("startup reboot was not sent after connection")
+	}
+}
+
+func TestTimezoneRequiresAnExplicitSelection(t *testing.T) {
+	m := New("unused", nil)
+	m.settings()
+	m.stage = "settings"
+	if m.config().Timezone != "" || !strings.Contains(ansi.Strip(m.body()), "Please select ▾") {
+		t.Fatal("timezone has an implicit default")
+	}
+	m.setFocus(1)
+	m.openTimezone()
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.stage != "settings" || m.config().Timezone != "" {
+		t.Fatal("canceling the picker selected a timezone")
+	}
+	m.Update(received{event: installer.Event{Type: "error", Error: "please select a timezone"}})
+	if m.stage != "settings" || !strings.Contains(m.body(), "please select a timezone") {
+		t.Fatal("missing timezone error did not stay on settings")
+	}
+	m.setFocus(1)
+	m.openTimezone()
+	m.timezoneSearch.SetValue("UTC")
+	m.timezoneCursor = 0
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.config().Timezone != "UTC" || m.stage != "settings" || m.validation != "" {
+		t.Fatal("explicit UTC choice was not accepted or did not clear the error")
+	}
+}
+
+func TestCopyMetricsDisappearWhenCopyFinishes(t *testing.T) {
+	m := New("unused", nil)
+	m.width = 160
+	m.status = installer.Status{Phase: "Copying", Total: 4 * installer.GiB, Copied: 3 * installer.GiB, BytesPerSecond: 100 * float64(installer.MiB), Progress: 0.8}
+	if !strings.Contains(m.footer(160), "MiB/s") {
+		t.Fatal("active copy lost its metrics")
+	}
+	m.status.Copied = m.status.Total
+	m.status.Phase = "Waiting for valid configuration"
+	m.status.Progress = 0.9
+	footer := ansi.Strip(m.footer(160))
+	if strings.Contains(footer, "GiB") || strings.Contains(footer, "MiB/s") || !strings.Contains(footer, "90%") || !strings.Contains(footer, m.status.Phase) {
+		t.Fatal("completed copy retains stale metrics or loses install progress")
 	}
 }

@@ -207,6 +207,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "preview":
 			m.preview = e
 			m.stage = "confirm"
+			m.focusAction(3)
 			m.resize()
 		case "confirm":
 			m.stage = "settings"
@@ -270,7 +271,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "reboot":
 			return m, tea.Quit
 		}
-		if m.stage != previousStage {
+		if m.stage != previousStage && m.stage != "confirm" {
 			m.actionFocus = 0
 		}
 		return m, tea.Batch(m.read(), textinput.Blink)
@@ -334,10 +335,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.stage {
 		case "disks":
 			switch v.String() {
-			case "up", "k":
-				m.cursor = max(0, m.cursor-1)
-			case "down", "j":
-				m.cursor = min(len(m.disks)-1, m.cursor+1)
 			case " ":
 				if m.cursor >= 0 && m.cursor < len(m.disks) && m.disks[m.cursor].Eligible {
 					m.selected[m.cursor] = !m.selected[m.cursor]
@@ -356,11 +353,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.command, cmd = m.command.Update(v)
 			return m, cmd
-		case "confirm":
-			if v.String() == "enter" {
-				return m, m.send(installer.Request{Type: "confirm", Command: m.preview.Command, Confirmation: "ERASE ALL DATA"})
-			}
-			return m, nil
 		case "timezone":
 			matches := m.timezoneMatches()
 			switch v.String() {
@@ -373,6 +365,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter":
 				if len(matches) > 0 {
 					m.fields[1].SetValue(matches[m.timezoneCursor])
+					m.validation = ""
 					m.stage = "settings"
 					m.moveFocus(1)
 				}
@@ -505,7 +498,7 @@ func (m *Model) reboot() tea.Cmd {
 
 func (m *Model) settings() {
 	m.labels = []string{"Node name", "Timezone", "IPv4 configuration", "IPv4 address (static only)", "Netmask (static only)", "Gateway (static only)", "DNS servers (comma separated)", "Administrator username", "Password", "Confirm password", "Set up TOTP"}
-	defaults := []string{"floatlab", "UTC", "dhcp", "", "", "", "1.1.1.1,8.8.8.8", "admin", "", "", "no"}
+	defaults := []string{"floatlab", "", "dhcp", "", "", "", "1.1.1.1,8.8.8.8", "admin", "", "", "no"}
 	m.fields = make([]textinput.Model, len(m.labels))
 	for i := range m.fields {
 		f := textinput.New()
@@ -706,7 +699,7 @@ func (m *Model) body() string {
 		for _, d := range m.preview.Disks {
 			lines = append(lines, diskSummary(d))
 		}
-		command := ansi.Wrap(formatPoolCommand(m.preview.Command), max(1, m.contentWidth()-4), "")
+		command := ansi.Wrap(shortPoolCommand(m.preview.Command, m.preview.Disks), max(1, m.contentWidth()-4), "")
 		lines = append(lines, "", "Final zpool command:", command, "", m.button("Customise zpool", 3, !m.pending))
 	case "timezone":
 		return m.timezoneBody()
@@ -744,6 +737,9 @@ func (m *Model) body() string {
 			}
 			if i == 1 {
 				value = m.fields[1].Value() + " ▾"
+				if m.fields[1].Value() == "" {
+					value = lipgloss.NewStyle().Foreground(m.currentTheme().darkForeground).Background(m.currentTheme().background).Render("Please select ▾")
+				}
 			}
 			if i == 2 {
 				value = "(●) DHCP    ( ) Static"
@@ -774,9 +770,6 @@ func (m *Model) body() string {
 		c := m.config()
 		lines = []string{"Review configuration", "Confirm the settings for your FloatLab appliance.", ""}
 		var rows [][2]string
-		for _, disk := range m.preview.Disks {
-			rows = append(rows, [2]string{"Installation disk", diskSummary(disk)})
-		}
 		rows = append(rows, [2]string{"Node", c.NodeName}, [2]string{"Timezone", c.Timezone}, [2]string{"IPv4", strings.ToUpper(c.Network.IPv4.Mode)})
 		if c.Network.IPv4.Mode == "static" {
 			rows = append(rows, [2]string{"Address", c.Network.IPv4.Address}, [2]string{"Netmask", c.Network.IPv4.Netmask}, [2]string{"Gateway", c.Network.IPv4.Gateway})
@@ -807,9 +800,6 @@ func (m *Model) body() string {
 			} else {
 				lines = append(lines, row[0]+": "+row[1])
 			}
-		}
-		if m.preview.Command != "" {
-			lines = append(lines, "", "Final zpool command:", formatPoolCommand(m.preview.Command))
 		}
 		lines = append(lines, "", "Choose Finish to apply this configuration.")
 	case "totp":
@@ -915,7 +905,7 @@ func (m *Model) footer(width int) string {
 	t := m.currentTheme()
 	bar := lipgloss.NewStyle().Foreground(t.accent).Background(t.background).Render(strings.Repeat("█", filled)) + lipgloss.NewStyle().Foreground(t.selection).Background(t.background).Render(strings.Repeat("░", barWidth-filled)) + fmt.Sprintf(" %3.0f%%", percent*100)
 	metrics := ""
-	if m.status.Total > 0 {
+	if m.status.Total > 0 && m.status.Copied < m.status.Total {
 		metrics = fmt.Sprintf("  %s / %s · %.0f MiB/s", size(m.status.Copied), size(m.status.Total), m.status.BytesPerSecond/float64(installer.MiB))
 	}
 	activity := m.status.Activity

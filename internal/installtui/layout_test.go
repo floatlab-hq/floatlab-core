@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/floatlab/floatlab-core/internal/installer"
 	"github.com/muesli/termenv"
 )
 
@@ -118,5 +119,25 @@ func TestTimezoneCursorUsesAccentColor(t *testing.T) {
 		if !strings.Contains(m.timezoneBody(), selected) {
 			t.Fatal("current timezone row does not use the accent color")
 		}
+	}
+}
+
+func TestShortPoolCommandPreservesStablePreview(t *testing.T) {
+	disks := []installer.Disk{{Path: "/dev/disk/by-id/ssd", Device: "/dev/sda", Eligible: true}, {Path: "/dev/disk/by-id/nvme", Device: "/dev/nvme0n1", Eligible: true}}
+	short := shortPoolCommand(installer.ZPoolCommand(disks), disks)
+	args, err := installer.ParseZPool(short, disks)
+	if err != nil || !strings.Contains(strings.Join(args, " "), "/dev/disk/by-id/ssd-part2 /dev/disk/by-id/nvme-part2") {
+		t.Fatal("short editor aliases did not resolve to stable partition IDs", err)
+	}
+	command := "zpool create floatlab mirror /dev/disk/by-id/ssd-part2 /dev/disk/by-id/nvme-part2"
+	m := New("unused", nil)
+	m.stage = "confirm"
+	m.preview = installer.Event{Command: command, Disks: disks}
+	body := m.body()
+	if !strings.Contains(body, "/dev/sda2 /dev/nvme0n1p2") || strings.Contains(body, "/dev/disk/by-id/") || m.preview.Command != command {
+		t.Fatal("short display lost canonical preview or partition aliases")
+	}
+	if got := shortPoolCommand("zpool create floatlab mirror /dev/disk/by-id/ssd /dev/disk/by-id/nvme", disks); !strings.Contains(got, "MIRROR /dev/sda /dev/nvme0n1") {
+		t.Fatal("editor aliases were not shortened")
 	}
 }

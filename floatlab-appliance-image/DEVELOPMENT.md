@@ -116,11 +116,15 @@ command parsing and host, network, and account validation still run.
 1. Disk selection opens automatically. Select disks with Space and move with the arrow keys.
    The installer creates one pool, `floatlab`; selecting multiple disks generates
    a mirror within that pool.
-2. Choose Next to preview the generated ZFS layout. The unboxed command has a
+2. Disk arrows stop at the list ends; Next is the last item. Choose Next to preview
+   the generated ZFS layout. The editor and preview show short device aliases; the
+   service resolves and validates stable disk IDs internally. The unboxed command has a
    Customise zpool action directly below it to open the complete command editor. In the editor, Enter inserts
    a newline; Ctrl+S validates and opens the preview. Choose Erase All and continue
    to confirm the simulated disk layout. No typed confirmation is required.
-3. Enter host settings. Open the timezone list with Enter and type to filter it.
+3. Enter host settings. Timezone starts at Please select; choose UTC or a local
+   timezone explicitly. Open the list with Enter and type to filter it. Enter selects
+   a timezone; Esc cancels without selecting. The picker has no Back/Next buttons.
    Select DHCP or Static with Left/Right or Space. Static address fields appear
    only for Static. Select Next to validate network settings before account
    setup opens.
@@ -129,12 +133,16 @@ command parsing and host, network, and account validation still run.
    you type. Choose TOTP Yes/No on the same screen with Left/Right or Space.
    If enabled, scan the compact, theme-colored QR or use the manual secret.
    Verify the authenticator code on that screen, then save the recovery codes.
-   Review the validated configuration before submitting it.
-5. Watch the compact progress footer. Success starts the automatic reboot countdown;
+   Review the validated host, network, and account settings, then choose Finish.
+   Old disk partitions and pool commands are not repeated on Review.
+5. Watch the compact progress footer. Copy bytes and speed disappear when copying
+   finishes; overall installation progress and status remain. Success starts the automatic reboot countdown;
    choose Reboot to reboot immediately. Mock reboot exits the installer. Failures
    remain visible until you choose Reboot.
 
-Back/Next actions sit two blank lines below the content. Unavailable Back actions
+Confirmation arrows move only between Customise zpool, Back, and Erase All and
+continue; there are no hidden content focus stops. Back/Next actions sit two blank
+lines below the content. Unavailable Back actions
 are hidden. The contextual help bar sits one row above the bottom. Up/Down or Tab/Shift+Tab move between fields and the action row. In the
 action row, Left/Right choose Back or Next, Enter or Space activates the selected
 action, and Up returns to editing. In the command editor, Down from its last line

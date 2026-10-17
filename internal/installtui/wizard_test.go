@@ -30,7 +30,7 @@ func TestInstallerStartsConnectingWithoutAWelcomeScreen(t *testing.T) {
 }
 
 func TestWizardArrowNavigationPreservesEdits(t *testing.T) {
-	for _, stage := range []string{"disks", "command", "confirm", "settings", "account", "review", "totp", "timezone"} {
+	for _, stage := range []string{"disks", "command", "confirm", "settings", "account", "review", "totp"} {
 		t.Run(stage, func(t *testing.T) {
 			m := New("unused", nil)
 			m.settings()
@@ -206,7 +206,7 @@ func TestWizardBackDoesNotReplayStorageOrResetTheSession(t *testing.T) {
 }
 
 func TestWizardActionsAreReachableWithoutTab(t *testing.T) {
-	for _, stage := range []string{"disks", "command", "confirm", "settings", "account", "review", "totp", "timezone", "complete", "failed"} {
+	for _, stage := range []string{"disks", "command", "settings", "account", "review", "totp", "complete", "failed"} {
 		t.Run(stage, func(t *testing.T) {
 			m := New("unused", nil)
 			m.settings()
@@ -216,19 +216,11 @@ func TestWizardActionsAreReachableWithoutTab(t *testing.T) {
 				fields := m.visibleFields()
 				m.setFocus(fields[len(fields)-1])
 			}
-			if stage == "timezone" {
-				m.openTimezone()
-				m.timezoneCursor = len(m.timezoneMatches()) - 1
-			}
 			if stage == "totp" {
 				m.focus = 1
 			}
 			m.Update(tea.KeyMsg{Type: tea.KeyDown})
-			want := 2
-			if stage == "confirm" {
-				want = 3
-			}
-			if m.actionFocus != want {
+			if m.actionFocus != 2 {
 				t.Fatal("down arrow did not reach the next available action")
 			}
 			m.Update(key("x"))
@@ -262,7 +254,7 @@ func TestWizardScreenBoundsAndContextualHelp(t *testing.T) {
 			if strings.Contains(ansi.Strip(rows[len(rows)-2]), "Change Theme") {
 				t.Fatalf("%s: removed theme shortcut remains visible", stage)
 			}
-			if width >= 80 && (strings.Contains(ansi.Strip(m.actionBar()), "Back") != m.canBack() || !strings.Contains(ansi.Strip(m.actionBar()), "Next") && !strings.Contains(ansi.Strip(m.actionBar()), "Reboot") && stage != "confirm" && stage != "review") {
+			if width >= 80 && stage != "timezone" && (strings.Contains(ansi.Strip(m.actionBar()), "Back") != m.canBack() || !strings.Contains(ansi.Strip(m.actionBar()), "Next") && !strings.Contains(ansi.Strip(m.actionBar()), "Reboot") && stage != "confirm" && stage != "review") {
 				t.Fatalf("%s: wizard navigation is missing", stage)
 			}
 		}
@@ -289,7 +281,7 @@ func TestAccountWithoutTOTPAdvancesDirectlyToReview(t *testing.T) {
 	}
 }
 
-func TestReviewIncludesEveryStepWithoutExposingSecrets(t *testing.T) {
+func TestReviewIncludesOnlyHostAndSecurityWithoutExposingSecrets(t *testing.T) {
 	m := New("unused", nil)
 	m.settings()
 	m.stage = "review"
@@ -302,14 +294,83 @@ func TestReviewIncludesEveryStepWithoutExposingSecrets(t *testing.T) {
 	m.totpCode = "123456"
 	m.confirmation.SetValue("SAVED")
 	view := ansi.Strip(m.View())
-	for _, want := range []string{"Review SSD", "review-node", "Australia/Melbourne", "STATIC", "192.0.2.10", "255.255.255.0", "192.0.2.1", "1.1.1.1", "review-admin", "Set and confirmed", "Enabled and verified", "Recovery codes", "Saved", "zpool create floatlab", "/dev/sda2", "Finish →", "Enter Finish"} {
+	for _, want := range []string{"review-node", "Australia/Melbourne", "STATIC", "192.0.2.10", "255.255.255.0", "192.0.2.1", "1.1.1.1", "review-admin", "Set and confirmed", "Enabled and verified", "Recovery codes", "Saved", "Finish →", "Enter Finish"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("Review is missing %q", want)
 		}
 	}
-	for _, secret := range []string{"private-password", "PRIVATE-TOTP-SECRET", "private-recovery-code", "123456"} {
+	for _, secret := range []string{"Review SSD", "Installation disk", "zpool", "/dev/sda2", "private-password", "PRIVATE-TOTP-SECRET", "private-recovery-code", "123456"} {
 		if strings.Contains(view, secret) {
 			t.Fatalf("Review exposed %q", secret)
 		}
+	}
+}
+
+func TestDiskArrowsStopAtEndsAndTreatNextAsLastItem(t *testing.T) {
+	m := New("unused", nil)
+	m.stage = "disks"
+	m.disks = []installer.Disk{{Eligible: true}, {Eligible: true}, {Eligible: false}}
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.cursor != 0 || m.actionFocus != 0 {
+		t.Fatal("Up wrapped from first disk")
+	}
+	for _, want := range []struct{ cursor, action int }{{1, 0}, {2, 0}, {2, 2}, {2, 2}} {
+		m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		if m.cursor != want.cursor || m.actionFocus != want.action {
+			t.Fatal("Down did not follow disks then Next")
+		}
+	}
+	for _, want := range []int{2, 1, 0, 0} {
+		m.Update(tea.KeyMsg{Type: tea.KeyUp})
+		if m.cursor != want || m.actionFocus != 0 {
+			t.Fatal("Up did not return through disk list")
+		}
+	}
+}
+
+func TestConfirmFocusContainsOnlyVisibleActions(t *testing.T) {
+	m := New("unused", nil)
+	m.stage = "command"
+	m.Update(received{event: installer.Event{Type: "preview", Command: "zpool create floatlab /dev/sda2"}})
+	if m.actionFocus != 3 {
+		t.Fatal("preview did not focus Customise")
+	}
+	for _, want := range []int{1, 2, 2} {
+		m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		if m.actionFocus != want {
+			t.Fatal("Down reached an invisible focus stop")
+		}
+	}
+	for _, want := range []int{1, 3, 3} {
+		m.Update(tea.KeyMsg{Type: tea.KeyUp})
+		if m.actionFocus != want {
+			t.Fatal("Up reached an invisible focus stop")
+		}
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.stage != "command" {
+		t.Fatal("Customise did not open command editor")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.stage != "confirm" || m.actionFocus != 3 {
+		t.Fatal("editor Back lost visible confirmation focus")
+	}
+}
+
+func TestTimezonePickerHasNoWizardButtons(t *testing.T) {
+	m := New("unused", nil)
+	m.settings()
+	m.setFocus(1)
+	m.openTimezone()
+	m.timezoneSearch.SetValue("UTC")
+	m.timezoneCursor = len(m.timezoneMatches()) - 1
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if m.actionBar() != "" || m.actionFocus != 0 || m.stage != "timezone" {
+		t.Fatal("picker exposed wizard actions")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.stage != "settings" || m.config().Timezone != "" {
+		t.Fatal("Esc chose a timezone")
 	}
 }

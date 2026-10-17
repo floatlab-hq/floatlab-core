@@ -253,6 +253,7 @@ def run_case(args, count):
                 child.send("\x1b[B")
         child.sendline("")
         child.expect("Erase All and continue")
+        child.send("\x1b[B\x1b[B")  # Customise -> Back -> Erase All and continue.
         child.sendline("")
         child.expect("Configure FloatLab while installation runs")
         if args.before_storage:

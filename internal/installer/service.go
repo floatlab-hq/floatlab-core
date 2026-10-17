@@ -666,6 +666,9 @@ func validationText(value string) string {
 }
 
 func (s *Service) hostSettings(config InstallConfig) (Appliance, error) {
+	if config.Timezone == "" {
+		return Appliance{}, fmt.Errorf("please select a timezone")
+	}
 	host := s.identity
 	host.NodeName, host.Timezone, host.Network = config.NodeName, config.Timezone, config.Network
 	return host, host.Validate()

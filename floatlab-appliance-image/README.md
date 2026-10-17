@@ -117,7 +117,8 @@ See the [developer guide](DEVELOPMENT.md#preview-the-iso-display-in-a-local-vm)
 for the edit/rebuild loop and cache locations.
 
 1. Select disks with checkboxes. Rows show the disk name, manufacturer, model,
-   capacity, and existing partitions. One disk generates a single-disk pool command;
+   capacity, and existing partitions. Arrow navigation stops at the ends with Next
+   as the final item. One disk generates a single-disk pool command;
    multiple disks generate a mirror. Next previews the layout; Customise zpool beneath the previewed command
    opens the full command editor for raidz or other vdev layouts. The bordered multiline editor groups the pool name, options, and
    topology into three lines. Enter inserts a newline; Ctrl+S validates and previews.
@@ -125,7 +126,8 @@ for the edit/rebuild loop and cache locations.
    disks. Inspect the rewritten command, then choose Erase All and continue
    to confirm. No typed phrase is required.
 2. Installation starts immediately while you enter host and network settings.
-   Choose a timezone from the searchable list and select DHCP or Static with the
+   Timezone starts unselected and must be chosen explicitly, including UTC. In the
+   searchable list, Enter selects and Esc returns; there are no Back/Next buttons. Select DHCP or Static with the
    radio buttons. Static addressing fields appear only for Static. The service
    validates these settings before opening the separate administrator account step.
    Each disk receives a 512 MiB UEFI partition and a ZFS partition using the
@@ -136,7 +138,9 @@ for the edit/rebuild loop and cache locations.
 3. Account credentials validate before advancing. The same screen offers TOTP
    Yes/No; if enabled, scan the compact theme-colored QR or enter its manual
    secret when NTP is synchronized. Verify the code and save the ten single-use
-   recovery codes before reviewing and explicitly submitting the configuration. If copying finishes first, installation waits
+   recovery codes before reviewing host, network, and account settings and choosing
+   Finish. Review does not repeat the disks’ old partitions or the pool command.
+   Copy bytes and speed disappear when copying completes; installation progress remains. If copying finishes first, installation waits
    for valid configuration before applying settings and verifying the stack.
 4. Success shows a 30-second reboot countdown. Choose Reboot to reboot immediately. Failure remains visible without a countdown;
    reboot manually after inspecting the error. There is no quit action or in-place

@@ -233,7 +233,11 @@ func TestEnrollmentRequiresValidCodeAndSavedRecoveryCodes(t *testing.T) {
 func TestHostValidationBeforeAccountSetup(t *testing.T) {
 	s := mockSession(t, "success")
 	confirmMock(t, s)
-	config := InstallConfig{NodeName: "node-a", Timezone: "UTC", Network: hostnetwork.DefaultConfig()}
+	config := InstallConfig{NodeName: "node-a", Network: hostnetwork.DefaultConfig()}
+	if e := s.request(t, Request{Type: "validate-host", Config: &config}); e.Type != "error" || !strings.Contains(e.Error, "select a timezone") {
+		t.Fatal("missing timezone did not require selection", e)
+	}
+	config.Timezone = "UTC"
 	config.Network.IPv4 = hostnetwork.IPv4{Mode: "static", Address: "192.0.2.20", Netmask: "255.255.255.0", Gateway: "198.51.100.1"}
 	if e := s.request(t, Request{Type: "validate-host", Config: &config}); e.Type != "error" {
 		t.Fatal("invalid gateway accepted", e)

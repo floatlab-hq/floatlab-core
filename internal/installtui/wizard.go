@@ -88,6 +88,9 @@ func (m *Model) focusContent() tea.Cmd {
 	switch m.stage {
 	case "command":
 		return m.command.Focus()
+	case "confirm":
+		m.focusAction(3)
+		return nil
 	case "totp":
 		return m.confirmation.Focus()
 	case "timezone":
@@ -110,17 +113,75 @@ func (m *Model) wizardKey(v tea.KeyMsg) (bool, tea.Cmd) {
 		m.back()
 		return true, m.focusContent()
 	}
-	if m.actionFocus != 0 {
-		if m.stage == "confirm" && m.actionFocus == 3 && (k == "enter" || k == " ") {
-			m.stage = "command"
-			m.resize()
-			return true, m.focusContent()
+	if m.stage == "timezone" {
+		return false, nil
+	}
+	if m.stage == "disks" {
+		switch k {
+		case "up", "k", "shift+tab":
+			if m.actionFocus != 0 {
+				m.actionFocus = 0
+				m.cursor = max(0, len(m.disks)-1)
+			} else {
+				m.cursor = max(0, m.cursor-1)
+			}
+			return true, nil
+		case "down", "j", "tab":
+			if m.actionFocus == 0 {
+				if m.cursor < len(m.disks)-1 {
+					m.cursor++
+				} else {
+					m.focusAction(2)
+				}
+			}
+			return true, nil
+		}
+	}
+	if m.stage == "confirm" {
+		if m.actionFocus == 0 {
+			m.focusAction(3)
 		}
 		switch k {
-		case "left":
+		case "up", "shift+tab":
+			if m.actionFocus == 2 {
+				m.focusAction(1)
+			} else {
+				m.focusAction(3)
+			}
+		case "down", "tab":
 			if m.actionFocus == 3 {
-				m.actionFocus = 2
-			} else if m.canBack() {
+				m.focusAction(1)
+			} else {
+				m.focusAction(2)
+			}
+		case "left":
+			if m.actionFocus == 2 {
+				m.focusAction(1)
+			}
+		case "right":
+			if m.actionFocus == 3 {
+				m.focusAction(1)
+			} else {
+				m.focusAction(2)
+			}
+		case "enter", " ":
+			switch m.actionFocus {
+			case 1:
+				m.back()
+			case 2:
+				return true, m.send(installer.Request{Type: "confirm", Command: m.preview.Command, Confirmation: "ERASE ALL DATA"})
+			case 3:
+				m.stage = "command"
+				m.resize()
+				return true, m.focusContent()
+			}
+		}
+		return true, nil
+	}
+	if m.actionFocus != 0 {
+		switch k {
+		case "left":
+			if m.canBack() {
 				m.actionFocus = 1
 			}
 		case "right":
@@ -128,22 +189,12 @@ func (m *Model) wizardKey(v tea.KeyMsg) (bool, tea.Cmd) {
 				m.actionFocus = 2
 			}
 		case "tab":
-			if m.stage == "confirm" && m.actionFocus == 2 {
-				m.actionFocus = 3
-			} else if m.canBack() && m.actionFocus != 1 {
+			if m.canBack() && m.actionFocus != 1 {
 				m.actionFocus = 1
 			} else if m.canNext() {
 				m.actionFocus = 2
 			}
-		case "down":
-			if m.stage == "confirm" && m.actionFocus == 3 {
-				m.focusAction(2)
-			}
 		case "up", "shift+tab":
-			if m.stage == "confirm" && m.actionFocus != 3 {
-				m.focusAction(3)
-				return true, nil
-			}
 			return true, m.focusContent()
 		case "enter", " ":
 			if m.actionFocus == 1 {
@@ -173,12 +224,8 @@ func (m *Model) wizardKey(v tea.KeyMsg) (bool, tea.Cmd) {
 		return false, nil // Form focus joins the action row in moveFocus.
 	case "totp":
 		toActions = toActions || k == "down" || k == "up"
-	case "disks":
-		toActions = toActions || k == "down" && m.cursor == len(m.disks)-1 || k == "up" && m.cursor == 0
 	case "command":
 		toActions = toActions || k == "down" && m.command.Line() == m.command.LineCount()-1 || k == "up" && m.command.Line() == 0
-	case "timezone":
-		toActions = toActions || k == "down" && m.timezoneCursor == len(m.timezoneMatches())-1
 	default:
 		toActions = toActions || k == "up" || k == "down" || k == "left" || k == "right"
 	}
@@ -186,9 +233,6 @@ func (m *Model) wizardKey(v tea.KeyMsg) (bool, tea.Cmd) {
 		action := 2
 		if (k == "shift+tab" || k == "up" || k == "left") && m.canBack() {
 			action = 1
-		}
-		if m.stage == "confirm" && (k == "down" || k == "tab") {
-			action = 3
 		}
 		if action == 1 || m.canNext() {
 			m.focusAction(action)
@@ -210,6 +254,9 @@ func (m *Model) button(label string, action int, enabled bool) string {
 }
 
 func (m *Model) actionBar() string {
+	if m.stage == "timezone" {
+		return ""
+	}
 	next := "Next →"
 	if m.stage == "confirm" {
 		next = "Erase All and continue →"
@@ -231,6 +278,8 @@ func (m *Model) actionBar() string {
 func (m *Model) helpBar(width int) string {
 	help := "↑↓ Move  Enter Next"
 	switch {
+	case m.stage == "confirm":
+		help = "↑↓/←→ Move  Enter Select"
 	case m.actionFocus != 0:
 		help = "←→ Choose  ↑ Edit  Enter Select"
 	case m.stage == "disks":
@@ -240,9 +289,7 @@ func (m *Model) helpBar(width int) string {
 	case m.stage == "settings" || m.stage == "account":
 		help = "↑↓ Move  ←→/Space Choose  Enter Next"
 	case m.stage == "timezone":
-		help = "Type Filter  ↑↓ Move  Enter Select"
-	case m.stage == "confirm":
-		help = "←→ Actions  Enter Erase All and continue"
+		help = "Type Filter  ↑↓ Move  Enter Select  Esc Back"
 	case m.stage == "review":
 		help = "PgUp/PgDn Scroll  Enter Finish"
 	case m.stage == "totp":
@@ -286,7 +333,7 @@ func (m *Model) preparePoolCommand() bool {
 		return false
 	}
 	if m.command.Value() == "" {
-		m.command.SetValue(formatPoolCommand(installer.ZPoolCommand(selected)))
+		m.command.SetValue(shortPoolCommand(installer.ZPoolCommand(selected), selected))
 	}
 	return true
 }
