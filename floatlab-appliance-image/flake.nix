@@ -228,6 +228,7 @@
            assert pkgs.lib.hasInfix "/bin/kmscon" cfg.systemd.services.floatlab-installer-display.serviceConfig.ExecStart;
            assert pkgs.lib.hasSuffix "/bin/install-tui" cfg.systemd.services.floatlab-installer-display.serviceConfig.ExecStart;
            assert cfg.systemd.services.floatlab-installer-display.environment.COLORTERM == "truecolor";
+           assert builtins.elem "PATH=${cfg.systemd.services.floatlab-installer-display.environment.PATH}" (pkgs.lib.splitString " " cfg.systemd.services.floatlab-installer-display.serviceConfig.ExecStart);
            assert cfg.fonts.fontconfig.defaultFonts.monospace == [ "FloatLab Braille" "IBM Plex Mono" "Unifont" ];
            assert !cfg.isoImage.forceTextMode;
            assert cfg.systemd.services."floatlab-installer-console@".serviceConfig.RestartForceExitStatus == "SIGHUP";
