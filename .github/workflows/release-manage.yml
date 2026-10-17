@@ -1,0 +1,81 @@
+name: Release management
+on:
+  workflow_call:
+    inputs:
+      prerelease:
+        type: boolean
+        required: true
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
+permissions:
+  contents: write
+  packages: write
+jobs:
+  manage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate publication configuration
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
+        run: |
+          test -n "$DOCKERHUB_USERNAME" && test -n "$DOCKERHUB_TOKEN" && test -n "$DOCKERHUB_NAMESPACE"
+          [[ "$DOCKERHUB_NAMESPACE" =~ ^[a-z0-9][a-z0-9_-]*$ ]]
+          {
+            echo "VERSION=${GITHUB_REF_NAME#manage-v}"
+            echo "GHCR=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/floatlab-manage:${GITHUB_REF_NAME#manage-v}"
+            echo "DOCKERHUB=docker.io/$DOCKERHUB_NAMESPACE/floatlab-manage:${GITHUB_REF_NAME#manage-v}"
+          } >> "$GITHUB_ENV"
+          python3 scripts/release.py notes "$GITHUB_REF_NAME" > /tmp/release-notes.md
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: oven-sh/setup-bun@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.18.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build CLI release targets
+        run: |
+          mkdir -p release-dist
+          for target in linux-x64-baseline linux-arm64 darwin-x64-baseline darwin-arm64; do
+            name="${target%-baseline}"
+            bun build --compile --define "__FLOATLAB_VERSION__=\"$VERSION\"" --target="bun-$target" cli/src/main.ts --outfile "release-dist/floatlab-$name"
+          done
+          test "$(release-dist/floatlab-linux-x64 --version)" = "$VERSION"
+      - name: Build once and publish to both registries
+        run: |
+          docker buildx build --platform linux/amd64 --push --provenance=false --sbom=false \
+            --build-arg VERSION="$VERSION" --build-arg GIT_COMMIT="$GITHUB_SHA" \
+            --tag "$GHCR" --tag "$DOCKERHUB" --file docker/floatlab-control.Dockerfile .
+      - name: Verify registry images and publish metadata
+        run: |
+          mkdir -p release-dist
+          python3 scripts/release.py manage-manifest "$VERSION" "$GITHUB_SHA" "$GHCR" "$DOCKERHUB" release-dist
+          cd release-dist
+          sha256sum floatlab-* manage-manifest.json > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-dist/*
+          body_path: /tmp/release-notes.md
+          fail_on_unmatched_files: true
+          prerelease: ${{ inputs.prerelease }}

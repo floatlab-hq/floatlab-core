@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	hraft "github.com/hashicorp/raft"
 
 	"github.com/floatlab/floatlab-core/pkg/config"
+	"github.com/floatlab/floatlab-core/pkg/release"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
 )
 
@@ -21,7 +23,7 @@ func registerHealthRoutes(r chi.Router, s *Server) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]interface{}{"status": "ok", "version": "0.1.0", "dev_mode": s.cfg.DevMode, "uptime_seconds": int64(time.Since(s.startedAt).Seconds()), "raft_state": s.raft.State().String(), "leader": s.raft.Leader()})
+	writeJSON(w, 200, map[string]interface{}{"status": "ok", "version": release.Version, "git_commit": release.GitCommit, "required_host": release.RequiredHost, "dev_mode": s.cfg.DevMode, "uptime_seconds": int64(time.Since(s.startedAt).Seconds()), "raft_state": s.raft.State().String(), "leader": s.raft.Leader()})
 }
 
 func (s *Server) handleHealthReady(w http.ResponseWriter, r *http.Request) {
@@ -279,13 +281,16 @@ func (s *Server) handleNodeHealth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "node not found")
 		return
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
 	started := time.Now()
-	_, err := s.hosts.Execute(r.Context(), id, "sys.info", nil)
+	compatibility := release.CheckHost(ctx, s.hosts, id)
+	_, err := s.hosts.Execute(ctx, id, "sys.info", nil)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "unreachable", "latency_ms": 0})
+		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "unreachable", "latency_ms": 0, "compatibility": compatibility})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "reachable", "latency_ms": time.Since(started).Milliseconds()})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "reachable", "latency_ms": time.Since(started).Milliseconds(), "compatibility": compatibility})
 }
 
 func stub(v interface{}) http.HandlerFunc {

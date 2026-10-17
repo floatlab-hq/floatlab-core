@@ -1,0 +1,47 @@
+name: Release ISO
+on:
+  workflow_call:
+    inputs:
+      prerelease:
+        type: boolean
+        required: true
+permissions:
+  contents: write
+  packages: read
+jobs:
+  iso:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: cachix/install-nix-action@v31
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download and verify locked release artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/release.py prepare-iso /tmp/floatlab-iso-bundle --version "${GITHUB_REF_NAME#iso-v}"
+      - name: Build offline ISO
+        env:
+          FLOATLAB_ISO_BUNDLE: /tmp/floatlab-iso-bundle
+          FLOATLAB_INSTALLER_VERSION: ${{ github.ref_name }}
+        run: |
+          bash floatlab-appliance-image/scripts/build-iso.sh
+          mkdir -p release-dist
+          cp floatlab-appliance-image/result/iso/*.iso release-dist/
+          cp /tmp/floatlab-iso-bundle/floatlab-manifest.json release-dist/
+          cd release-dist
+          sha256sum ./*.iso floatlab-manifest.json > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-dist/*
+          body_path: /tmp/floatlab-iso-bundle/release-notes.md
+          fail_on_unmatched_files: true
+          prerelease: ${{ inputs.prerelease }}

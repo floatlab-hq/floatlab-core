@@ -1,4 +1,4 @@
-{ config, lib, pkgs, floatlab-binaries, floatlab-development ? false, ... }:
+{ config, lib, pkgs, floatlab-installer-binaries, floatlab-development ? false, ... }:
 let
   root = "/run/floatlab-installer/root";
   chroot = "${pkgs.coreutils}/bin/chroot ${root} /run/current-system/sw/bin";
@@ -35,7 +35,7 @@ let
 in {
   boot.initrd.systemd.enable = lib.mkForce false;
   services.timesyncd.enable = true;
-  environment.systemPackages = [ floatlab-binaries pkgs.gptfdisk pkgs.dosfstools pkgs.gnutar pkgs.gzip pkgs.nix pkgs.floatlab-zbm-kcl ];
+  environment.systemPackages = [ floatlab-installer-binaries pkgs.gptfdisk pkgs.dosfstools pkgs.gnutar pkgs.gzip pkgs.nix pkgs.floatlab-zbm-kcl ];
   systemd.services.floatlab-boot-host-id = {
     wantedBy = [ "multi-user.target" ];
     before = [ "floatlab-zfs-import.service" ];
@@ -52,9 +52,12 @@ in {
     serviceConfig = { Type = "oneshot"; RemainAfterExit = true; ExecStart = "${identity}/bin/floatlab-restore-identity"; };
   };
   systemd.services.floatlab-network-config = {
+    environment.SYSTEMD_OFFLINE = lib.mkIf (!floatlab-development) "0";
     wants = [ "floatlab-host-identity.service" ];
-    after = [ "floatlab-host-identity.service" ];
+    after = [ "floatlab-host-identity.service" ] ++ lib.optionals (!floatlab-development) [ "floatlab-installer-root.service" ];
     wantedBy = lib.mkIf (!floatlab-development) (lib.mkForce []);
+    requires = lib.mkIf (!floatlab-development) [ "floatlab-installer-root.service" ];
+    serviceConfig.ExecStart = lib.mkIf (!floatlab-development) (lib.mkForce "${chroot}/floatlab-installer-hostd network init");
     serviceConfig.ExecCondition = lib.mkIf (!floatlab-development) gate;
   };
   systemd.services."floatlab-installer-console@" = {
@@ -63,7 +66,7 @@ in {
     after = [ "systemd-udev-settle.service" "getty@%i.service" "serial-getty@%i.service" ];
     path = with pkgs; [ coreutils util-linux dosfstools gnutar gzip nix floatlab-zbm-kcl zfs systemd inetutils iproute2 ];
     serviceConfig = {
-      ExecStart = "${floatlab-binaries}/bin/install-tui";
+      ExecStart = "${floatlab-installer-binaries}/bin/install-tui";
       StandardInput = "tty-force";
       StandardOutput = "tty";
       StandardError = "tty";

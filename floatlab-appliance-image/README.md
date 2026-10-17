@@ -65,40 +65,75 @@ The ISO is produced under:
 result/iso/floatlab-installer-{version}.iso
 ```
 
-`version` is the Git tag pointing at HEAD, or the short Git commit hash when HEAD
-is untagged. Tags must be present locally (fetch tags first in shallow CI checkouts).
+`version` is the `iso-v` tag pointing at HEAD, or the short Git commit hash when HEAD
+has no ISO tag. Tags must be present locally (fetch tags first in shallow CI checkouts).
 Uncommitted changes retain HEAD's version. Set `FLOATLAB_INSTALLER_VERSION` to
 override the version explicitly; the release workflow uses the triggering tag.
 
-Direct Nix builds use the short commit hash; use the helper above for tag naming:
-
-```bash
-nix build .#iso --print-build-logs
-```
+The helper builds a local host payload and management image and bundles sidecars.
+It requires Python 3.11+, Docker (with a running daemon), and registry access while
+building; installation and subsequent boots require no registry access.
+Set `FLOATLAB_ISO_BUNDLE` to a prepared release bundle to consume published
+artifacts instead. Direct `nix build .#iso --impure` requires that variable.
 
 ## Tagged releases
 
-Branch and pull-request CI runs lint, typechecks, contract checks and tests.
-Production builds run only when a version tag is pushed, such as `v1.0.0`,
-`v0.1.0-alpha.0` or `v0.1.0-rc`. The release workflow runs the same CI checks
-before building the UI, Storybook, CLI binaries and production ISO. It checks
-the installer's boot configuration and publishes the four Linux/macOS CLI
-binaries, `floatlab-installer-{tag}.iso` and `SHA256SUMS` to a GitHub release.
-Tags with a prerelease suffix create a GitHub prerelease.
+The repository publishes three independent release streams after shared CI:
 
-The first planned test tag is `v0.1.0-alpha.0`. Once the release changes are
-committed to the release commit, create and push that tag:
+| Tag | Artifacts |
+| --- | --- |
+| `host-v0.1.0` | Host OS archive containing hostd, ZFSBootMenu, host manifest and checksums |
+| `manage-v0.1.0` | Backend/UI image on GHCR and Docker Hub, four CLI binaries, management manifest and checksums |
+| `iso-v0.1.0` | Offline ISO, installation manifest and checksums |
+
+Prerelease suffixes such as `manage-v0.1.0-rc.1` are supported. Plain `v` tags
+no longer trigger publication. Component numbers advance independently.
+Internal service and executable names remain `floatlab-control`.
+
+Configure GitHub secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`, and repository
+variable `DOCKERHUB_NAMESPACE`. The token must permit pushing to that namespace.
+GHCR uses `GITHUB_TOKEN` with package-write permission. Management builds once,
+pushes versioned tags to both registries and verifies matching image IDs before
+creating its GitHub release. Metadata records each registry's own digest.
+There is no mutable `latest` tag. A failed push can leave one registry populated;
+retry the failed release workflow before consuming its artifacts.
+
+Maintain `CHANGELOG-host.md` and `CHANGELOG-manage.md` at the repository root.
+A host/manage tag requires a matching `## X.Y.Z` entry; its body becomes the
+GitHub release notes. CLI versions follow management releases.
+
+Publish host and management first. Then, from the repository root, populate the
+ISO lock using GitHub CLI authentication, Go, Python 3.11+ and Docker Buildx:
 
 ```bash
-git tag v0.1.0-alpha.0
-git push origin v0.1.0-alpha.0
+python3 scripts/release.py lock --host host-v0.1.0 --manage manage-v0.1.0
 ```
 
-Checks and builds run on GitHub-hosted Ubuntu runners, with Nix installed by
-the release workflow. The first ISO build can take
-longer while dependencies are downloaded and compiled. These checks do not run
-the opt-in appliance installation VM suites. ZFS stream releases are deferred
-until the ISO release path is validated.
+Commit `releases/iso.lock.json` before creating an `iso-v` tag. The initial lock
+is deliberately unconfigured: release assets and their real hashes do not exist
+until the first host/manage releases. The command pins their manifests and
+sidecar digests. Already pinned sidecars stay pinned; replace a sidecar entry
+with a new version tag and rerun the command when upgrading it.
+
+The ISO workflow downloads the locked artifacts, verifies their hashes and
+compatibility, saves all four container images, and builds only the installer
+and live environment. It selects the host's pinned Nixpkgs revision and rejects
+a live kernel that differs from the released host kernel. Host and management
+are never rebuilt by the ISO release job. The installer persists verified image
+archives and ID-derived local image tags, then loads them without pulling.
+The OS dataset uses the host version; ISO and management versions are separate
+fields in the installation manifest.
+
+Management's host range lives in `pkg/release/compatibility.json`: minimum is
+inclusive, maximum exclusive. Hostd's Unix-socket `sys.version` command reports
+`host_version` and `git_commit` from its running binary. Management checks each
+registered host at startup and every 30 seconds. Incompatible, unavailable or
+unrecognised versions raise one advisory alert per node and resolve on recovery.
+Management, migrations, host operations and readiness continue normally. ISO
+publication rejects incompatible host/manage combinations. Host `0.1.0` initially
+supports management requiring `>=0.1.0 <0.2.0`.
+
+Existing-installation updates and rollback tooling are not part of these releases.
 
 ## Console installation
 
@@ -149,8 +184,8 @@ transfer speed. Back/Next actions sit two blank lines below the content, and
 unavailable Back actions are hidden. Keyboard help sits one row above the bottom. Copying
 accounts for most progress; other operations indicate activity and milestones.
 
-Installation requires x86-64 UEFI with Secure Boot disabled and Internet access for
-initial container downloads. Installed boots use cached container images. On an
+Installation requires x86-64 UEFI with Secure Boot disabled. Container images
+are bundled in the ISO; installation and installed boots work without Internet access. On an
 unexpected frontend disconnect, the service finishes the active operation, cleans
 up, and stops before starting the next installation stage. Inspect partial disks
 before reinstalling; destructive work is never replayed automatically.
@@ -192,7 +227,8 @@ and removes the credential file. TOTP login requires `totp_code` or a single-use
 Existing installations bypass the wizard and retain their persistent Compose file.
 
 Run the real UEFI console and disk-only boot tests (including each mirror member
-alone) outside the Nix build sandbox, where container downloads are available:
+alone) outside the Nix build sandbox. The guest network blocks Internet access
+during installation and disk-only boots:
 
 ```console
 nix run .#installer-test -- --iso /absolute/path/to/floatlab.iso

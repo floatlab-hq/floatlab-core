@@ -28,6 +28,17 @@ func NewPool(log *zap.Logger) *Pool {
 	}
 }
 
+// NodeIDs returns the hosts currently registered with this control process.
+func (p *Pool) NodeIDs() []string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	ids := make([]string, 0, len(p.sockets))
+	for id := range p.sockets {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 // Register adds or replaces the socket path for a node.
 // The connection is established lazily on first use.
 func (p *Pool) Register(nodeID, socketPath string) {
@@ -48,9 +59,9 @@ func (p *Pool) Execute(ctx context.Context, nodeID, command string, payload any)
 	}
 	result, err := c.Execute(ctx, command, payload)
 	if err != nil {
-		// A remote validation/conflict error does not break the IPC transport.
+		// Remote errors and abandoned requests do not break the shared transport.
 		var remote *ipc.RPCError
-		if errors.As(err, &remote) {
+		if errors.As(err, &remote) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, fmt.Errorf("hostclient: execute %s on %s: %w", command, nodeID, err)
 		}
 		// Drop failed transports; next call will reconnect.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the real TUI installer and boot every installed mirror member.
 
-Runs outside the Nix build sandbox: full-stack verification requires image pulls.
+Runs outside the Nix build sandbox with guest internet access blocked.
 Only creates and modifies disposable qcow2 files inside its temporary directory.
 """
 import argparse
@@ -88,7 +88,10 @@ def wait_stack(base, name, expected_id=None, child=None, secret=None):
             assert node["hostname"] == name, node
             if expected_id:
                 assert node["id"] == expected_id, node
-            assert api(base, "/nodes/" + node["id"] + "/health", token=token)["status"] == "reachable"
+            host_health = api(base, "/nodes/" + node["id"] + "/health", token=token)
+            assert host_health["status"] == "reachable"
+            assert host_health["compatibility"]["host_version"]
+            assert host_health["compatibility"]["status"] in ["compatible", "incompatible"]
             return node["id"], step
         except (OSError, urllib.error.URLError, KeyError, StopIteration):
             time.sleep(1)
@@ -204,7 +207,7 @@ def run_case(args, count):
                    "-drive", "if=pflash,format=raw,readonly=on,file=" + code,
                    "-drive", "if=pflash,format=raw,file=" + str(nvram),
                    "-display", "none", "-serial", "stdio", "-no-reboot",
-                   "-netdev", f"user,id=lan,hostfwd=tcp:127.0.0.1:{host_port}-{ '10.0.2.20' if args.static else ''}:8080",
+                   "-netdev", f"user,id=lan,restrict=on,hostfwd=tcp:127.0.0.1:{host_port}-{ '10.0.2.20' if args.static else ''}:8080",
                    "-device", "virtio-net-pci,netdev=lan",
                    "-device", "virtio-serial",
                    "-chardev", f"socket,path={guest_socket},server=on,wait=off,id=agent",

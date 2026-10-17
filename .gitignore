@@ -3,6 +3,9 @@
 .DS_Store
 node_modules/
 /dist/
+/release-dist/
 **/.bun/
 /.local/installer/
 /.local/go-build/
+
+__pycache__/

@@ -26,6 +26,7 @@
             curl
             docker-client
             go
+            python3
             libvirt
             openssh
             qemu

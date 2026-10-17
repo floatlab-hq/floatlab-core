@@ -6,7 +6,7 @@ to orchestrate your workloads.
 
 ## CLI
 
-Download the matching `floatlab` release binary, mark it executable, and put it on your `PATH`:
+Download the matching `floatlab` binary from a `manage-vX.Y.Z` release, mark it executable, and put it on your `PATH`:
 
 ```bash
 chmod +x floatlab-linux-x64

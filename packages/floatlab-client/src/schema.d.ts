@@ -1742,7 +1742,22 @@ export interface components {
             role?: components["schemas"]["NodeRole"];
             zfs_pool?: string;
         };
+        HostVersionRange: {
+            /** @description Inclusive minimum host version. */
+            min_host_version: string;
+            /** @description Exclusive maximum host version. */
+            max_host_version: string;
+        };
+        HostCompatibility: {
+            /** @enum {string} */
+            status: "compatible" | "incompatible" | "unknown";
+            host_version?: string;
+            git_commit?: string;
+            required: components["schemas"]["HostVersionRange"];
+            error?: string;
+        };
         NodeHealth: {
+            compatibility?: components["schemas"]["HostCompatibility"];
             /** @enum {string} */
             status: "reachable" | "unreachable" | "timeout";
             /** @description Round-trip IPC ping latency in milliseconds. */
@@ -1759,6 +1774,8 @@ export interface components {
             status: "ok" | "degraded" | "unavailable";
             /** @example 0.1.0 */
             version: string;
+            git_commit?: string;
+            required_host?: components["schemas"]["HostVersionRange"];
             /** Format: int64 */
             uptime_seconds: number;
         };

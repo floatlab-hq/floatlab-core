@@ -201,6 +201,7 @@ func run(cmd *cobra.Command, args []string) error {
 	}()
 	// Notification broker — fan-out SSE publisher.
 	broker := notify.NewBroker()
+	go control.RunHostCompatibility(ctx, hosts, db, broker, log)
 
 	// Notification retention: purge read notifications older than 30 days, daily.
 	go func() {

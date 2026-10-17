@@ -18,9 +18,40 @@ components:
         version:
           type: string
           example: "0.1.0"
+        git_commit:
+          type: string
+        required_host:
+          $ref: '#/components/schemas/HostVersionRange'
         uptime_seconds:
           type: integer
           format: int64
+
+    HostVersionRange:
+      type: object
+      required: [min_host_version, max_host_version]
+      properties:
+        min_host_version:
+          type: string
+          description: Inclusive minimum host version.
+        max_host_version:
+          type: string
+          description: Exclusive maximum host version.
+
+    HostCompatibility:
+      type: object
+      required: [status, required]
+      properties:
+        status:
+          type: string
+          enum: [compatible, incompatible, unknown]
+        host_version:
+          type: string
+        git_commit:
+          type: string
+        required:
+          $ref: '#/components/schemas/HostVersionRange'
+        error:
+          type: string
 
     ReadinessStatus:
       type: object

@@ -1,0 +1,35 @@
+name: Release host
+on:
+  workflow_call:
+    inputs:
+      prerelease:
+        type: boolean
+        required: true
+permissions:
+  contents: write
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@v31
+      - name: Build host payload
+        env:
+          FLOATLAB_HOST_VERSION: ${{ github.ref_name }}
+        run: |
+          export FLOATLAB_HOST_VERSION="${FLOATLAB_HOST_VERSION#host-v}"
+          python3 scripts/release.py notes "$GITHUB_REF_NAME" > /tmp/release-notes.md
+          nix build ./floatlab-appliance-image#host-image --impure --out-link /tmp/floatlab-host --print-build-logs
+          nix build ./floatlab-appliance-image#checks.x86_64-linux.os-live ./floatlab-appliance-image#checks.x86_64-linux.zfsbootmenu-efi --no-link --print-build-logs
+          mkdir -p release-dist
+          cp /tmp/floatlab-host/{floatlab-root.tar.gz,zfsbootmenu.EFI,host-manifest.json} release-dist/
+          cd release-dist
+          sha256sum floatlab-root.tar.gz zfsbootmenu.EFI host-manifest.json > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-dist/*
+          body_path: /tmp/release-notes.md
+          fail_on_unmatched_files: true
+          prerelease: ${{ inputs.prerelease }}

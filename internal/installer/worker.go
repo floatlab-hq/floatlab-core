@@ -268,7 +268,7 @@ func installWorker(stopCtx context.Context, runtimeDir, persistentDir, mediaDir 
 			status.Progress = 0.1
 		case "Persist and apply host configuration":
 			status.Progress = 0.92
-		case "Fetch images and verify FloatLab services":
+		case "Load offline images and verify FloatLab services":
 			status.Progress = 0.96
 		}
 		publish()
@@ -406,6 +406,9 @@ func installWorker(stopCtx context.Context, runtimeDir, persistentDir, mediaDir 
 			if e := installOS(stopCtx, runtimeDir, mediaDir, payload, op.Identity, b, progress); e != nil {
 				return e
 			}
+			if e := installContainerBundle(mediaDir, filepath.Dir(persistentDir), payload); e != nil {
+				return e
+			}
 			// A completed snapshot needs no OS transfer on retry.
 			status.Total = status.Copied + bootloader.Size()*int64(len(op.Disks))
 			for i, d := range op.Disks {
@@ -519,7 +522,7 @@ func installWorker(stopCtx context.Context, runtimeDir, persistentDir, mediaDir 
 	}); err != nil {
 		return err
 	}
-	if err = phase("Fetch images and verify FloatLab services", func() error {
+	if err = phase("Load offline images and verify FloatLab services", func() error {
 		if e := runStep("systemctl", "restart", "floatlab-core-stack.service"); e != nil {
 			return e
 		}

@@ -34,7 +34,7 @@ func NewClient(socketPath string) *Client {
 func (c *Client) Connect(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	nc, err := net.Dial("unix", c.socketPath)
+	nc, err := (&net.Dialer{}).DialContext(ctx, "unix", c.socketPath)
 	if err != nil {
 		return fmt.Errorf("ipc client: dial %s: %w", c.socketPath, err)
 	}

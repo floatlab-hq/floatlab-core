@@ -107,6 +107,8 @@ components:
       type: object
       required: [status, latency_ms]
       properties:
+        compatibility:
+          $ref: './health.yaml#/components/schemas/HostCompatibility'
         status:
           type: string
           enum: [reachable, unreachable, timeout]

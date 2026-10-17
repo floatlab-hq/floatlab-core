@@ -337,3 +337,9 @@ type SnapshotRollbackPayload struct {
 	Name         string `json:"name"`
 	DestroyNewer bool   `json:"destroy_newer"`
 }
+
+// VersionResult reports the running host daemon and its host OS release.
+type VersionResult struct {
+	HostVersion string `json:"host_version"`
+	GitCommit   string `json:"git_commit"`
+}
