@@ -1,8 +1,46 @@
 {
   "architecture": "amd64",
   "repository": "floatlab-hq/floatlab-core",
-  "host": null,
-  "manage": null,
+  "host": {
+    "tag": "host-v0.1.1",
+    "manifest": {
+      "version": "0.1.1",
+      "git_commit": "fe3096ff2a28a2a2c89a0efb57557a85b985e006",
+      "architecture": "amd64",
+      "init": "/nix/store/q7xrl5bmdmkww72aqf10n5yvf3miy2a9-nixos-system-unnamed-26.05.20260719.fd14620/init",
+      "kernel": "/nix/store/1fzwajz2v8bxwl86bb16db9gb8zxgjy5-linux-6.18.39",
+      "nixpkgs_rev": "fd1462031fdee08f65fd0b4c6b64e22239a77870",
+      "root_bytes": 1749507279,
+      "files": {
+        "floatlab-root.tar.gz": "64fdc64cdf2eafba1a72ef1f9f3b7ba37f59ee3c743c10af9568332ca1a243e8",
+        "zfsbootmenu.EFI": "131d55c7b385df8cd319d267b6aa15d97f8c32c94f5149bd906556715fadf4e7"
+      },
+      "bytes": 802582194
+    }
+  },
+  "manage": {
+    "tag": "manage-v0.1.1",
+    "manifest": {
+      "version": "0.1.1",
+      "git_commit": "fe3096ff2a28a2a2c89a0efb57557a85b985e006",
+      "architecture": "amd64",
+      "required_host": {
+        "min_host_version": "0.1.0",
+        "max_host_version": "0.2.0"
+      },
+      "image_id": "sha256:679373828de620d993d7de8b72537d5851104c70acec82e3c56991de6c802cec",
+      "registries": {
+        "ghcr": {
+          "reference": "ghcr.io/floatlab-hq/floatlab-manage:0.1.1",
+          "digest": "sha256:4f723ed7f09a381cde2546f62827fcba565673dda38001d9b34928be8928ce09"
+        },
+        "dockerhub": {
+          "reference": "docker.io/floatlabhq/floatlab-manage:0.1.1",
+          "digest": "sha256:4f723ed7f09a381cde2546f62827fcba565673dda38001d9b34928be8928ce09"
+        }
+      }
+    }
+  },
   "sidecars": {
     "rqlite": "rqlite/rqlite:8.26.0@sha256:b81e945809e1fcc92f3d72c07d7f8726252dfb5ed406db6faaf6879159193fe9",
     "victoria-metrics": "victoriametrics/victoria-metrics:v1.101.0@sha256:91d0456cc064e195869175074ced2a6849d72531613b320492698e5fe935d10a",
