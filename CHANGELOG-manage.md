@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.1
+
+- Publish the management backend, UI and CLI for the first offline installer release.
+
 ## 0.1.0
 
 - Establish independent manage releases and embedded version metadata.
