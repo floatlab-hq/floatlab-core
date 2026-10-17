@@ -29,9 +29,11 @@
       };
       floatlab-version = let version = builtins.getEnv "FLOATLAB_INSTALLER_VERSION";
         in if version != "" then version else pkgs.lib.removeSuffix "-dirty" (self.shortRev or self.dirtyShortRev or "unknown");
-      floatlab-binaries = pkgs.buildGoModule {
-        pname = "floatlab";
-        version = "0.1.0";
+      hostVersion = let v = builtins.getEnv "FLOATLAB_HOST_VERSION"; in if v == "" then "0.1.0-dev" else v;
+      buildBinaries = name: version: subPackages: pkgs.buildGoModule {
+        pname = name;
+        inherit version;
+        ldflags = [ "-s" "-w" "-X github.com/floatlab/floatlab-core/pkg/release.Version=${version}" "-X github.com/floatlab/floatlab-core/pkg/release.GitCommit=${self.rev or self.dirtyRev or "unknown"}" ];
         src = pkgs.lib.cleanSourceWith {
           src = ../.;
           filter = path: type:
@@ -41,56 +43,52 @@
             && builtins.baseNameOf path != ".local"
             && builtins.baseNameOf path != "node_modules";
         };
-        subPackages = [ "cmd/floatlab-hostd" "cmd/floatlab-control" "cmd/install-tui" "cmd/install-service" "cmd/install-service-mock" ];
+        inherit subPackages;
         vendorHash = "sha256-znUitkzi9j+N4oQrtwqqeaG6aPoODXWgfcIcS585JN0=";
       };
-      floatlab-control-image = pkgs.dockerTools.buildLayeredImage {
-        name = "floatlab-control";
-        tag = "local";
-        contents = [ floatlab-binaries pkgs.cacert pkgs.wget ];
-        extraCommands = "mkdir -m 1777 tmp";
-        config.Entrypoint = [ "/bin/floatlab-control" ];
-      };
+      floatlab-binaries = buildBinaries "floatlab-host" hostVersion [ "cmd/floatlab-hostd" ];
+      floatlab-manage-binaries = buildBinaries "floatlab-manage" "0.1.0-dev" [ "cmd/floatlab-control" ];
+      floatlab-installer-binaries = buildBinaries "floatlab-installer" floatlab-version [ "cmd/install-tui" "cmd/install-service" "cmd/install-service-mock" ];
+      installed = self.nixosConfigurations.floatlab-installed.config;
+      closure = pkgs.closureInfo { rootPaths = [ installed.system.build.toplevel ]; };
+      host-image = pkgs.runCommand "floatlab-host-${hostVersion}" { nativeBuildInputs = [ pkgs.gnutar pkgs.gzip pkgs.python3 ]; } ''
+        mkdir -p "$out" root/nix/store root/boot root/etc root/var root/run root/tmp
+        chmod 1777 root/tmp
+        while IFS= read -r path; do cp -a --parents "$path" root; done < ${closure}/store-paths
+        cp ${closure}/registration root/nix-path-registration
+        cp ${installed.boot.kernelPackages.kernel}/${installed.system.boot.loader.kernelFile} root/boot/vmlinuz
+        cp ${installed.system.build.initialRamdisk}/${installed.system.boot.loader.initrdFile} root/boot/initramfs
+        ln -s ${installed.system.build.toplevel} root/run/current-system
+        ln -s ${installed.system.build.toplevel}/init root/init
+        du -sb root | cut -f1 > "$out/root-bytes"
+        tar --sort=name --mtime=@1 --owner=0 --group=0 --numeric-owner -C root -cf - . | gzip -n > "$out/floatlab-root.tar.gz"
+        cp ${zfsbootmenu} "$out/zfsbootmenu.EFI"
+        python3 - <<'PYHOST' > "$out/host-manifest.json"
+        import hashlib, json, os
+        out = os.environ['out']
+        files = {n: hashlib.file_digest(open(out+'/'+n, 'rb'), 'sha256').hexdigest() for n in ['floatlab-root.tar.gz', 'zfsbootmenu.EFI']}
+        print(json.dumps({"version": "${hostVersion}", "git_commit": "${self.rev or self.dirtyRev or "unknown"}",
+          "architecture": "amd64", "init": "${installed.system.build.toplevel}/init",
+          "kernel": "${installed.boot.kernelPackages.kernel}", "nixpkgs_rev": "${nixpkgs.rev}",
+          "root_bytes": int(open(out+'/root-bytes').read()), "files": files,
+          "bytes": sum(os.stat(out+'/'+n).st_size for n in files)}))
+        PYHOST
+      '';
+      bundlePath = builtins.getEnv "FLOATLAB_ISO_BUNDLE";
+      bundle = if bundlePath == "" then throw "Set FLOATLAB_ISO_BUNDLE using scripts/build-iso.sh" else builtins.path { path = /. + bundlePath; name = "floatlab-iso-bundle"; };
+      bundleManifest = builtins.fromJSON (builtins.readFile (bundle + "/floatlab-manifest.json"));
       makeISO = configuration:
         let
           cfg = configuration.config;
-          installed = self.nixosConfigurations.floatlab-installed.config;
-          closure = pkgs.closureInfo { rootPaths = [ installed.system.build.toplevel ]; };
-          root = pkgs.runCommand "floatlab-installed-root" { nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ]; } ''
-            mkdir -p "$out" root/nix/store root/boot root/etc root/var root/run root/tmp
-            chmod 1777 root/tmp
-            while IFS= read -r path; do cp -a --parents "$path" root; done < ${closure}/store-paths
-            cp ${closure}/registration root/nix-path-registration
-            cp ${installed.boot.kernelPackages.kernel}/${installed.system.boot.loader.kernelFile} root/boot/vmlinuz
-            cp ${installed.system.build.initialRamdisk}/${installed.system.boot.loader.initrdFile} root/boot/initramfs
-            ln -s ${installed.system.build.toplevel} root/run/current-system
-            ln -s ${installed.system.build.toplevel}/init root/init
-            du -sb root | cut -f1 > "$out/root-bytes"
-            tar --sort=name --mtime=@1 --owner=0 --group=0 --numeric-owner -C root -cf - . | gzip -n > "$out/floatlab-root.tar.gz"
-          '';
           squashfs = pkgs.callPackage (nixpkgs + "/nixos/lib/make-squashfs.nix") {
             storeContents = cfg.isoImage.storeContents;
             comp = cfg.isoImage.squashfsCompression;
           };
-          manifest = pkgs.runCommand "floatlab-manifest.json" { nativeBuildInputs = [ pkgs.python3 ]; } ''
-            python3 - <<'PYMANIFEST' > "$out"
-            import hashlib, json, os
-            files = {
-                "floatlab-root.tar.gz": "${root}/floatlab-root.tar.gz",
-                "zfsbootmenu.EFI": "${zfsbootmenu}",
-            }
-            hashes = {}
-            for name, source in files.items():
-                with open(source, "rb") as stream:
-                    hashes[name] = hashlib.file_digest(stream, "sha256").hexdigest()
-            print(json.dumps({"version": "${floatlab-version}", "init": "${installed.system.build.toplevel}/init",
-                              "root_bytes": int(open("${root}/root-bytes").read()),
-                              "files": hashes, "bytes": sum(os.stat(p).st_size for p in files.values())}))
-            PYMANIFEST
-          '';
-        in cfg.system.build.isoImage.overrideAttrs (old: {
-          sources = old.sources ++ [ manifest "${root}/floatlab-root.tar.gz" zfsbootmenu ];
-          targets = old.targets ++ [ "/floatlab-manifest.json" "/floatlab-root.tar.gz" "/zfsbootmenu.EFI" ];
+        in assert bundleManifest.architecture == "amd64";
+           assert bundleManifest.kernel == toString cfg.boot.kernelPackages.kernel;
+           cfg.system.build.isoImage.overrideAttrs (old: {
+          sources = old.sources ++ [ (bundle + "/floatlab-manifest.json") ] ++ (map (name: bundle + "/${name}") (builtins.attrNames bundleManifest.files));
+          targets = old.targets ++ [ "/floatlab-manifest.json" ] ++ (map (name: "/${name}") (builtins.attrNames bundleManifest.files));
           squashfsCommand = "cp ${squashfs} \"$out\"";
         });
     in {
@@ -98,19 +96,19 @@
         inherit system;
         modules = [ ./nixos/iso.nix ];
         pkgs = pkgs;
-        specialArgs = { inherit floatlab-binaries floatlab-control-image floatlab-version; floatlab-development = false; floatlab-installer-command = null; };
+        specialArgs = { inherit floatlab-binaries floatlab-installer-binaries floatlab-version; floatlab-development = false; floatlab-installer-command = null; };
       };
 
       nixosConfigurations.floatlab-dev-iso = nixpkgs.lib.nixosSystem {
         inherit system;
         modules = [ ./nixos/iso.nix ];
         pkgs = pkgs;
-        specialArgs = { inherit floatlab-binaries floatlab-control-image floatlab-version; floatlab-development = true; floatlab-installer-command = null; };
+        specialArgs = { inherit floatlab-binaries floatlab-installer-binaries floatlab-version; floatlab-development = true; floatlab-dev-bundle = bundle; floatlab-installer-command = null; };
       };
       nixosConfigurations.floatlab-installed = nixpkgs.lib.nixosSystem {
         inherit system pkgs;
         modules = [ ./nixos/installed.nix ];
-        specialArgs = { inherit floatlab-binaries floatlab-control-image floatlab-version; floatlab-development = false; };
+        specialArgs = { inherit floatlab-binaries floatlab-installer-binaries floatlab-version; floatlab-development = false; };
       };
       nixosConfigurations.floatlab-installer-preview = nixpkgs.lib.nixosSystem {
         inherit system pkgs;
@@ -119,7 +117,7 @@
           virtualisation.qemu.package = (import nixpkgs { system = builtins.currentSystem; }).qemu;
         } ];
         specialArgs = {
-          inherit floatlab-binaries;
+          inherit floatlab-installer-binaries;
           floatlab-installer-command = "/run/installer-preview/install-tui --mock --service /run/installer-preview/install-service-mock";
         };
       };
@@ -135,7 +133,7 @@
             exec python3 ${./tests/installer-vm.py} "$@"
           '';
         };
-        inherit floatlab-binaries floatlab-control-image;
+        inherit floatlab-binaries floatlab-manage-binaries floatlab-installer-binaries host-image;
         default = self.packages.${system}.iso;
       };
 
@@ -208,10 +206,12 @@
            assert !cfg.system.installer.channel.enable;
            assert cfg.nix.enable;
            assert installed.virtualisation.docker.enable;
+           assert !installed.systemd.paths.floatlab-hostd-dev.unitConfig.DefaultDependencies;
            assert cfg.systemd.services.docker.serviceConfig.RootDirectory == "/run/floatlab-installer/root";
            assert cfg.systemd.services.docker.serviceConfig.PrivateMounts;
            assert !cfg.systemd.services.docker.serviceConfig.MountAPIVFS;
            assert cfg.systemd.services.floatlab-hostd.environment.SYSTEMD_OFFLINE == "0";
+           assert cfg.systemd.services.floatlab-network-config.environment.SYSTEMD_OFFLINE == "0";
            assert builtins.elem "floatlab-installer-root.service" cfg.systemd.services.floatlab-core-stack.requires;
            assert installed.fileSystems."/".fsType == "zfs";
            assert installed.fileSystems."/".device == "floatlab/os/live";
@@ -239,7 +239,7 @@
       };
 
       devShells.${system}.default = pkgs.mkShell {
-        packages = with pkgs; [ just qemu_kvm libvirt virt-manager coreutils jq ];
+        packages = with pkgs; [ just qemu_kvm libvirt virt-manager coreutils jq python3 docker-client go gh ];
       };
     };
 }

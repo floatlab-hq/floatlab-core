@@ -1,20 +1,25 @@
-{ floatlab-control-image, pkgs, floatlab-development ? false, ... }:
+{ pkgs, floatlab-development ? false, floatlab-dev-bundle ? null, ... }:
 let
-  compose = if floatlab-development then pkgs.writeText "floatlab-dev-compose.yml" (
+  devCompose = if floatlab-dev-bundle == null then null else pkgs.writeText "floatlab-dev-compose.yml" (
     builtins.replaceStrings
       [ "      FLOATLAB_APPLIANCE_CONFIG: /floatlab/system/etc/appliance.json\n      FLOATLAB_CREDENTIAL_KEY_FILE: /floatlab/system/etc/credential.key\n      FLOATLAB_BOOTSTRAP_FILE: /floatlab/system/etc/bootstrap.json" ]
       [ "      FLOATLAB_BOOTSTRAP_USER: demo\n      FLOATLAB_BOOTSTRAP_PASSWORD: floatlab\n      FLOATLAB_JWT_SECRET: floatlab-dev" ]
-      (builtins.readFile ../../files/core-stack/docker-compose.yml)
-  ) else ../../files/core-stack/docker-compose.yml;
+      (builtins.readFile (floatlab-dev-bundle + "/docker-compose.yml"))
+  );
   seedCompose = pkgs.writeShellApplication {
     name = "floatlab-seed-core-stack";
     runtimeInputs = [ pkgs.coreutils ];
     text = ''
-      set -euo pipefail
-      target=/floatlab/system/docker-compose.yml
-      if [ ! -e "$target" ]; then
-        install -m 0644 ${compose} "$target"
-      fi
+      ${pkgs.lib.optionalString (floatlab-development && floatlab-dev-bundle != null) ''
+        if [ ! -e /floatlab/system/docker-compose.yml ]; then
+          install -d /floatlab/system/images
+          cp ${floatlab-dev-bundle}/images/*.tar /floatlab/system/images/
+          cp ${floatlab-dev-bundle}/images.json /floatlab/system/images.json
+          cp ${devCompose} /floatlab/system/docker-compose.yml
+        fi
+      ''}
+      test -s /floatlab/system/docker-compose.yml
+      test -s /floatlab/system/images.json
     '';
   };
 
@@ -30,16 +35,18 @@ let
       done
       [ -S /run/floatlab/hostd.sock ]
 
-      docker load --input ${floatlab-control-image} >/dev/null
+      while IFS=$'\t' read -r archive image expected; do
+        if [ "$(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null || true)" != "$expected" ]; then
+          docker load --input "/floatlab/system/images/$archive"
+        fi
+        test "$(docker image inspect --format '{{.Id}}' "$image")" = "$expected"
+      done < <(jq -er '.[] | [.archive,.image,.id] | @tsv' /floatlab/system/images.json)
       cd /floatlab/system
       composeArgs=(-f docker-compose.yml)
       if [ -f /floatlab/system/etc/development ]; then
         composeArgs+=(-f ${../../files/core-stack/docker-compose.dev.yml})
       fi
-      if [ -e /run/floatlab-installer/finalizing ] && [ ! -e /floatlab/system/etc/installed ]; then
-        docker compose "''${composeArgs[@]}" pull rqlite victoria-metrics victoria-logs
-      fi
-      docker compose "''${composeArgs[@]}" up -d --remove-orphans
+      docker compose "''${composeArgs[@]}" up -d --pull never --remove-orphans
       # Do not report success merely because the management process is listening.
       for service in rqlite victoria-metrics victoria-logs floatlab-control; do
         ready=false

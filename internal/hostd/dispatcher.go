@@ -17,6 +17,7 @@ import (
 	"github.com/floatlab/floatlab-core/internal/hostnetwork"
 	"github.com/floatlab/floatlab-core/pkg/docker"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
+	"github.com/floatlab/floatlab-core/pkg/release"
 	"github.com/floatlab/floatlab-core/pkg/store"
 	"go.uber.org/zap"
 )
@@ -72,6 +73,9 @@ func (d *Dispatcher) register() {
 	d.srv.Handle("net.veth.ensure", d.vethEnsure)
 	d.srv.Handle("net.veth.delete", d.vethDelete)
 	d.srv.Handle("sys.info", d.sysInfo)
+	d.srv.Handle("sys.version", func(context.Context, json.RawMessage) (any, error) {
+		return ipc.VersionResult{HostVersion: release.Version, GitCommit: release.GitCommit}, nil
+	})
 	d.srv.Handle("sys.docker.events", d.dockerEvents)
 	d.srv.Handle("docker.list", d.dockerList)
 	d.srv.Handle("docker.start", d.dockerStart)

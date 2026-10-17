@@ -2,74 +2,45 @@ name: Release
 
 on:
   push:
-    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+    tags: ["host-v*", "manage-v*", "iso-v*"]
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   version:
     runs-on: ubuntu-latest
+    outputs:
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
-      - name: Validate version tag
-        run: bash scripts/check-release-tag.sh "$GITHUB_REF_NAME"
-
+      - id: version
+        name: Validate release tag
+        run: |
+          bash scripts/check-release-tag.sh "$GITHUB_REF_NAME"
+          version="${GITHUB_REF_NAME#*-v}"
+          if [[ "$version" == *-* ]]; then value=true; else value=false; fi
+          echo "prerelease=$value" >> "$GITHUB_OUTPUT"
   checks:
     needs: version
     uses: ./.github/workflows/ci.yml
-
-  build:
-    needs: checks
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - uses: oven-sh/setup-bun@v2
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.18.0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Build UI and Storybook
-        run: pnpm --dir ui build && pnpm --dir ui storybook:build
-      - name: Build Go services
-        run: go build -v ./cmd/floatlab-control/... && go build -v ./cmd/floatlab-hostd/...
-      - name: Build CLI release targets
-        run: |
-          mkdir -p dist
-          VERSION="${GITHUB_REF_NAME}"
-          bun build --compile --define "__FLOATLAB_VERSION__=\"$VERSION\"" --target=bun-linux-x64-baseline cli/src/main.ts --outfile dist/floatlab-linux-x64
-          bun build --compile --define "__FLOATLAB_VERSION__=\"$VERSION\"" --target=bun-linux-arm64 cli/src/main.ts --outfile dist/floatlab-linux-arm64
-          bun build --compile --define "__FLOATLAB_VERSION__=\"$VERSION\"" --target=bun-darwin-x64-baseline cli/src/main.ts --outfile dist/floatlab-darwin-x64
-          bun build --compile --define "__FLOATLAB_VERSION__=\"$VERSION\"" --target=bun-darwin-arm64 cli/src/main.ts --outfile dist/floatlab-darwin-arm64
-          test "$(dist/floatlab-linux-x64 --version)" = "$VERSION"
-      - uses: cachix/install-nix-action@v31
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build production ISO
-        env:
-          FLOATLAB_INSTALLER_VERSION: ${{ github.ref_name }}
-        run: |
-          nix build ./floatlab-appliance-image#checks.x86_64-linux.installer-boot-config --impure --no-link --print-build-logs
-          nix build ./floatlab-appliance-image#checks.x86_64-linux.os-live --no-link --print-build-logs
-          nix build ./floatlab-appliance-image#checks.x86_64-linux.zfsbootmenu-efi --no-link --print-build-logs
-          bash floatlab-appliance-image/scripts/build-iso.sh
-          cp "floatlab-appliance-image/result/iso/floatlab-installer-${GITHUB_REF_NAME}.iso" dist/
-      - name: Checksum release artifacts
-        run: |
-          cd dist
-          sha256sum floatlab-* > SHA256SUMS
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*
-          fail_on_unmatched_files: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+  host:
+    needs: [version, checks]
+    if: startsWith(github.ref_name, 'host-v')
+    uses: ./.github/workflows/release-host.yml
+    with:
+      prerelease: ${{ needs.version.outputs.prerelease == 'true' }}
+  manage:
+    needs: [version, checks]
+    if: startsWith(github.ref_name, 'manage-v')
+    uses: ./.github/workflows/release-manage.yml
+    secrets: inherit
+    with:
+      prerelease: ${{ needs.version.outputs.prerelease == 'true' }}
+  iso:
+    needs: [version, checks]
+    if: startsWith(github.ref_name, 'iso-v')
+    uses: ./.github/workflows/release-iso.yml
+    with:
+      prerelease: ${{ needs.version.outputs.prerelease == 'true' }}

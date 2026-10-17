@@ -147,11 +147,13 @@ func Inventory(ctx context.Context) ([]Disk, error) {
 }
 
 type Payload struct {
-	Version   string            `json:"version"`
-	Init      string            `json:"init"`
-	RootBytes int64             `json:"root_bytes"`
-	Files     map[string]string `json:"files"`
-	Bytes     int64             `json:"bytes"`
+	Version       string            `json:"version"`
+	ISOVersion    string            `json:"iso_version,omitempty"`
+	ManageVersion string            `json:"manage_version,omitempty"`
+	Init          string            `json:"init"`
+	RootBytes     int64             `json:"root_bytes"`
+	Files         map[string]string `json:"files"`
+	Bytes         int64             `json:"bytes"`
 }
 
 func (p Payload) Validate() error {
@@ -166,7 +168,11 @@ func (p Payload) Validate() error {
 			return err
 		}
 	}
-	for _, name := range []string{"floatlab-root.tar.gz", "zfsbootmenu.EFI"} {
+	required := []string{"floatlab-root.tar.gz", "zfsbootmenu.EFI"}
+	if p.ManageVersion != "" {
+		required = append(required, "docker-compose.yml", "images.json", "images/floatlab-control.tar", "images/rqlite.tar", "images/victoria-metrics.tar", "images/victoria-logs.tar")
+	}
+	for _, name := range required {
 		if _, ok := p.Files[name]; !ok {
 			return fmt.Errorf("manifest missing %s", name)
 		}

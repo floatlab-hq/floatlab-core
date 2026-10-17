@@ -1,7 +1,7 @@
-{ pkgs, floatlab-binaries, floatlab-installer-command, ... }:
+{ pkgs, floatlab-installer-binaries, floatlab-installer-command, ... }:
 let
   command = if floatlab-installer-command == null
-    then "${floatlab-binaries}/bin/install-tui"
+    then "${floatlab-installer-binaries}/bin/install-tui"
     else floatlab-installer-command;
   plex = pkgs.ibm-plex.override { families = [ "mono" ]; };
   braille = pkgs.runCommand "floatlab-braille-font" { } ''

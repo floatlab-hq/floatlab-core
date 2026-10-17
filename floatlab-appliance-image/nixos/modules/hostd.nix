@@ -3,7 +3,7 @@
   environment.systemPackages = [ (pkgs.writeShellApplication {
     name = "floatlab-installer-hostd";
     runtimeInputs = config.systemd.services.floatlab-hostd.path;
-    text = ''exec ${floatlab-binaries}/bin/floatlab-hostd'';
+    text = ''exec ${floatlab-binaries}/bin/floatlab-hostd "$@"'';
   }) ];
   systemd.services.floatlab-hostd = {
     description = "FloatLab host daemon";
@@ -29,6 +29,10 @@
   };
   systemd.paths.floatlab-hostd-dev = {
     description = "Watch for a successfully deployed development host daemon";
+    # Dataset setup runs after basic.target; the default paths.target ordering cycles.
+    unitConfig.DefaultDependencies = false;
+    conflicts = [ "shutdown.target" ];
+    before = [ "shutdown.target" ];
     wantedBy = [ "multi-user.target" ];
     requires = [ "floatlab-datasets.service" ];
     after = [ "floatlab-datasets.service" ];
