@@ -74,6 +74,7 @@ onBeforeUnmount(() => { active = false; clearInterval(timer); document.removeEve
   <main id="dashboard" class="live-dashboard">
     <header>
       <UiAssetIcon src="/assets/dashboard/imgFloatLabLogo.svg" :size="34" /><h1>FloatLab</h1>
+      <p v-if="raft?.dev_mode" role="status">Development mode</p>
       <UiButton variant="surface" @click="commandConsole?.show()">Command Palette</UiButton>
       <UiButton variant="surface" :disabled="loading" @click="refresh">Refresh</UiButton>
       <UiButton variant="surface" @click="emit('logout')">Sign out</UiButton>

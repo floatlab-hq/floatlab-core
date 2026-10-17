@@ -42,6 +42,7 @@ type Server struct {
 }
 
 type Config struct {
+	DevMode       bool
 	ListenAddr    string
 	UIDir         string
 	RaftConfig    floatraft.Config

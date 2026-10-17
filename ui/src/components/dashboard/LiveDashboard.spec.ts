@@ -6,6 +6,14 @@ import { fixtureApi } from '../../dashboard/live-fixtures'
 enableAutoUnmount(afterEach)
 afterEach(() => vi.useRealTimers())
 describe('Live dashboard', () => {
+  it.each([false, true])('shows the development indicator only in dev mode (%s)', async devMode => {
+    const api = fixtureApi()
+    const health = await api.getRaftHealth()
+    api.getRaftHealth = vi.fn().mockResolvedValue({ ...health, dev_mode: devMode })
+    const wrapper = mount(LiveDashboard, { props: { api } })
+    await flushPromises()
+    expect(wrapper.text().includes('Development mode')).toBe(devMode)
+  })
   it('loads the API and opens host detail with recent logs', async () => {
     const wrapper = mount(LiveDashboard, { props: { api: fixtureApi() } })
     await flushPromises()

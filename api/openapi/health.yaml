@@ -9,6 +9,9 @@ components:
       type: object
       required: [status, version, uptime_seconds]
       properties:
+        dev_mode:
+          type: boolean
+          description: This appliance is running the development control plane.
         status:
           type: string
           enum: [ok, degraded, unavailable]
@@ -45,6 +48,9 @@ components:
       type: object
       required: [leader, state, peers, commit_index, last_log_index]
       properties:
+        dev_mode:
+          type: boolean
+          description: This appliance is running the development control plane.
         leader:
           type: string
           description: Raft address of the current leader.

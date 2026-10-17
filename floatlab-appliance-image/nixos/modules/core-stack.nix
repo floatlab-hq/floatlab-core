@@ -32,15 +32,19 @@ let
 
       docker load --input ${floatlab-control-image} >/dev/null
       cd /floatlab/system
-      if [ -e /run/floatlab-installer/finalizing ] && [ ! -e /floatlab/system/etc/installed ]; then
-        docker compose -f docker-compose.yml pull rqlite victoria-metrics victoria-logs
+      composeArgs=(-f docker-compose.yml)
+      if [ -f /floatlab/system/etc/development ]; then
+        composeArgs+=(-f ${../../files/core-stack/docker-compose.dev.yml})
       fi
-      docker compose -f docker-compose.yml up -d --remove-orphans
+      if [ -e /run/floatlab-installer/finalizing ] && [ ! -e /floatlab/system/etc/installed ]; then
+        docker compose "''${composeArgs[@]}" pull rqlite victoria-metrics victoria-logs
+      fi
+      docker compose "''${composeArgs[@]}" up -d --remove-orphans
       # Do not report success merely because the management process is listening.
       for service in rqlite victoria-metrics victoria-logs floatlab-control; do
         ready=false
         for _ in $(seq 1 180); do
-          id=$(docker compose -f docker-compose.yml ps -q "$service")
+          id=$(docker compose "''${composeArgs[@]}" ps -q "$service")
           status=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$id" 2>/dev/null || true)
           if [ "$status" = healthy ] || [ "$status" = running ]; then ready=true; break; fi
           sleep 1
@@ -59,7 +63,11 @@ let
     '';
   };
 in {
-  environment.systemPackages = [ startStack ];
+  environment.systemPackages = [ startStack (pkgs.writeShellApplication {
+    name = "floatlab-mode";
+    runtimeInputs = [ pkgs.coreutils pkgs.util-linux pkgs.docker pkgs.systemd startStack ];
+    text = builtins.readFile ../../../scripts/floatlab-mode.sh;
+  }) ];
   systemd.services.floatlab-core-stack-seed = {
     description = "Seed the FloatLab core Compose project when absent";
     requires = [ "floatlab-datasets.service" ];
@@ -78,7 +86,6 @@ in {
     requires = [
       "docker.service"
       "floatlab-core-stack-seed.service"
-      "floatlab-hostd.service"
       "floatlab-network-config.service"
     ];
     after = [
@@ -88,7 +95,8 @@ in {
       "floatlab-network-config.service"
       "network-online.target"
     ];
-    wants = [ "network-online.target" ];
+    # Explicit hostd restarts must not tear down the management containers.
+    wants = [ "network-online.target" "floatlab-hostd.service" ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
