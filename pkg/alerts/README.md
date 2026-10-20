@@ -38,7 +38,8 @@ intended datasets.
   returned series matches, even when its value is zero. Do not use `bool`
   comparisons, which also return non-matching resources with a zero value.
 - All three queries must return identical, stable resource labels. Aggregate away
-  container IDs and other transient labels. The example retains the dataset metric's labels; derived queries must aggregate
+  container IDs and other transient labels. The example retains the dataset
+  metric's labels; derived queries must aggregate
   all three expressions to the same resource labels.
 - `freshness_query` returns Unix timestamps from the required source observations,
   using the oldest timestamp where multiple sources are needed. The timestamp of
@@ -92,3 +93,19 @@ be changed without replacing its active incident.
 
 See [the rule catalogue](../../internal/control/ALERT_RULES.md) for the broader
 requirements and proposed defaults.
+
+## Appliance integration test
+
+Against a dedicated test appliance reachable through the local QEMU guest agent:
+
+```sh
+FLOATLAB_VM_INTEGRATION=1 API_URL=http://VM_IP:8080 VM_NAME=TEST_VM \
+  LIBVIRT_URI=qemu:///system go test -count=1 -timeout 15m \
+  -run '^TestAlertEvaluator$' -v ./integration
+```
+
+For an SSH-accessible test VM, set `VM_SSH=user@VM_IP` instead of `VM_NAME`.
+The test pushes scoped samples to real VictoriaMetrics, restarts management and
+checks independent incidents, deduplication, unknown/stale data, recovery,
+recurrence and rule disablement. It cleans up its own rule and records. The full
+`scripts/test-workloads.sh` workflow includes this scenario too.

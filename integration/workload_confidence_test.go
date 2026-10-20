@@ -50,6 +50,7 @@ func TestWorkloadConfidence(t *testing.T) {
 		{"container-management", TestContainerManagementAPI},
 		{"cli-caddy", TestCLICaddy},
 		{"documented-management", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertManagementContracts() }},
+		{"alert-evaluator", TestAlertEvaluator},
 		{"persistence-recovery-rollback", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertRecoveryWorkload() }},
 	} {
 		if !coverage.scenarioTest(t, scenario.name, func(child *testing.T) {
