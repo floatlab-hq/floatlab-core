@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 
+	"github.com/floatlab/floatlab-core/pkg/alerts"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
 )
 
@@ -64,6 +65,17 @@ func Migrate(ctx context.Context, db *rqlite.Client) error {
 		if err := rqlite.AddColumns(ctx, db, table, columns); err != nil {
 			return err
 		}
+	}
+	if err := rqlite.AddColumns(ctx, db, "alert_rules", []string{
+		"recovery_condition TEXT NOT NULL DEFAULT ''",
+		"recovery_duration TEXT NOT NULL DEFAULT '1m'",
+		"max_sample_age TEXT NOT NULL DEFAULT '2m'",
+		"freshness_query TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	if err := alerts.Migrate(ctx, db); err != nil {
+		return err
 	}
 	return db.Execute(ctx, []rqlite.Statement{
 		{SQL: `INSERT OR IGNORE INTO prefix_pools(id,name,prefix,stack_id,created_at) SELECT id,name,prefix,stack_id,strftime('%Y-%m-%dT%H:%M:%SZ','now') FROM networks WHERE created_at=''`},

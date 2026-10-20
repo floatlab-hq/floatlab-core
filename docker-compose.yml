@@ -62,30 +62,6 @@ services:
       retries: 5
       start_period: 10s
 
-  vmalert:
-    image: victoriametrics/vmalert:v1.101.0
-    restart: unless-stopped
-    command:
-      - -datasource.url=http://victoriametrics:8428
-      - -remoteRead.url=http://victoriametrics:8428
-      - -remoteWrite.url=http://victoriametrics:8428
-      - -notifier.url=http://floatlab-control:8080/api/v1/stats/webhook
-      - -rule=/etc/vmalert/rules/*.yaml
-      - -evaluationInterval=30s
-    volumes:
-      - ./vmalert-rules:/etc/vmalert/rules:ro
-    depends_on:
-      victoriametrics:
-        condition: service_healthy
-      floatlab-control:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8880/-/healthy"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
-
   # ── FloatLab control plane ───────────────────────────────────────────────────
 
   floatlab-control:

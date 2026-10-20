@@ -13,8 +13,14 @@ func TestDockerTelemetryRetainsScopeAndStreams(t *testing.T) {
 	stats.MemoryStats.Usage = 123
 	stats.CPUStats.CPUUsage.TotalUsage = 2e9
 	stats.Networks = map[string]container.NetworkStats{"eth0": {RxBytes: 5, TxBytes: 6}}
-	body := dockerMetrics(stats, "stack", "node")
+	stats.MemoryStats.Limit = 1024
+	body := dockerMetrics(stats, "stack", "node", "web", "1")
 	for _, want := range []string{`stack_id="stack"`, `container_id="container"`, `node_id="node"`, " 123\n", " 2\n", " 5\n", " 6\n"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in %s", want, body)
+		}
+	}
+	for _, want := range []string{`service="web"`, `replica="1"`, "container_memory_limit_bytes", " 1024\n"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q in %s", want, body)
 		}

@@ -89,11 +89,23 @@ func TestManagementCRUDWithSQLite(t *testing.T) {
 	call("POST", "/networks", map[string]interface{}{"name": "bad", "cidr": "10.0.0.0/24"}, 400)
 	call("DELETE", "/networks/"+nid, nil, 204)
 	call("GET", "/networks/"+nid, nil, 404)
-	rule := call("POST", "/alert-rules", map[string]interface{}{"name": "cpu", "condition": "up == 0", "severity": "critical"}, 201)
+	call("POST", "/alert-rules", map[string]interface{}{"name": "bad", "condition": "up == 0", "severity": "warning", "for_duration": "-1m"}, 400)
+	call("POST", "/alert-rules", map[string]interface{}{"name": "bad", "condition": "up == 0", "severity": "warning", "max_sample_age": "0s"}, 400)
+	rule := call("POST", "/alert-rules", map[string]interface{}{"name": "cpu", "condition": "up == 0", "recovery_condition": "up == 1", "freshness_query": "timestamp(up)", "recovery_duration": "30s", "max_sample_age": "1m", "severity": "critical"}, 201)
 	rid := rule["id"].(string)
+	if err := db.Execute(ctx, []rqlite.Statement{{SQL: `INSERT INTO alert_evaluations(id,rule_id,state_json) VALUES('evaluation',?,?)`, Params: []interface{}{rid, `{"Status":"unknown","Error":"source stale","Labels":{"node_id":"node"},"LastObserved":"2026-10-20T00:00:00Z","LastEvaluated":"2026-10-20T00:01:00Z","Value":null}`}}}); err != nil {
+		t.Fatal(err)
+	}
+	status := call("GET", "/alert-rules/"+rid, nil, 200)
+	if evaluations, ok := status["evaluations"].([]interface{}); !ok || len(evaluations) != 1 || evaluations[0].(map[string]interface{})["state"] != "unknown" {
+		t.Fatalf("missing evaluation status: %+v", status)
+	}
 	changed := call("PUT", "/alert-rules/"+rid, map[string]interface{}{"enabled": false}, 200)
 	if changed["enabled"] != false || changed["condition"] != "up == 0" {
 		t.Fatalf("partial update: %+v", changed)
+	}
+	if changed["recovery_condition"] != "up == 1" || changed["freshness_query"] != "timestamp(up)" || changed["recovery_duration"] != "30s" || changed["max_sample_age"] != "1m" {
+		t.Fatalf("evaluation settings lost: %+v", changed)
 	}
 	call("GET", "/alert-rules/"+rid, nil, 200)
 	call("DELETE", "/alert-rules/"+rid, nil, 204)

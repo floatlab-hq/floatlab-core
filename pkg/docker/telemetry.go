@@ -52,6 +52,10 @@ func (c *Client) collectTelemetry(ctx context.Context, nodeID, logsURL, metricsU
 			continue
 		}
 		live[item.ID] = true
+		inspected, err := c.dc.ContainerInspect(ctx, item.ID, dockerclient.ContainerInspectOptions{})
+		if err != nil || inspected.Container.Config == nil {
+			continue
+		}
 		if item.State == container.StateRunning {
 			sample, err := c.dc.ContainerStats(ctx, item.ID, dockerclient.ContainerStatsOptions{})
 			if err == nil {
@@ -59,16 +63,22 @@ func (c *Client) collectTelemetry(ctx context.Context, nodeID, logsURL, metricsU
 				err = json.NewDecoder(sample.Body).Decode(&stats)
 				sample.Body.Close()
 				if err == nil {
-					err = pushMetrics(ctx, client, metricsURL, dockerMetrics(stats, stackID, nodeID))
+					// Docker reports host RAM as the limit when no cgroup limit is enforced.
+					stats.MemoryStats.Limit = 0
+					if inspected.Container.HostConfig != nil && inspected.Container.HostConfig.Memory > 0 {
+						stats.MemoryStats.Limit = uint64(inspected.Container.HostConfig.Memory)
+					}
+					err = pushMetrics(ctx, client, metricsURL, dockerMetrics(stats, stackID, nodeID, item.Labels["com.docker.compose.service"], item.Labels["com.docker.compose.container-number"]))
 				}
 			}
 			if err != nil {
 				log.Warn("telemetry: container metrics", zap.String("container", item.ID), zap.Error(err))
 			}
 		}
-		inspected, err := c.dc.ContainerInspect(ctx, item.ID, dockerclient.ContainerInspectOptions{})
-		if err != nil || inspected.Container.Config == nil {
-			continue
+		// shortcut: Docker's lifetime restart count resets on replacement; use persisted events for restart-window rules.
+		err = pushMetrics(ctx, client, metricsURL, fmt.Sprintf("container_restart_count{stack_id=%s,node_id=%s,service=%s,replica=%s} %d\n", strconv.Quote(stackID), strconv.Quote(nodeID), strconv.Quote(item.Labels["com.docker.compose.service"]), strconv.Quote(item.Labels["com.docker.compose.container-number"]), inspected.Container.RestartCount))
+		if err != nil {
+			log.Warn("telemetry: restart count", zap.Error(err))
 		}
 		since := checkpoints[item.ID]
 		if since.IsZero() {
@@ -122,12 +132,13 @@ func dockerLogLines(data, stream, id, name, stackID, nodeID, service string) []m
 	return lines
 }
 
-func dockerMetrics(stats container.StatsResponse, stackID, nodeID string) string {
-	labels := fmt.Sprintf(`{stack_id=%s,container_id=%s,node_id=%s}`, strconv.Quote(stackID), strconv.Quote(stats.ID), strconv.Quote(nodeID))
+func dockerMetrics(stats container.StatsResponse, stackID, nodeID, service, replica string) string {
+	labels := fmt.Sprintf(`{stack_id=%s,container_id=%s,node_id=%s,service=%s,replica=%s}`, strconv.Quote(stackID), strconv.Quote(stats.ID), strconv.Quote(nodeID), strconv.Quote(service), strconv.Quote(replica))
 	var body strings.Builder
 	metric := func(name string, value float64) { fmt.Fprintf(&body, "%s%s %g\n", name, labels, value) }
 	metric("container_cpu_usage_seconds_total", float64(stats.CPUStats.CPUUsage.TotalUsage)/1e9)
 	metric("container_memory_usage_bytes", float64(stats.MemoryStats.Usage))
+	metric("container_memory_limit_bytes", float64(stats.MemoryStats.Limit))
 	var rx, tx uint64
 	for _, network := range stats.Networks {
 		rx += network.RxBytes

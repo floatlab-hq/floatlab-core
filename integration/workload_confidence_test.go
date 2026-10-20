@@ -191,7 +191,7 @@ func (c *apiClient) assertManagementContracts() {
 	c.expect("GET", "/api/v1/networks", nil, 200)
 	c.object("GET", "/api/v1/networks/"+nid, nil, 200)
 	c.expect("POST", "/api/v1/networks", map[string]string{"name": name + "-overlap", "cidr": "fdfe:100::/65"}, 409)
-	rule := c.object("POST", "/api/v1/alert-rules", map[string]interface{}{"name": name, "condition": "up == 0", "severity": "critical", "node_id": id}, 201)
+	rule := c.object("POST", "/api/v1/alert-rules", map[string]interface{}{"name": name, "condition": "up == 0", "recovery_condition": "up == 1", "freshness_query": "timestamp(up)", "severity": "critical", "node_id": id}, 201)
 	rid := rule["id"].(string)
 	t.Cleanup(func() { c.expect("DELETE", "/api/v1/alert-rules/"+rid, nil, 204) })
 	updated := c.object("PUT", "/api/v1/alert-rules/"+rid, map[string]interface{}{"enabled": false}, 200)

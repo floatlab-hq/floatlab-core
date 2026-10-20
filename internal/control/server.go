@@ -122,6 +122,9 @@ func (s *Server) buildRouter() *chi.Mux {
 }
 
 func (s *Server) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go s.runAlertEvaluator(ctx)
 	// Bridge FSM events → broker so SSE clients get independent channels.
 	go s.bridgeFSMToBroker()
 

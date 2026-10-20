@@ -20,8 +20,10 @@ components:
     AlertRuleCondition:
       type: string
       description: |
-        PromQL/MetricsQL expression that, when its result exceeds threshold, fires the alert.
-        Examples: "cpu_usage_percent > 90", "zfs_pool_health != 0"
+        Filtered MetricsQL predicate. Every returned series is a match, including a zero-valued
+        sample. Use filtering comparisons, not the bool modifier. Empty results are unknown,
+        not recovery. Configure recovery_condition to resolve on positive healthy evidence.
+        Aggregate away volatile labels such as container_id for stable resource identity.
       example: "cpu_usage_percent > 90"
 
     AlertRule:
@@ -50,8 +52,23 @@ components:
           description: If set, rule only fires for this node.
         for_duration:
           type: string
-          description: How long the condition must be true before firing (Prometheus duration string).
+          description: How long fresh evidence must remain true before firing (Go duration syntax; empty or zero means immediate).
           example: "5m"
+        freshness_query:
+          type: string
+          description: MetricsQL query returning source observation Unix timestamps with the same resource labels. Required for enabled rules; derived queries must return the oldest required source timestamp.
+        recovery_condition:
+          type: string
+          description: Filtered healthy predicate with the same resource labels as condition. Required for enabled rules; missing telemetry never resolves an incident.
+          example: "cpu_usage_percent < 85"
+        recovery_duration:
+          type: string
+          default: "1m"
+          description: Duration of fresh healthy evidence required to resolve; Go duration syntax, zero allowed.
+        max_sample_age:
+          type: string
+          default: "2m"
+          description: Maximum observation age and implicit MetricsQL lookback; positive Go duration.
         annotations:
           type: object
           additionalProperties:
@@ -67,9 +84,37 @@ components:
           type: string
           format: date-time
 
+        evaluations:
+          type: array
+          description: Persisted per-resource evaluation status, including unknown and query/validation errors.
+          items:
+            type: object
+            properties:
+              labels:
+                type: object
+                nullable: true
+                additionalProperties:
+                  type: string
+              state:
+                type: string
+                enum: [inactive, pending, firing, unknown, resolved]
+              observed:
+                type: number
+                nullable: true
+              observed_at:
+                type: string
+                format: date-time
+                nullable: true
+              evaluated_at:
+                type: string
+                format: date-time
+                nullable: true
+              error:
+                type: string
+
     AlertRuleCreate:
       type: object
-      required: [name, condition, severity]
+      required: [name, condition, recovery_condition, freshness_query, severity]
       properties:
         name:
           type: string
@@ -88,6 +133,21 @@ components:
         for_duration:
           type: string
           example: "5m"
+        freshness_query:
+          type: string
+          description: MetricsQL query returning source observation Unix timestamps with the same resource labels. Required for enabled rules; derived queries must return the oldest required source timestamp.
+        recovery_condition:
+          type: string
+          description: Filtered healthy predicate with the same resource labels as condition. Required for enabled rules; missing telemetry never resolves an incident.
+          example: "cpu_usage_percent < 85"
+        recovery_duration:
+          type: string
+          default: "1m"
+          description: Duration of fresh healthy evidence required to resolve; Go duration syntax, zero allowed.
+        max_sample_age:
+          type: string
+          default: "2m"
+          description: Maximum observation age and implicit MetricsQL lookback; positive Go duration.
         annotations:
           type: object
           additionalProperties:
@@ -107,6 +167,21 @@ components:
           $ref: '#/components/schemas/AlertSeverity'
         for_duration:
           type: string
+        freshness_query:
+          type: string
+          description: MetricsQL query returning source observation Unix timestamps with the same resource labels. Required for enabled rules; derived queries must return the oldest required source timestamp.
+        recovery_condition:
+          type: string
+          description: Filtered healthy predicate with the same resource labels as condition. Required for enabled rules; missing telemetry never resolves an incident.
+          example: "cpu_usage_percent < 85"
+        recovery_duration:
+          type: string
+          default: "1m"
+          description: Duration of fresh healthy evidence required to resolve; Go duration syntax, zero allowed.
+        max_sample_age:
+          type: string
+          default: "2m"
+          description: Maximum observation age and implicit MetricsQL lookback; positive Go duration.
         annotations:
           type: object
           additionalProperties:
@@ -150,6 +225,23 @@ components:
         created_at:
           type: string
           format: date-time
+
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+          description: Resource labels identifying this incident.
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+        resolution_reason:
+          type: string
+          nullable: true
+        evaluation_state:
+          type: string
+          nullable: true
+          enum: [inactive, pending, firing, unknown, resolved]
 
     Network:
       type: object

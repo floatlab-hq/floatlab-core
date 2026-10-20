@@ -218,6 +218,9 @@ an overlay network
 
 ### FloatLab Watch - Monitoring and Alerting
 
+See the [management alert rule catalogue](internal/control/ALERT_RULES.md) for
+proposed rules, evaluator behaviours, telemetry gaps and acceptance scenarios.
+
 FloatLab Watch is a component that monitors the health of your nodes, containers, and allows for streaming and 
 searching container logs.
 Alerts need to cover the following scenarios:

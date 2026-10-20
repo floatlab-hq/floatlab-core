@@ -81,8 +81,9 @@ func (s *Server) handleStackEvents(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStackAlerts(w http.ResponseWriter, r *http.Request) {
 	result, err := s.db.Query(r.Context(), rqlite.Statement{
-		SQL: `SELECT r.id,r.name,r.metric,r.selector,r.comparator,r.threshold,r.duration,r.severity,r.message,r.active,s.state,s.observed,s.observed_at
-		      FROM stack_alert_rules r LEFT JOIN alert_status s ON s.rule_id=r.id WHERE r.stack_id=? ORDER BY r.name`,
+		SQL: `SELECT r.id,r.name,r.metric,r.selector,r.comparator,r.threshold,r.duration,r.severity,r.message,r.active,
+		      COALESCE(json_extract(e.state_json,'$.Status'),s.state),COALESCE(json_extract(e.state_json,'$.Value'),s.observed),COALESCE(json_extract(e.state_json,'$.LastObserved'),s.observed_at),json_extract(e.state_json,'$.Labels')
+		      FROM stack_alert_rules r LEFT JOIN alert_status s ON s.rule_id=r.id LEFT JOIN alert_evaluations e ON e.rule_id=r.id WHERE r.stack_id=? ORDER BY r.name,e.id`,
 		Params: []interface{}{chi.URLParam(r, "id")},
 	})
 	if err != nil {

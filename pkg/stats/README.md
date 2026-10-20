@@ -8,7 +8,6 @@ VictoriaMetrics remote-write client, metric query proxy, and vmalert webhook rec
 |-----------|------|------|
 | VictoriaMetrics | `metrics` | 8428 |
 | vmagent | `vmagent` | 8429 |
-| vmalert | `vmalert` | 8880 |
 
 Data is stored in `floatlab/floatlab-stats` at 5s resolution for 45 days (`--retentionPeriod=45d`). ARC and memory footprint are bounded with `-memory.allowedPercent=60` and `GOGC=40`.
 
@@ -48,16 +47,14 @@ Pre-built scoped queries for the REST API:
 - `NodeQuery(nodeID, metric, start, end, step)` — adds `{node_id="<id>"}` label filter
 - `StackQuery(stackID, metric, ...)` — adds `{stack_id="<id>"}` label filter
 
-## vmalert Webhook Receiver (`alerts.go`)
+## Alert evaluation and external webhook
 
-vmalert fires POST requests to `http://floatlab-control:8080/internal/alerts` when rules trigger. The receiver:
-1. Parses the vmalert webhook payload (Alertmanager-compatible JSON)
-2. Matches the rule against `alert_rules` in rqlite by `alertname` label
-3. Creates an `alerts` row in rqlite
-4. Calls `pkg/notify.Publish()` to fan out the notification via SSE
+Management and Compose rules are evaluated inside the management service; see
+[the evaluator documentation](../alerts/README.md). No built-in rules are seeded
+by this package. The default Compose deployment no longer runs vmalert.
 
-Default built-in rules (loaded at startup if no rules exist):
-- `cpu_usage_percent > 90` for 5m → warning
-- `memory_used_bytes / memory_total_bytes > 0.90` for 5m → warning
-- `zfs_pool_alloc_bytes / zfs_pool_size_bytes > 0.90` → critical
-- `zfs_pool_state != 0` → critical
+The external Alertmanager-compatible receiver remains at
+`POST /api/v1/stats/webhook` for separately owned external rules. It persists
+firing/resolved state and notifies on first firing. It does not look up or evaluate
+management rule definitions. Do not run external and management evaluation for
+the same rule. External alerts retain their existing identity/history behaviour.

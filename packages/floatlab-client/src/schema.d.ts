@@ -2040,8 +2040,10 @@ export interface components {
             stack_id?: string | null;
         };
         /**
-         * @description PromQL/MetricsQL expression that, when its result exceeds threshold, fires the alert.
-         *     Examples: "cpu_usage_percent > 90", "zfs_pool_health != 0"
+         * @description Filtered MetricsQL predicate. Every returned series is a match, including a zero-valued
+         *     sample. Use filtering comparisons, not the bool modifier. Empty results are unknown,
+         *     not recovery. Configure recovery_condition to resolve on positive healthy evidence.
+         *     Aggregate away volatile labels such as container_id for stable resource identity.
          * @example cpu_usage_percent > 90
          */
         AlertRuleCondition: string;
@@ -2065,10 +2067,27 @@ export interface components {
              */
             node_id?: string | null;
             /**
-             * @description How long the condition must be true before firing (Prometheus duration string).
+             * @description How long fresh evidence must remain true before firing (Go duration syntax; empty or zero means immediate).
              * @example 5m
              */
             for_duration?: string;
+            /** @description MetricsQL query returning source observation Unix timestamps with the same resource labels. Required for enabled rules; derived queries must return the oldest required source timestamp. */
+            freshness_query?: string;
+            /**
+             * @description Filtered healthy predicate with the same resource labels as condition. Required for enabled rules; missing telemetry never resolves an incident.
+             * @example cpu_usage_percent < 85
+             */
+            recovery_condition?: string;
+            /**
+             * @description Duration of fresh healthy evidence required to resolve; Go duration syntax, zero allowed.
+             * @default 1m
+             */
+            recovery_duration: string;
+            /**
+             * @description Maximum observation age and implicit MetricsQL lookback; positive Go duration.
+             * @default 2m
+             */
+            max_sample_age: string;
             /** @description Human-readable annotations forwarded to notifications. */
             annotations?: {
                 [key: string]: string;
@@ -2079,6 +2098,20 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at?: string;
+            /** @description Persisted per-resource evaluation status, including unknown and query/validation errors. */
+            evaluations?: {
+                labels?: {
+                    [key: string]: string;
+                } | null;
+                /** @enum {string} */
+                state?: "inactive" | "pending" | "firing" | "unknown" | "resolved";
+                observed?: number | null;
+                /** Format: date-time */
+                observed_at?: string | null;
+                /** Format: date-time */
+                evaluated_at?: string | null;
+                error?: string;
+            }[];
         };
         AlertRuleCreate: {
             name: string;
@@ -2090,6 +2123,23 @@ export interface components {
             node_id?: string | null;
             /** @example 5m */
             for_duration?: string;
+            /** @description MetricsQL query returning source observation Unix timestamps with the same resource labels. Required for enabled rules; derived queries must return the oldest required source timestamp. */
+            freshness_query: string;
+            /**
+             * @description Filtered healthy predicate with the same resource labels as condition. Required for enabled rules; missing telemetry never resolves an incident.
+             * @example cpu_usage_percent < 85
+             */
+            recovery_condition: string;
+            /**
+             * @description Duration of fresh healthy evidence required to resolve; Go duration syntax, zero allowed.
+             * @default 1m
+             */
+            recovery_duration: string;
+            /**
+             * @description Maximum observation age and implicit MetricsQL lookback; positive Go duration.
+             * @default 2m
+             */
+            max_sample_age: string;
             annotations?: {
                 [key: string]: string;
             };
@@ -2101,6 +2151,23 @@ export interface components {
             condition?: components["schemas"]["AlertRuleCondition"];
             severity?: components["schemas"]["AlertSeverity"];
             for_duration?: string;
+            /** @description MetricsQL query returning source observation Unix timestamps with the same resource labels. Required for enabled rules; derived queries must return the oldest required source timestamp. */
+            freshness_query?: string;
+            /**
+             * @description Filtered healthy predicate with the same resource labels as condition. Required for enabled rules; missing telemetry never resolves an incident.
+             * @example cpu_usage_percent < 85
+             */
+            recovery_condition?: string;
+            /**
+             * @description Duration of fresh healthy evidence required to resolve; Go duration syntax, zero allowed.
+             * @default 1m
+             */
+            recovery_duration: string;
+            /**
+             * @description Maximum observation age and implicit MetricsQL lookback; positive Go duration.
+             * @default 2m
+             */
+            max_sample_age: string;
             annotations?: {
                 [key: string]: string;
             };
@@ -2127,6 +2194,15 @@ export interface components {
             resolved_at?: string | null;
             /** Format: date-time */
             created_at: string;
+            /** @description Resource labels identifying this incident. */
+            labels?: {
+                [key: string]: string;
+            };
+            /** Format: date-time */
+            updated_at?: string | null;
+            resolution_reason?: string | null;
+            /** @enum {string|null} */
+            evaluation_state?: "inactive" | "pending" | "firing" | "unknown" | "resolved" | null;
         };
         /** @enum {string} */
         LogLevel: "trace" | "debug" | "info" | "warn" | "error" | "fatal";
