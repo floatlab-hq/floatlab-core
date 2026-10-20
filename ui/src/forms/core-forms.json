@@ -104,7 +104,7 @@
         "label": "condition",
         "type": "string",
         "required": true,
-        "description": "PromQL/MetricsQL expression that, when its result exceeds threshold, fires the alert.\nExamples: \"cpu_usage_percent > 90\", \"zfs_pool_health != 0\""
+        "description": "Filtered MetricsQL predicate. Every returned series is a match, including a zero-valued\nsample. Use filtering comparisons, not the bool modifier. Empty results are unknown,\nnot recovery. Configure recovery_condition to resolve on positive healthy evidence.\nAggregate away volatile labels such as container_id for stable resource identity."
       },
       {
         "key": "severity",
@@ -143,6 +143,36 @@
         "label": "for duration",
         "type": "string",
         "required": false
+      },
+      {
+        "key": "freshness_query",
+        "label": "freshness query",
+        "type": "string",
+        "required": true,
+        "description": "MetricsQL query returning source observation Unix timestamps with the same resource labels. Required for enabled rules; derived queries must return the oldest required source timestamp."
+      },
+      {
+        "key": "recovery_condition",
+        "label": "recovery condition",
+        "type": "string",
+        "required": true,
+        "description": "Filtered healthy predicate with the same resource labels as condition. Required for enabled rules; missing telemetry never resolves an incident."
+      },
+      {
+        "key": "recovery_duration",
+        "label": "recovery duration",
+        "type": "string",
+        "required": false,
+        "description": "Duration of fresh healthy evidence required to resolve; Go duration syntax, zero allowed.",
+        "default": "1m"
+      },
+      {
+        "key": "max_sample_age",
+        "label": "max sample age",
+        "type": "string",
+        "required": false,
+        "description": "Maximum observation age and implicit MetricsQL lookback; positive Go duration.",
+        "default": "2m"
       },
       {
         "key": "annotations",

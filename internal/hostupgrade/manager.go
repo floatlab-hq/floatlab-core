@@ -597,6 +597,17 @@ func (m *Manager) cleanup(ctx context.Context, s Status) error {
 	if err := m.Backend.Cleanup(ctx, s); err != nil {
 		return err
 	}
+	// A terminal operation no longer needs its downloaded archive: retained boot
+	// origins and management checkpoints are independent of these staging files.
+	// Do this even when its version was already destroyed by an earlier cleanup.
+	if !terminal(s.State) || !operationID.MatchString(s.OperationID) {
+		return fmt.Errorf("download cleanup requires a terminal operation")
+	}
+	for _, name := range []string{"floatlab-root.tar.gz", "floatlab-root.tar.gz.partial"} {
+		if err := os.Remove(filepath.Join(m.Dir, s.OperationID, name)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
 	if s.State != "committed" {
 		return nil
 	}

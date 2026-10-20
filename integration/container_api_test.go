@@ -96,6 +96,8 @@ func startAppliance(t *testing.T) string {
 	if baseURL := os.Getenv("API_URL"); baseURL != "" {
 		return baseURL
 	}
+	// A newly owned VM must never inherit another appliance's SSH destination.
+	t.Setenv("VM_SSH", "")
 	root, err := filepath.Abs("..")
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +125,15 @@ func startAppliance(t *testing.T) string {
 	// A path flake includes new source files that Git flakes omit until staged.
 	// Keep the result link outside the source tree so consecutive passes reuse the image.
 	result := filepath.Join(t.TempDir(), "appliance")
-	run(t, appliance, nil, "nix", "--extra-experimental-features", "nix-command flakes", "build", "path:"+root+"?dir=floatlab-appliance-image#dev-iso", "--print-build-logs", "--out-link", result)
+	bundle := os.Getenv("FLOATLAB_ISO_BUNDLE")
+	if bundle == "" {
+		directory := t.TempDir()
+		host := filepath.Join(directory, "host")
+		bundle = filepath.Join(directory, "bundle")
+		run(t, appliance, nil, "nix", "build", "path:"+root+"?dir=floatlab-appliance-image#host-image", "--impure", "--print-build-logs", "--out-link", host)
+		run(t, root, nil, "python3", "scripts/release.py", "prepare-iso", bundle, "--version", "integration", "--local-host", host)
+	}
+	run(t, appliance, []string{"FLOATLAB_ISO_BUNDLE=" + bundle}, "nix", "--extra-experimental-features", "nix-command flakes", "build", "path:"+root+"?dir=floatlab-appliance-image#dev-iso", "--impure", "--print-build-logs", "--out-link", result)
 	images, err := filepath.Glob(filepath.Join(result, "iso", "*.iso"))
 	if err != nil || len(images) != 1 {
 		t.Fatalf("expected one appliance ISO: %v %v", images, err)
@@ -140,7 +150,7 @@ func startAppliance(t *testing.T) string {
 	for _, name := range strings.Fields(before) {
 		existingPools[name] = true
 	}
-	run(t, root, []string{"VM_NAME=" + name, "LIBVIRT_URI=" + uri, "LIBVIRT_POOL=" + pool}, filepath.Join(appliance, "scripts/run-libvirt.sh"), images[0])
+	run(t, root, []string{"VM_NAME=" + name, "LIBVIRT_URI=" + uri, "LIBVIRT_POOL=" + pool, "MEMORY_MB=" + env("MEMORY_MB", "8192"), "ZFS_DISK_SIZE=" + env("ZFS_DISK_SIZE", "32G")}, filepath.Join(appliance, "scripts/run-libvirt.sh"), images[0])
 	return "http://" + waitForIP(t, root, uri, name) + ":8080"
 }
 

@@ -73,6 +73,43 @@ func request() Request {
 	return Request{OperationID: "op", Actor: "admin", Release: "host-v2.0.0", IdempotencyKey: "request-one"}
 }
 
+func TestCleanupRemovesOnlyTerminalOperationsDownloads(t *testing.T) {
+	for _, state := range []string{"recovered", "failed", "committed", "staged", "armed", "trial", "ready"} {
+		t.Run(state, func(t *testing.T) {
+			m, _ := setup(t, state)
+			paths := []string{}
+			for _, id := range []string{"op", "retained-operation", "trial-operation"} {
+				for _, name := range []string{"floatlab-root.tar.gz", "floatlab-root.tar.gz.partial", "host-manifest.json"} {
+					path := filepath.Join(m.Dir, id, name)
+					if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(path, []byte("retained fixture"), 0600); err != nil {
+						t.Fatal(err)
+					}
+					paths = append(paths, path)
+				}
+			}
+			_, err := m.Cleanup(context.Background(), request())
+			if (err == nil) != terminal(state) {
+				t.Fatalf("cleanup state %s: %v", state, err)
+			}
+			for _, path := range paths {
+				_, err := os.Stat(path)
+				removed := terminal(state) && filepath.Base(filepath.Dir(path)) == "op" && filepath.Base(path) != "host-manifest.json"
+				if removed && !os.IsNotExist(err) || !removed && err != nil {
+					t.Fatalf("removed=%v path=%s err=%v", removed, path, err)
+				}
+			}
+			if terminal(state) {
+				if _, err := m.Cleanup(context.Background(), request()); err != nil {
+					t.Fatalf("replayed cleanup: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestActivationCheckpointAndArmingFailuresRecoverBeforePolicyRelease(t *testing.T) {
 	for _, failure := range []string{"checkpoint", "arm", "reboot"} {
 		t.Run(failure, func(t *testing.T) {
@@ -370,10 +407,10 @@ func TestGuardStartupAndHeartbeatDeadlinesCannotBeDisarmedByOtherOperation(t *te
 	}
 }
 func TestEFIBootEntryMustPointToDedicatedTrialExecutable(t *testing.T) {
-	if bootEntry.FindStringSubmatch(`Boot0001* FloatLab Trial HD(1,GPT,abc)/File(\EFI\FloatLab\TRIAL.EFI)`) == nil {
+	if bootEntry.FindStringSubmatch(`Boot0001* FloatLab Trial HD(1,GPT,4da5108c-27fc-43ad-8e2b-a1fd1a42bebe,0,1)/File(\EFI\FloatLab\TRIAL.EFI)`) == nil {
 		t.Fatal("trial rejected")
 	}
-	if bootEntry.FindStringSubmatch(`Boot0001* FloatLab Trial HD(1,GPT,abc)/File(\EFI\BOOT\BOOTX64.EFI)`) != nil {
+	if bootEntry.FindStringSubmatch(`Boot0001* FloatLab Trial HD(1,GPT,4da5108c-27fc-43ad-8e2b-a1fd1a42bebe,0,1)/File(\EFI\BOOT\BOOTX64.EFI)`) != nil {
 		t.Fatal("fallback executable selected")
 	}
 }

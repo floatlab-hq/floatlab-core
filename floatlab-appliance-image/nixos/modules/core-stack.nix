@@ -1,4 +1,4 @@
-{ pkgs, floatlab-binaries, floatlab-development ? false, floatlab-dev-bundle ? null, ... }:
+{ config, pkgs, floatlab-binaries, floatlab-development ? false, floatlab-dev-bundle ? null, ... }:
 let
   devCompose = if floatlab-dev-bundle == null then null else pkgs.writeText "floatlab-dev-compose.yml" (
     builtins.replaceStrings
@@ -25,12 +25,29 @@ let
 
   startStack = pkgs.writeShellApplication {
     name = "floatlab-start-core-stack";
-    runtimeInputs = [ pkgs.curl pkgs.docker pkgs.docker-compose pkgs.coreutils pkgs.gnugrep pkgs.jq ];
+    runtimeInputs = [ pkgs.curl pkgs.docker pkgs.docker-compose pkgs.coreutils pkgs.gnugrep pkgs.jq pkgs.util-linux ] ++ config.systemd.services.floatlab-hostd.path;
     text = ''
       set -euo pipefail
       ${seedCompose}/bin/floatlab-seed-core-stack
-      # Recovery runs before Compose can attach any management data writer.
-      ${floatlab-binaries}/bin/floatlab-hostd update-reconcile
+      # shellcheck source=/dev/null
+      source ${../../../scripts/floatlab-core-start-guard.sh}
+      modeSwitch=false
+      case "''${1:-}" in
+        --mode-switch)
+          # floatlab-mode already checked pending journals and retains the
+          # shared lock across this invocation and its intentional recreation.
+          floatlab_core_start_inherited_lock /floatlab/system/updates
+          modeSwitch=true
+          ;;
+        "")
+          # Recovery runs before Compose can attach any management data writer.
+          ${floatlab-binaries}/bin/floatlab-hostd update-reconcile
+          # Reconciliation releases its lock. Reacquire it before checking
+          # the persistent gate and retain it through startup and readiness.
+          floatlab_core_start_lock /floatlab/system/updates
+          ;;
+        *) echo "Unsupported startup argument" >&2; exit 2 ;;
+      esac
       if [ -e /floatlab/system/updates/management-blocked ]; then
         state=$(jq -r '.state' /floatlab/system/updates/host.json)
         case "$state" in trial|ready) exit 0 ;; *) exit 1 ;; esac
@@ -41,12 +58,16 @@ let
       done
       [ -S /run/floatlab/hostd.sock ]
 
-      while IFS=$'\t' read -r archive image expected; do
-        if [ "$(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null || true)" != "$expected" ]; then
-          docker load --input "/floatlab/system/images/$archive"
-        fi
-        test "$(docker image inspect --format '{{.Id}}' "$image")" = "$expected"
-      done < <(jq -er '.[] | [.archive,.image,.id] | @tsv' /floatlab/system/images.json)
+      alreadyRunning=false
+      if floatlab_core_stack_running "$modeSwitch"; then alreadyRunning=true; fi
+      if ! "$alreadyRunning"; then
+        while IFS=$'\t' read -r archive image expected; do
+          if [ "$(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null || true)" != "$expected" ]; then
+            docker load --input "/floatlab/system/images/$archive"
+          fi
+          test "$(docker image inspect --format '{{.Id}}' "$image")" = "$expected"
+        done < <(jq -er '.[] | [.archive,.image,.id] | @tsv' /floatlab/system/images.json)
+      fi
       cd /floatlab/system
       composeArgs=(-f docker-compose.yml)
       if [ -f /floatlab/system/etc/development ]; then
@@ -55,7 +76,12 @@ let
       if [ -f /floatlab/system/updates/restart-override.yml ]; then
         composeArgs+=(-f /floatlab/system/updates/restart-override.yml)
       fi
-      docker compose "''${composeArgs[@]}" up -d --pull never --remove-orphans
+      # Recovery starts the exact frozen Compose definition. Reapplying a
+      # development override or changed restart policy would recreate those
+      # healthy containers immediately after they were authorized.
+      if ! "$alreadyRunning"; then
+        docker compose "''${composeArgs[@]}" up -d --pull never --remove-orphans
+      fi
       # Do not report success merely because the management process is listening.
       for service in rqlite victoria-metrics victoria-logs floatlab-control; do
         ready=false

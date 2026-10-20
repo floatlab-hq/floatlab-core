@@ -246,15 +246,15 @@ func TestTrialFirmwareEntriesAreReusedForEachInstalledESP(t *testing.T) {
 			return "", fmt.Errorf("BootOrder must not change")
 		}
 		created++
-		partition := "guid-one"
+		partition := "4da5108c-27fc-43ad-8e2b-a1fd1a42bebe"
 		if args[2] == "/dev/disk/by-id/two" {
-			partition = "guid-two"
+			partition = "23456789-1234-4321-8765-0123456789ab"
 		}
 		entries += fmt.Sprintf("Boot%04X* FloatLab Trial HD(1,GPT,%s,0,1)/File(\\EFI\\FloatLab\\TRIAL.EFI)\n", created, partition)
 		return "", nil
 	}}
 	for round := 0; round < 2; round++ {
-		for _, disk := range []struct{ path, id string }{{"/dev/disk/by-id/one", "guid-one"}, {"/dev/disk/by-id/two", "guid-two"}} {
+		for _, disk := range []struct{ path, id string }{{"/dev/disk/by-id/one", "4da5108c-27fc-43ad-8e2b-a1fd1a42bebe"}, {"/dev/disk/by-id/two", "23456789-1234-4321-8765-0123456789ab"}} {
 			if _, err := l.ensureTrialEntry(context.Background(), disk.path, disk.id); err != nil {
 				t.Fatal(err)
 			}
@@ -262,6 +262,32 @@ func TestTrialFirmwareEntriesAreReusedForEachInstalledESP(t *testing.T) {
 	}
 	if created != 2 {
 		t.Fatalf("created %d entries across two activation cycles", created)
+	}
+}
+
+func TestTrialFirmwareEntryRecognizesCurrentEfibootmgrRendering(t *testing.T) {
+	const entry = "Boot0001* FloatLab Trial\tHD(1,GPT,4da5108c-27fc-43ad-8e2b-a1fd1a42bebe,0x800,0x100000)/\\EFI\\FloatLab\\TRIAL.EFI\n      dp: 04 01 2a 00\n"
+	creates := 0
+	l := Linux{Run: func(_ context.Context, name string, args ...string) (string, error) {
+		if name != "efibootmgr" || args[0] != "-v" {
+			creates++
+			return "", fmt.Errorf("existing exact firmware entry must be reused")
+		}
+		return entry, nil
+	}}
+	for i := 0; i < 2; i++ {
+		id, err := l.ensureTrialEntry(context.Background(), "/dev/disk/by-id/one", "4da5108c-27fc-43ad-8e2b-a1fd1a42bebe")
+		if err != nil || id != "0001" {
+			t.Fatalf("id=%s error=%v", id, err)
+		}
+	}
+	if creates != 0 {
+		t.Fatal(creates)
+	}
+	for _, invalid := range []string{strings.Replace(entry, `TRIAL.EFI`, `TRIAL.EFI.other`, 1), strings.Replace(entry, "HD(1,", "HD(2,", 1), strings.Replace(entry, "FloatLab Trial", "Another Label", 1)} {
+		if bootEntry.MatchString(invalid) {
+			t.Fatal("accepted another firmware target", invalid)
+		}
 	}
 }
 

@@ -30,5 +30,5 @@ case "${1:-status}" in
 esac
 systemctl reset-failed floatlab-hostd
 systemctl restart floatlab-hostd
-floatlab-start-core-stack
+floatlab-start-core-stack --mode-switch
 echo 'Mode applied. Workspace and tool credentials are retained in /floatlab/system/dev.'

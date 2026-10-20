@@ -253,6 +253,12 @@ func (l *Linux) capture(ctx context.Context, s *Status) error {
 		s.SourceRelease = "installed"
 	}
 	s.Datasets, e = l.datasets(ctx)
+	if e == nil {
+		e = l.verifyMountedDatasets(ctx, s.Datasets)
+	}
+	if e == nil {
+		e = verifyManagementBinds(doc)
+	}
 	return e
 }
 func (l *Linux) freezeDefinitions(ctx context.Context, s *Status, doc map[string]any) error {
@@ -499,6 +505,9 @@ func (l *Linux) snapshot(ctx context.Context, s *Status, name string, hold bool)
 	return nil
 }
 func (l *Linux) Install(ctx context.Context, s *Status) error {
+	if e := l.verifyMountedDatasets(ctx, s.Datasets); e != nil {
+		return e
+	}
 	if e := update.WriteFile(composePath, s.CandidateCompose, 0644); e != nil {
 		return e
 	}
@@ -595,16 +604,8 @@ func (l *Linux) Restore(ctx context.Context, s *Status) error {
 				return fmt.Errorf("dataset identity changed; manual recovery required")
 			}
 		}
-		// Plain rollback refuses newer snapshots or dependent clones; never use destructive -r/-R.
-		for i := len(s.Datasets) - 1; i >= 0; i-- {
-			ds := s.Datasets[i]
-			guid, e := l.run(ctx, "zfs", "get", "-H", "-o", "value", "guid", ds.Name+"@"+s.Snapshot)
-			if e != nil || strings.TrimSpace(guid) == "" {
-				return fmt.Errorf("rollback snapshot unavailable: %s", ds.Name)
-			}
-			if _, e = l.run(ctx, "zfs", "rollback", ds.Name+"@"+s.Snapshot); e != nil {
-				return e
-			}
+		if e = l.restoreDatasets(ctx, s); e != nil {
+			return e
 		}
 	}
 	b, e := l.noRestart(s.PreviousCompose)
@@ -614,7 +615,164 @@ func (l *Linux) Restore(ctx context.Context, s *Status) error {
 	if e = update.WriteFile(composePath, b, 0644); e != nil {
 		return e
 	}
-	return l.compose(ctx, composePath, "floatlab-system", "up", "-d", "--pull", "never", "--wait", "--wait-timeout", "300")
+	if e = l.verifyMountedDatasets(ctx, s.Datasets); e != nil {
+		return e
+	}
+	if e = l.compose(ctx, composePath, "floatlab-system", "up", "-d", "--pull", "never", "--wait", "--wait-timeout", "300"); e != nil {
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+		defer cancel()
+		_ = l.compose(stopCtx, composePath, "floatlab-system", "stop", "--timeout", "60")
+		return e
+	}
+	return nil
+}
+
+func (l *Linux) restoreDatasets(ctx context.Context, s *Status) error {
+	if e := l.verifyDatasetProperties(ctx, s.Datasets); e != nil {
+		return e
+	}
+	// Removing stopped containers releases bind mounts; unmounting drops stale
+	// mmap pages that ZFS rollback can otherwise retain (OpenZFS issue #10931).
+	if e := l.compose(ctx, composePath, "floatlab-system", "rm", "-f"); e != nil {
+		return e
+	}
+	for _, ds := range s.Datasets {
+		guid, e := l.run(ctx, "zfs", "get", "-H", "-o", "value", "guid", ds.Name+"@"+s.Snapshot)
+		if e != nil || strings.TrimSpace(guid) == "" {
+			return fmt.Errorf("rollback snapshot unavailable: %s", ds.Name)
+		}
+	}
+	for i := len(s.Datasets) - 1; i >= 0; i-- {
+		ds := s.Datasets[i]
+		mounted, e := l.run(ctx, "zfs", "get", "-H", "-o", "value", "mounted", ds.Name)
+		if e != nil {
+			return e
+		}
+		switch mounted {
+		case "yes":
+			if e = l.verifyMountedDataset(ctx, ds); e != nil {
+				return e
+			}
+			if _, e = l.run(ctx, "zfs", "unmount", ds.Name); e != nil {
+				return e
+			}
+		case "no":
+		default:
+			return fmt.Errorf("unknown mount state for %s", ds.Name)
+		}
+	}
+	for _, ds := range s.Datasets {
+		mounted, e := l.run(ctx, "zfs", "get", "-H", "-o", "value", "mounted", ds.Name)
+		if e != nil {
+			return e
+		}
+		if mounted != "no" {
+			return fmt.Errorf("management dataset %s remains mounted before rollback", ds.Name)
+		}
+	}
+	// Plain rollback refuses unrelated newer snapshots and clones; never use -r/-R.
+	for i := len(s.Datasets) - 1; i >= 0; i-- {
+		if _, e := l.run(ctx, "zfs", "rollback", s.Datasets[i].Name+"@"+s.Snapshot); e != nil {
+			return e
+		}
+	}
+	for _, ds := range s.Datasets {
+		mounted, e := l.run(ctx, "zfs", "get", "-H", "-o", "value", "mounted", ds.Name)
+		if e != nil {
+			return e
+		}
+		if mounted == "no" {
+			if _, e = l.run(ctx, "zfs", "mount", ds.Name); e != nil {
+				return e
+			}
+		} else if mounted != "yes" {
+			return fmt.Errorf("unknown mount state for %s", ds.Name)
+		}
+	}
+	return nil
+}
+
+func (l *Linux) verifyDatasetProperties(ctx context.Context, datasets []Dataset) error {
+	for _, ds := range datasets {
+		raw, e := l.run(ctx, "zfs", "get", "-H", "-o", "property,value", "mountpoint,canmount", ds.Name)
+		if e != nil {
+			return e
+		}
+		props := map[string]string{}
+		for _, line := range strings.Split(raw, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) != 2 {
+				return fmt.Errorf("invalid management mount properties")
+			}
+			props[fields[0]] = fields[1]
+		}
+		if props["mountpoint"] != "/"+ds.Name || props["canmount"] != "on" {
+			return fmt.Errorf("management dataset %s must use mountpoint /%s and canmount=on", ds.Name, ds.Name)
+		}
+	}
+	return nil
+}
+func (l *Linux) verifyMountedDatasets(ctx context.Context, datasets []Dataset) error {
+	if len(datasets) == 0 {
+		return fmt.Errorf("management dataset inventory missing")
+	}
+	if e := l.verifyDatasetProperties(ctx, datasets); e != nil {
+		return e
+	}
+	for _, ds := range datasets {
+		if e := l.verifyMountedDataset(ctx, ds); e != nil {
+			return e
+		}
+	}
+	return nil
+}
+func (l *Linux) verifyMountedDataset(ctx context.Context, ds Dataset) error {
+	raw, e := l.run(ctx, "findmnt", "-n", "-o", "SOURCE,FSTYPE", "--mountpoint", "/"+ds.Name)
+	if e != nil {
+		return e
+	}
+	fields := strings.Fields(raw)
+	if len(fields) != 2 || fields[0] != ds.Name || fields[1] != "zfs" {
+		return fmt.Errorf("management bind path /%s is not mounted from its expected ZFS dataset", ds.Name)
+	}
+	return nil
+}
+func verifyManagementBinds(doc map[string]any) error {
+	for name, target := range map[string]string{"rqlite": "/rqlite/file", "victoria-metrics": "/victoria-metrics-data", "victoria-logs": "/victoria-logs-data", "floatlab-control": "/var/lib/floatlab/raft"} {
+		dataset := name
+		if name == "floatlab-control" {
+			dataset = "raft"
+		}
+		expected := "/" + managementDataset + "/" + dataset
+		found := false
+		volumes, ok := services(doc)[name]["volumes"].([]any)
+		if !ok {
+			return fmt.Errorf("management service %s has no persistent state bind", name)
+		}
+		for _, volume := range volumes {
+			var source, destination string
+			switch v := volume.(type) {
+			case string:
+				parts := strings.Split(v, ":")
+				if len(parts) >= 2 {
+					source, destination = parts[0], parts[1]
+				}
+			case map[string]any:
+				source, _ = v["source"].(string)
+				destination, _ = v["target"].(string)
+			}
+			if destination == target {
+				if source != expected {
+					return fmt.Errorf("management service %s state must bind %s", name, expected)
+				}
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("management service %s state bind missing", name)
+		}
+	}
+	return nil
 }
 func (l *Linux) Authorize(ctx context.Context, s *Status) error {
 	if !s.Authorized {

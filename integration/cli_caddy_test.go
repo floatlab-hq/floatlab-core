@@ -110,10 +110,31 @@ func TestCLICaddy(t *testing.T) {
 	prefix := netip.MustParsePrefix(subnet)
 	startIP := prefix.Addr().Next().Next()
 	endIP := startIP.Next().Next()
+	bridge, err := guestCommand(root, "if ! ip link show dev floatlab-lan >/dev/null 2>&1; then ip link add floatlab-lan type bridge; ip link set floatlab-lan up; echo created; fi")
+	if err != nil {
+		t.Fatalf("prepare VM bridge: %v", err)
+	}
+	if strings.Contains(bridge, "created") {
+		t.Cleanup(func() {
+			if _, err := guestCommand(root, "ip link delete floatlab-lan"); err != nil {
+				t.Errorf("cleanup test bridge: %v", err)
+			}
+		})
+	}
+	// Pools must belong to a node and match one of its actual LAN subnets.
+	lanAddress := prefix.Addr().Next().String() + "/24"
+	if out, err := guestCommand(root, "ip address add "+lanAddress+" dev floatlab-lan"); err != nil {
+		t.Fatalf("add test LAN address: %s %v", out, err)
+	}
+	t.Cleanup(func() {
+		if _, err := guestCommand(root, "ip address del "+lanAddress+" dev floatlab-lan"); err != nil {
+			t.Errorf("remove test LAN address: %v", err)
+		}
+	})
 	var pool struct {
 		ID string `json:"id"`
 	}
-	poolBody := mustJSON(t, map[string]any{"name": poolName, "cidr": subnet, "start_ip": startIP.String(), "end_ip": endIP.String()})
+	poolBody := mustJSON(t, map[string]any{"name": poolName, "cidr": subnet, "start_ip": startIP.String(), "end_ip": endIP.String(), "node_ids": []string{nodes[0].ID}})
 	if err := c.doJSON("POST", "/api/v1/settings/network-pools", c.token, "application/json", bytes.NewReader(poolBody), &pool, name+"-pool-create"); err != nil {
 		t.Fatal(err)
 	}
@@ -128,19 +149,6 @@ func TestCLICaddy(t *testing.T) {
 			t.Errorf("cleanup pool: %v", err)
 		}
 	})
-	// The published-port path requires this appliance bridge. Only remove it if
-	// this test created it; never modify an existing bridge.
-	bridge, err := guestCommand(root, "if ! ip link show dev floatlab-lan >/dev/null 2>&1; then ip link add floatlab-lan type bridge; ip link set floatlab-lan up; echo created; fi")
-	if err != nil {
-		t.Fatalf("prepare VM bridge: %v", err)
-	}
-	if strings.Contains(bridge, "created") {
-		t.Cleanup(func() {
-			if _, err := guestCommand(root, "ip link delete floatlab-lan"); err != nil {
-				t.Errorf("cleanup test bridge: %v", err)
-			}
-		})
-	}
 	stackID := ""
 	t.Cleanup(func() {
 		if stackID == "" {

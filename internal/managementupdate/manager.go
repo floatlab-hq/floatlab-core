@@ -261,6 +261,7 @@ func (m *Manager) rollback(ctx context.Context, s *Status) error {
 	}
 	s.State = "rolled_back"
 	s.Phase = "rolled_back"
+	s.RollbackError = ""
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.save(s)
@@ -300,6 +301,7 @@ func (m *Manager) Recover(ctx context.Context) error {
 		if s.State == "recovering" {
 			s.State = "rolled_back"
 			s.Phase = "rolled_back"
+			s.RollbackError = ""
 		} else {
 			s.State = "succeeded"
 			s.Phase = "committed"
@@ -579,6 +581,9 @@ func (m *Manager) StartCheckpointTrial(ctx context.Context, id string) error {
 	l, ok := m.Backend.(*Linux)
 	if !ok {
 		return fmt.Errorf("system backend required")
+	}
+	if e = l.verifyMountedDatasets(ctx, s.Datasets); e != nil {
+		return e
 	}
 	b, e := l.noRestart(s.PreviousCompose)
 	if e != nil {

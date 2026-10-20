@@ -48,6 +48,12 @@ func runUpdateBackground(ctx context.Context, start func(context.Context)) {
 	preflight := os.Getenv("FLOATLAB_PREFLIGHT") == "true"
 	var cancel context.CancelFunc
 	var done chan struct{}
+	launch := func() (context.CancelFunc, chan struct{}) {
+		background, stop := context.WithCancel(ctx)
+		finished := make(chan struct{})
+		go func() { defer close(finished); start(background) }()
+		return stop, finished
+	}
 	defer func() {
 		if cancel != nil {
 			cancel()
@@ -82,10 +88,7 @@ func runUpdateBackground(ctx context.Context, start func(context.Context)) {
 			}
 		}
 		if !blocked && cancel == nil {
-			var background context.Context
-			background, cancel = context.WithCancel(ctx)
-			done = make(chan struct{})
-			go func() { defer close(done); start(background) }()
+			cancel, done = launch()
 		}
 		select {
 		case <-ctx.Done():

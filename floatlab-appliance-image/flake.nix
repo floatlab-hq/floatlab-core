@@ -239,7 +239,10 @@
            assert cfg.systemd.services."floatlab-installer-console@".serviceConfig.TimeoutStopSec == "infinity";
            assert !(builtins.hasAttr "floatlab-install-worker" cfg.systemd.services);
            assert builtins.elem "--interface=floatlab-lan:routable" cfg.systemd.network.wait-online.extraArgs;
-           pkgs.runCommand "floatlab-installer-boot-config" {} "touch $out";
+           pkgs.runCommand "floatlab-installer-boot-config" {} ''
+             grep -F '${pkgs.nftables}/bin' ${installed.systemd.services.floatlab-core-stack.serviceConfig.ExecStart} >/dev/null
+             touch "$out"
+           '';
       };
 
       devShells.${system}.default = pkgs.mkShell {

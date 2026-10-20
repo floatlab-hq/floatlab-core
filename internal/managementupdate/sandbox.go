@@ -115,7 +115,7 @@ func (l *Linux) Preflight(ctx context.Context, s *Status) (result error) {
 	_, port, _ := net.SplitHostPort(probe.Addr().String())
 	hostProbe := net.JoinHostPort(gateway, port)
 	// Filter before Docker's own accept rules. Internal peers are allowed, host and all other networks are denied.
-	rules := fmt.Sprintf("table inet %s { chain input { type filter hook input priority -200; policy accept; iifname %q drop; } chain forward { type filter hook forward priority -200; policy accept; iifname %q oifname != %q drop; } }\n", table, bridge, bridge, bridge)
+	rules := sandboxFirewallRules(table, bridge)
 	rulesPath := filepath.Join(directory, "isolation.nft")
 	if e = update.WriteFile(rulesPath, []byte(rules), 0600); e != nil {
 		return e
@@ -126,32 +126,7 @@ func (l *Linux) Preflight(ctx context.Context, s *Status) (result error) {
 	if _, e = l.run(ctx, "nft", "list", "table", "inet", table); e != nil {
 		return e
 	}
-	volumes := func(name, target string) []any {
-		return []any{map[string]any{"type": "bind", "source": "/" + root + "/" + name, "target": target}}
-	}
-	service := func(image string) map[string]any {
-		return map[string]any{"image": image, "restart": "no", "networks": []string{"sandbox"}, "dns": []string{"127.0.0.1"}, "cap_drop": []string{"ALL"}, "security_opt": []string{"no-new-privileges:true"}, "pids_limit": 256, "mem_limit": "1g", "cpus": 1, "sysctls": map[string]string{"net.ipv6.conf.all.disable_ipv6": "1"}}
-	}
-	ss := map[string]any{}
-	rq := service(s.Manifest.Images["rqlite"])
-	rq["command"] = []string{"-node-id=" + identity.NodeID, "-raft-addr=rqlite:4002", "-raft-adv-addr=rqlite:4002"}
-	rq["volumes"] = volumes("rqlite", "/rqlite/file")
-	ss["rqlite"] = rq
-	vm := service(s.Manifest.Images["victoria-metrics"])
-	vm["command"] = []string{"-storageDataPath=/victoria-metrics-data", "-retentionPeriod=90d"}
-	vm["volumes"] = volumes("victoria-metrics", "/victoria-metrics-data")
-	ss["victoria-metrics"] = vm
-	vl := service(s.Manifest.Images["victoria-logs"])
-	vl["command"] = []string{"-storageDataPath=/victoria-logs-data", "-retentionPeriod=30d"}
-	vl["volumes"] = volumes("victoria-logs", "/victoria-logs-data")
-	ss["victoria-logs"] = vl
-	control := service(s.Manifest.Images["floatlab-control"])
-	control["user"] = "0:0"
-	control["command"] = []string{"--preflight", "--listen=:8080", "--rqlite-url=http://rqlite:4001", "--raft-id=" + identity.NodeID, "--raft-bind=0.0.0.0:7000", "--raft-advertise=floatlab-control:7000", "--raft-data=/var/lib/floatlab/raft", "--vlogs-url=http://victoria-logs:9428", "--vmetrics-url=http://victoria-metrics:8428", "--host-node-id=" + identity.NodeID, "--host-socket=/run/preflight/hostd.sock"}
-	control["environment"] = map[string]string{"FLOATLAB_APPLIANCE_CONFIG": "/config/appliance.json", "FLOATLAB_UPDATE_RELEASE": s.TargetRelease}
-	control["volumes"] = append(volumes("raft", "/var/lib/floatlab/raft"), map[string]any{"type": "bind", "source": identityPath, "target": "/config/appliance.json", "read_only": true}, map[string]any{"type": "bind", "source": "/run/floatlab/preflight", "target": "/run/preflight", "read_only": true})
-	ss["floatlab-control"] = control
-	doc := map[string]any{"services": ss, "networks": map[string]any{"sandbox": map[string]any{"external": true, "name": network}}}
+	doc := sandboxCompose(s, root, identityPath, identity.NodeID, network)
 	b, e = yaml.Marshal(doc)
 	if e != nil {
 		return e
@@ -171,6 +146,8 @@ func (l *Linux) Preflight(ctx context.Context, s *Status) (result error) {
 				if e == nil {
 					return nil
 				}
+			} else if e == nil {
+				e = fmt.Errorf("candidate control container is not running")
 			}
 			select {
 			case <-ctx.Done():
@@ -182,10 +159,27 @@ func (l *Linux) Preflight(ctx context.Context, s *Status) (result error) {
 	if e = runTests("write"); e != nil {
 		return e
 	}
-	if e = l.compose(ctx, path, project, "restart", "--timeout", "30"); e != nil {
+	if e = l.compose(ctx, path, project, "stop", "--timeout", "30"); e != nil {
+		return e
+	}
+	if e = l.compose(ctx, path, project, "up", "-d", "--pull", "never"); e != nil {
 		return e
 	}
 	return runTests("verify")
+}
+
+func sandboxFirewallRules(table, bridge string) string {
+	return fmt.Sprintf(`table inet %s {
+ chain input {
+  type filter hook input priority -200; policy accept;
+  iifname %q drop
+ }
+ chain forward {
+  type filter hook forward priority -200; policy accept;
+  iifname %q oifname != %q drop
+ }
+}
+`, table, bridge, bridge, bridge)
 }
 
 func checkSandboxMemory(meminfo string) error {
@@ -203,4 +197,35 @@ func checkSandboxMemory(meminfo string) error {
 		}
 	}
 	return fmt.Errorf("MemAvailable unavailable; refusing to risk production memory")
+}
+
+func sandboxCompose(s *Status, root, identityPath, nodeID, network string) map[string]any {
+	volumes := func(name, target string) []any {
+		return []any{map[string]any{"type": "bind", "source": "/" + root + "/" + name, "target": target}}
+	}
+	service := func(image string) map[string]any {
+		return map[string]any{"image": image, "restart": "no", "networks": []string{"sandbox"}, "dns": []string{"127.0.0.1"}, "cap_drop": []string{"ALL"}, "security_opt": []string{"no-new-privileges:true"}, "pids_limit": 256, "mem_limit": "1g", "cpus": 1, "sysctls": map[string]string{"net.ipv6.conf.all.disable_ipv6": "1"}}
+	}
+	ss := map[string]any{}
+	rq := service(s.Manifest.Images["rqlite"])
+	rq["command"] = []string{"-node-id=" + nodeID, "-raft-addr=rqlite:4002", "-raft-adv-addr=rqlite:4002"}
+	rq["volumes"] = volumes("rqlite", "/rqlite/file")
+	rq["healthcheck"] = map[string]any{"test": []string{"CMD-SHELL", "wget -qO- http://localhost:4001/readyz"}, "interval": "2s", "timeout": "5s", "retries": 60}
+	ss["rqlite"] = rq
+	vm := service(s.Manifest.Images["victoria-metrics"])
+	vm["command"] = []string{"-storageDataPath=/victoria-metrics-data", "-retentionPeriod=90d"}
+	vm["volumes"] = volumes("victoria-metrics", "/victoria-metrics-data")
+	ss["victoria-metrics"] = vm
+	vl := service(s.Manifest.Images["victoria-logs"])
+	vl["command"] = []string{"-storageDataPath=/victoria-logs-data", "-retentionPeriod=30d"}
+	vl["volumes"] = volumes("victoria-logs", "/victoria-logs-data")
+	ss["victoria-logs"] = vl
+	control := service(s.Manifest.Images["floatlab-control"])
+	control["user"] = "0:0"
+	control["depends_on"] = map[string]any{"rqlite": map[string]string{"condition": "service_healthy"}, "victoria-metrics": map[string]string{"condition": "service_started"}, "victoria-logs": map[string]string{"condition": "service_started"}}
+	control["command"] = []string{"--preflight", "--listen=:8080", "--rqlite-url=http://rqlite:4001", "--raft-id=" + nodeID, "--raft-bind=0.0.0.0:7000", "--raft-advertise=floatlab-control:7000", "--raft-data=/var/lib/floatlab/raft", "--vlogs-url=http://victoria-logs:9428", "--vmetrics-url=http://victoria-metrics:8428", "--host-node-id=" + nodeID, "--host-socket=/run/preflight/hostd.sock"}
+	control["environment"] = map[string]string{"FLOATLAB_APPLIANCE_CONFIG": "/config/appliance.json", "FLOATLAB_UPDATE_RELEASE": s.TargetRelease}
+	control["volumes"] = append(volumes("raft", "/var/lib/floatlab/raft"), map[string]any{"type": "bind", "source": identityPath, "target": "/config/appliance.json", "read_only": true}, map[string]any{"type": "bind", "source": "/run/floatlab/preflight", "target": "/run/preflight", "read_only": true})
+	ss["floatlab-control"] = control
+	return map[string]any{"services": ss, "networks": map[string]any{"sandbox": map[string]any{"external": true, "name": network}}}
 }

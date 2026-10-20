@@ -332,6 +332,14 @@ An existing **dedicated test appliance** can be selected with `API_URL` and `VM_
 
 Coverage is measured by management HTTP method/path, using executed scenarios that pass their assertions, documented response statuses, and JSON contracts. The full suite fails if a required scenario skips or an endpoint lacks qualifying evidence. Real multi-node replication, failover, failback, abort and step-history success are reported as deferred; their single-node safety rejections are exercised. Ordinary `go test` skips VM tests and does **not** establish complete endpoint coverage.
 
-The suite exercises actual workload networking, data persistence, snapshot recovery of data and Compose, failed health-check upgrade rollback, dataset rollback with newer snapshots, independent SSE subscribers, alert ingestion, notification state changes, and service restart recovery. Fast SQL integration and migration tests use Python 3's SQLite behind the rqlite HTTP protocol; appliance tests use real rqlite.
+The suite exercises actual workload networking, data persistence, snapshot recovery of data and Compose, failed health-check upgrade rollback, dataset rollback with newer snapshots, independent SSE subscribers, alert ingestion, notification state changes, and service restart recovery. It also tests management clone preflight, production activation, snapshot rollback, and hostd recovery after interrupted updates on an 8 GiB VM. Fast SQL integration and migration tests use Python 3's SQLite behind the rqlite HTTP protocol; appliance tests use real rqlite.
+
+Run installed OS upgrade acceptance separately:
+
+```bash
+FLOATLAB_HOST_UPDATE_INTEGRATION=1 go test -run '^TestHostUpdateAppliance$' -count=1 -timeout 120m -v ./integration
+```
+
+This builds local source and candidate payloads, installs a disposable UEFI libvirt VM, and tests trial boot, fallback, recovery, and commitment. Only artifact distribution uses local fixtures; ZFS, Docker, firmware, and the boot guard are real. Passing these tests does not qualify a different published Docker or rqlite transition, or physical watchdog behavior.
 
 Snapshot recovery is now `POST /api/v1/stacks/{id}/snapshots/{snapshotId}/restore`. `POST /api/v1/stacks/{id}/restore` performs failback to the primary. Clients of the old snapshot recovery path must migrate. Management requests require an administrator token, except login, public health routes, and the internal metrics webhook; deployments must restrict webhook ingress to trusted alert producers.

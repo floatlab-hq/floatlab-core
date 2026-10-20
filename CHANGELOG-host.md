@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.2
+
+- Add hostd-coordinated management upgrades with isolated recursive ZFS clone self-tests, restricted read-only IPC, durable recovery, and offline snapshot rollback.
+- Stage verified OS releases on ZFS, boot one-shot UEFI trials with an independent readiness/heartbeat guard, and require explicit commitment before changing the permanent boot.
+- Preserve workload datasets and Docker restart policies through recovery; clean only updater-owned obsolete datasets and downloads.
+- Establish update recovery protocol 1. Older releases without this protocol require installing an update-capable baseline; Docker engine transitions remain disabled until individually qualified. Physical watchdog behavior has not been qualified.
+
 ## 0.1.1
 
 - Publish a versioned host payload for the first offline installer release.

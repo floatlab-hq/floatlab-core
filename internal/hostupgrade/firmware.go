@@ -14,7 +14,7 @@ import (
 	"github.com/floatlab/floatlab-core/internal/update"
 )
 
-var bootEntry = regexp.MustCompile(`(?mi)^Boot([0-9A-F]{4})\*?\s+FloatLab Trial\s+.*File\(\\EFI\\FloatLab\\TRIAL\.EFI\)`)
+var bootEntry = regexp.MustCompile(`(?mi)^Boot([0-9A-F]{4})\*?[\t ]+FloatLab Trial[\t ]+HD\(1,GPT,([0-9a-f-]{36}),[^)\r\n]*\)/(?:File\(\\EFI\\FloatLab\\TRIAL\.EFI\)|\\EFI\\FloatLab\\TRIAL\.EFI)[\t ]*$`)
 
 func (l Linux) Arm(ctx context.Context, s Status) error {
 	var installation installer.Operation
@@ -81,7 +81,7 @@ func (l Linux) Arm(ctx context.Context, s Status) error {
 	for _, disk := range installation.Disks {
 		verified := ""
 		for _, entry := range matches {
-			if strings.Contains(strings.ToLower(entry[0]), strings.ToLower(disk.PartitionIDs[0])) {
+			if strings.EqualFold(entry[2], disk.PartitionIDs[0]) {
 				verified = entry[1]
 			}
 		}
@@ -111,7 +111,7 @@ func (l Linux) ensureTrialEntry(ctx context.Context, disk, partitionID string) (
 	}
 	find := func(text string) string {
 		for _, entry := range bootEntry.FindAllStringSubmatch(text, -1) {
-			if strings.Contains(strings.ToLower(entry[0]), strings.ToLower(partitionID)) {
+			if strings.EqualFold(entry[2], partitionID) {
 				return entry[1]
 			}
 		}

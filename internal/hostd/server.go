@@ -86,10 +86,10 @@ func (s *Server) Run(ctx context.Context) error {
 			case <-time.After(20 * time.Millisecond):
 			}
 		}
-		if err := hostUpdates.Recover(ctx); err != nil {
+		if err := waitForUpdateRecovery(ctx, hostUpdates.Recover); err != nil {
 			s.log.Error("host update recovery failed", zap.Error(err))
 		}
-		if err := s.updates.Recover(ctx); err != nil {
+		if err := waitForUpdateRecovery(ctx, s.updates.Recover); err != nil {
 			s.log.Error("management update recovery failed", zap.Error(err))
 		}
 		if err := s.dispatcher.network.Initialize(ctx); err != nil {

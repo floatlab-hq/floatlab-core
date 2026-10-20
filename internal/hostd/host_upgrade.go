@@ -4,11 +4,31 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"syscall"
+	"time"
 
 	"github.com/floatlab/floatlab-core/internal/hostupgrade"
 	"github.com/floatlab/floatlab-core/internal/managementupdate"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
 )
+
+// Core startup may be reconciling the same journal; supervision must follow its completion.
+func waitForUpdateRecovery(ctx context.Context, recover func(context.Context) error) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := recover(ctx)
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
 
 func NewHostUpdateCoordinator(management *managementupdate.Manager) *hostupgrade.Manager {
 	m := hostupgrade.NewDefault()

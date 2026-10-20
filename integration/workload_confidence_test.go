@@ -52,6 +52,8 @@ func TestWorkloadConfidence(t *testing.T) {
 		{"documented-management", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertManagementContracts() }},
 		{"alert-evaluator", TestAlertEvaluator},
 		{"persistence-recovery-rollback", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertRecoveryWorkload() }},
+		{"network-settings", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertHostNetworkTransactions() }},
+		{"management-update", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertManagementUpdateAppliance() }},
 	} {
 		if !coverage.scenarioTest(t, scenario.name, func(child *testing.T) {
 			defer diagnostics(child) // Capture workloads before owned-resource cleanup runs.
