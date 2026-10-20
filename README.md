@@ -140,6 +140,44 @@ and PR behavior plus Compose merging. After building the image,
 reload and restart persistence using disposable containers and volumes, with no
 appliance mounts or published ports.
 
+## Appliance updates
+
+Management and host updates are coordinated by the local host daemon. From the
+CLI or web command palette, select a node and an immutable release:
+
+```text
+update management releases my-node
+update management start my-node manage-v1.2.3
+update management status my-node
+update host releases my-node
+update host prepare my-node host-v1.2.3
+update host status my-node
+update host activate my-node OPERATION_ID
+update host commit my-node OPERATION_ID
+```
+
+Management updates first test an isolated clone, then stop production, take a
+fresh rollback snapshot, and upgrade its existing datasets. Failure restores
+the snapshot and previous services. Preflight currently requires 4.5 GiB of
+available memory for four capped test services and host headroom. The API can disconnect during maintenance;
+hostd continues the transaction. Host activation reboots the appliance. An OS
+trial requires explicit commitment; rebooting an uncommitted trial returns to
+the previous OS and restores its management checkpoint.
+
+Use `update management|host rollback my-node OPERATION_ID` for recovery and
+`update management|host cleanup my-node OPERATION_ID` for supported cleanup.
+Rollback discards post-checkpoint management state and telemetry; it does not
+undo changes already made to workloads. A root host recovery command is also
+available through `floatlab-hostd update --help` when the API is unavailable.
+
+These paths require an update-capable baseline. Host activation additionally
+requires a qualified source/target Docker transition in its release metadata;
+unqualified transitions are rejected. Real appliance boot, isolation, and
+rollback acceptance remains required before enabling a release for production.
+See the [management update plan](MANAGEMENT_UPDATE_PLAN.md) and
+[host/OS update plan](HOST_OS_UPDATE_PLAN.md) for recovery rules and acceptance
+tests.
+
 ## Development VM
 
 The repository's Nix development shell provides the VM tooling. Host libvirt must be installed, running, and accessible to your user.

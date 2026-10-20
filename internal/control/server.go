@@ -92,6 +92,7 @@ func (s *Server) buildRouter() *chi.Mux {
 	r.Use(requestLogger(s.log))
 	r.Use(pangolinIdentity)
 	r.Use(chimiddleware.Recoverer)
+	r.Use(updateMutationFence)
 	r.Get("/swagger", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/swagger/", http.StatusMovedPermanently)
 	})
@@ -106,6 +107,7 @@ func (s *Server) buildRouter() *chi.Mux {
 		registerFailoverRoutes(r, s)
 		registerNetworkRoutes(r, s)
 		registerHostNetworkRoutes(r, s)
+		registerUpdateRoutes(r, s)
 		r.Group(func(r chi.Router) { r.Use(s.requireAdminJWT); registerLogRoutes(r, s) })
 		r.Post("/stats/webhook", s.handleStatsWebhook)
 		r.Group(func(r chi.Router) { r.Use(s.requireAdminJWT); registerStatsRoutes(r, s) })
@@ -124,7 +126,7 @@ func (s *Server) buildRouter() *chi.Mux {
 func (s *Server) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	go s.runAlertEvaluator(ctx)
+	go s.runUpdateBackground(ctx)
 	// Bridge FSM events → broker so SSE clients get independent channels.
 	go s.bridgeFSMToBroker()
 

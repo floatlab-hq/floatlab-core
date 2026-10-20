@@ -1,4 +1,4 @@
-import type { Container, ExecResult, FloatLabApi, HostNetworkApi, HostNetworkStatus, HostNetworkChange, NetworkPool, LogLine, Node, Stack, StackMetricSeries } from "./types";
+import type { Container, ExecResult, FloatLabApi, HostNetworkApi, HostNetworkStatus, HostNetworkChange, NetworkPool, LogLine, Node, Stack, StackMetricSeries, UpdateApi, UpdateRelease, UpdateStatus } from "./types";
 import type { DashboardApi, TokenResponse, RaftHealth, Notification, NodeStats, StorageStats } from "./types";
 
 export class ApiError extends Error {
@@ -16,7 +16,7 @@ export function normalizeApiUrl(url: string): string {
   return parsed.toString().replace(/\/$/, "");
 }
 
-export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNetworkApi & DashboardApi {
+export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNetworkApi & DashboardApi & UpdateApi {
   const baseUrl = normalizeApiUrl(options.baseUrl);
   const send = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
     const headers = new Headers(init.headers);
@@ -44,7 +44,11 @@ export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNe
   };
   const hostNetworkPath = (node: string) => `/nodes/${encodeURIComponent(node)}/settings/network`;
   const changePath = (node: string, change: string) => `${hostNetworkPath(node)}/changes/${encodeURIComponent(change)}`;
+  const updatePath = (node: string, component: string) => `/nodes/${encodeURIComponent(node)}/updates/${component}`;
   return {
+    listUpdateReleases: (node, component) => send<UpdateRelease[]>(`${updatePath(node, component)}/releases`),
+    getUpdateStatus: (node, component, operationId) => send<UpdateStatus | null>(`${updatePath(node, component)}/status${query({ operation_id: operationId })}`),
+    runUpdateAction: (node, component, action, request, key) => mutation<UpdateStatus>(`${updatePath(node, component)}/${action}`, "POST", key, request),
     createAuthToken: (credentials) => send<TokenResponse>("/auth/token", { method: "POST", body: JSON.stringify(credentials) }),
     getRaftHealth: () => send<RaftHealth>("/health/raft"),
     listNotifications: () => send<Notification[]>("/notifications?limit=50"),

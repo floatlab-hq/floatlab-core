@@ -4,6 +4,74 @@
  */
 
 export interface paths {
+    "/nodes/{id}/updates/{component}/releases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                component: "management" | "host";
+            };
+            cookie?: never;
+        };
+        /** List official immutable releases for a local appliance update */
+        get: operations["listUpdateReleases"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{id}/updates/{component}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                component: "management" | "host";
+            };
+            cookie?: never;
+        };
+        /** Read hostd's durable update status without querying rqlite */
+        get: operations["getUpdateStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{id}/updates/{component}/{action}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                component: "management" | "host";
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request a hostd-coordinated appliance update action
+         * @description Management supports start, rollback and cleanup. Host supports prepare,
+         *     activate, commit, rollback and cleanup. Start/prepare require a matching
+         *     immutable manage-v or host-v release tag. Host activation reboots the
+         *     appliance; commitment is explicit. Rollback discards post-checkpoint
+         *     management state but does not undo workload changes. During maintenance
+         *     the management API may disconnect; hostd continues the transaction.
+         */
+        post: operations["runUpdateAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/token": {
         parameters: {
             query?: never;
@@ -1535,6 +1603,25 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        UpdateRelease: {
+            tag_name: string;
+            name?: string;
+            published_at?: string;
+            prerelease?: boolean;
+        };
+        UpdateStatus: {
+            operation_id: string;
+            state: string;
+            phase: string;
+            source_release?: string;
+            target_release?: string;
+            error?: string;
+            rollback_error?: string;
+            /** @description Whether the running kernel reports an active watchdog; this does not establish hardware reset qualification. */
+            watchdog?: boolean;
+            started_at?: string;
+            updated_at?: string;
+        } | null;
         LoginRequest: {
             username: string;
             /** Format: password */
@@ -2538,6 +2625,159 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listUpdateReleases: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                component: "management" | "host";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Available releases; discovery does not download or activate them. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateRelease"][];
+                };
+            };
+            /** @description Administrator authentication required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Host daemon or official release source unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getUpdateStatus: {
+        parameters: {
+            query?: {
+                operation_id?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+                component: "management" | "host";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Selected or latest transaction; null when none exists. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateStatus"];
+                };
+            };
+            /** @description Administrator authentication required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Operation not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Host daemon unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    runUpdateAction: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                id: string;
+                component: "management" | "host";
+                action: "start" | "prepare" | "activate" | "commit" | "rollback" | "cleanup";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Official immutable release tag for start/prepare. */
+                    release?: string;
+                    /** @description Existing transaction for subsequent actions; defaults to the idempotency key on start/prepare. */
+                    operation_id?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Accepted or previously recorded idempotent result. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateStatus"];
+                };
+            };
+            /** @description Invalid payload */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Administrator authentication required. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown component */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Another update is active or the transaction is not ready for this action. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Host daemon or required recovery facility unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     createAuthToken: {
         parameters: {
             query?: never;

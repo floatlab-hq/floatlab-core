@@ -80,6 +80,21 @@ def manage_manifest(version, commit, ghcr, dockerhub, directory):
     value = {"version": version, "git_commit": commit, "architecture": "amd64",
              "required_host": read(ROOT / "pkg/release/compatibility.json"),
              "image_id": ids[0], "registries": registries}
+    compatibility = read(ROOT / "releases/rqlite-compatibility.json")
+    if not compatibility["rqlite_sources"] or not all(
+            VERSION.fullmatch(v) for v in [compatibility["rqlite_version"], *compatibility["rqlite_sources"]]):
+        raise ValueError("Explicit tested rqlite versions required")
+    images = {"floatlab-control": ghcr.rsplit(":", 1)[0] + "@" + registries["ghcr"]["digest"]}
+    for service, reference in read(LOCK)["sidecars"].items():
+        if "@" not in reference:
+            reference += "@" + registry_digest(reference)
+        if not DIGEST.fullmatch(reference.split("@", 1)[1]):
+            raise ValueError(f"Unpinned management sidecar: {service}")
+        images[service] = reference
+    rqlite_tag = images["rqlite"].split("@", 1)[0].rsplit(":", 1)[-1]
+    if rqlite_tag != compatibility["rqlite_version"]:
+        raise ValueError("rqlite compatibility policy does not match target image tag")
+    value.update(compatibility, images=images)
     write(Path(directory) / "manage-manifest.json", value)
 
 

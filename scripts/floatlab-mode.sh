@@ -2,8 +2,17 @@
 set -euo pipefail
 [ "$(id -u)" -eq 0 ] || { echo 'Run floatlab-mode as root on the appliance.' >&2; exit 1; }
 cd /floatlab/system
-exec 9>/run/floatlab-mode.lock
+install -d -m 0700 /floatlab/system/updates
+exec 9>/floatlab/system/updates/update.lock
 flock -n 9 || { echo 'Another mode change is in progress.' >&2; exit 1; }
+if [ "${1:-status}" != status ]; then
+  for journal in /floatlab/system/updates/{host,management}.json; do
+    if [ -f "$journal" ]; then
+      state=$(jq -r '.state // ""' "$journal")
+      case "$state" in ""|idle|succeeded|rolled_back|committed|recovered|failed) ;; *) echo "An update is pending: $state" >&2; exit 1;; esac
+    fi
+  done
+fi
 case "${1:-status}" in
     status)
         if [ -f etc/development ]; then echo dev; else echo production; fi

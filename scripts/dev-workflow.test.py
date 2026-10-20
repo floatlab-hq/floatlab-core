@@ -109,7 +109,7 @@ class DevWorkflow(unittest.TestCase):
         self.assertIn("FLOATLAB_APPLIANCE_CONFIG", control["environment"])
         self.assertNotIn("FLOATLAB_BOOTSTRAP_PASSWORD", control["environment"])
         mounts = {mount["target"]: mount["source"] for mount in control["volumes"]}
-        self.assertEqual(mounts["/var/lib/floatlab/raft"], "/floatlab/system/raft")
+        self.assertEqual(mounts["/var/lib/floatlab/raft"], "/floatlab/system/management/raft")
         self.assertEqual(mounts["/root"], "/floatlab/system/dev/home")
         editor = next(port for port in control["ports"] if port["target"] == 9090)
         self.assertEqual(editor["host_ip"], "127.0.0.1")

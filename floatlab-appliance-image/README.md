@@ -8,7 +8,7 @@ The live ISO keeps its compressed squashfs and ephemeral writable root. Installe
 
 Installation verifies and unpacks a native NixOS root archive once into `floatlab/os/{version}`, registers its Nix store, takes `@base`, and makes the version read-only. `floatlab/os/current` is a read-only clone of that snapshot and the pool's default `bootfs`. ZFSBootMenu reads its `/boot/vmlinuz` and `/boot/initramfs` directly. The installed initrd imports the pool without forcing, checks the pristine origin, destroys the previous unmounted `floatlab/os/live`, and recreates it directly from the same version snapshot before mounting it as `/`. Version datasets and `live` are hidden from the normal boot menu. Unexpected snapshots, dependent clones, or a mounted `live` stop boot into recovery rather than trigger recursive destruction.
 
-The pool uses `compatibility=openzfs-2.3-linux`, supported by both the bundled bootloader and appliance OpenZFS. Do not enable newer pool features without updating and validating the bootloader. Upgrade downloads, `next` trial boots, automatic commitment, timed recovery, and version garbage collection are deferred.
+The pool uses `compatibility=openzfs-2.3-linux`, supported by both the bundled bootloader and appliance OpenZFS. Do not enable newer pool features without updating and validating the bootloader. Hostd coordinates image staging, one-shot `next` boots, independent timed recovery, explicit commitment, and reference-safe cleanup. Activation requires an update-capable baseline and a release-qualified Docker upgrade/fallback pair; the qualification list is empty until appliance testing establishes support. See the [host/OS update plan](../HOST_OS_UPDATE_PLAN.md) and [management update plan](../MANAGEMENT_UPDATE_PLAN.md) for the transaction and acceptance requirements. Automatic OS commitment is intentionally unsupported.
 
 Both environments use the existing ordered systemd pipeline:
 
@@ -20,12 +20,14 @@ Both environments use the existing ordered systemd pipeline:
    - `floatlab/system/db`
    - `floatlab/system/metrics`
    - `floatlab/system/logs`
+   - `floatlab/system/updates` for durable recovery records
+   - `floatlab/system/management` and its rqlite, Raft, metrics, and logs children
 3. `floatlab-network-config.service` runs `floatlab-hostd network init` after dataset mounting.
 4. Hostd reconciles bridge/bond topology and static settings from `/floatlab/system/etc/network.toml`; systemd-networkd handles only DHCP on `floatlab-lan`.
 5. Docker starts with `/floatlab/system/docker` as its persistent data root.
 6. The bundled `docker-compose.yml` is copied only when the persistent copy is absent, and the image's locally built control-plane image is loaded into Docker.
-7. `floatlab-hostd.service` starts the native host daemon and creates its Unix socket.
-8. `floatlab-core-stack.service` starts rqlite, VictoriaMetrics, VictoriaLogs, and the control plane with `docker compose up -d`.
+7. `floatlab-hostd.service` starts the native host daemon, creates its Unix sockets, and reconciles pending update recovery. On installed trial boots, an independent recovery guard is armed before networking, Docker, and hostd.
+8. After update reconciliation authorizes startup, `floatlab-core-stack.service` starts rqlite, VictoriaMetrics, VictoriaLogs, and the control plane with `docker compose up -d`. Uncommitted updates keep Docker restart policies suppressed.
 9. Hostd forwards host, kernel, and Docker journal entries to VictoriaLogs over its loopback-only HTTP endpoint. It batches entries and advances a cursor in `/run/floatlab` only after successful delivery, retrying when VictoriaLogs is unavailable. Journal storage is ephemeral and capped at 256 MiB; retries can duplicate an acknowledged batch if checkpointing is interrupted.
 
 The production ISO shares the trimmed kernel and networking/storage support with the installed appliance, with separate initrds and root layouts. Docker, Compose and the bundled control-plane image live only in the installed OS archive, outside the live SquashFS. The development ISO retains its standalone appliance services.

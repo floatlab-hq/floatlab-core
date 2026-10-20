@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ApiError, type DashboardApi, type FloatLabApi, type Node, type Stack, type NodeStats, type StorageStats, type Notification, type RaftHealth, type LogLine } from '@floatlab/client'
+import { ApiError, type DashboardApi, type FloatLabApi, type Node, type Stack, type NodeStats, type StorageStats, type Notification, type RaftHealth, type LogLine, type UpdateApi } from '@floatlab/client'
 import { appItem, hostItem, labEvent } from '../../dashboard/live'
 import UiButton from '../UiButton.vue'
 import SplitView from '../SplitView.vue'
@@ -10,7 +10,9 @@ import HostDirectory from './HostDirectory.vue'
 import AppDirectory from './AppDirectory.vue'
 import LabEventLog from './LabEventLog.vue'
 import LiveHostDetail from './LiveHostDetail.vue'
-const props = defineProps<{ api: DashboardApi & FloatLabApi }>()
+import ApplianceUpdates from './ApplianceUpdates.vue'
+const props = defineProps<{ api: DashboardApi & FloatLabApi & Partial<UpdateApi> }>()
+const updateApi = computed(() => props.api.listUpdateReleases && props.api.getUpdateStatus && props.api.runUpdateAction ? props.api as UpdateApi : undefined)
 const emit = defineEmits<{ logout: [] }>()
 const nodes = ref<Node[]>([])
 const stacks = ref<Stack[]>([])
@@ -91,6 +93,7 @@ onBeforeUnmount(() => { active = false; clearInterval(timer); document.removeEve
       </div>
       <template #detail>
         <LiveHostDetail v-if="selectedNode" :key="selectedNode.id" :node="selectedNode" :apps="selectedApps" :storage="storage[selected]" :logs="logs[selected]" :loading="loading" @close="close" />
+        <ApplianceUpdates v-if="selectedNode && updateApi" :key="selectedNode.id + '-updates'" :api="updateApi" :node-id="selectedNode.id" />
       </template>
     </SplitView>
     <CommandConsole ref="commandConsole" :api="api" />

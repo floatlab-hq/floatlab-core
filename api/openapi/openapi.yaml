@@ -58,8 +58,16 @@ tags:
     description: VictoriaMetrics time-series metrics
   - name: storage
     description: ZFS pools, datasets, snapshots, replication
+  - name: updates
+    description: Hostd-coordinated management and OS updates
 
 paths:
+  /nodes/{id}/updates/{component}/releases:
+    $ref: './updates.yaml#/paths/~1nodes~1{id}~1updates~1{component}~1releases'
+  /nodes/{id}/updates/{component}/status:
+    $ref: './updates.yaml#/paths/~1nodes~1{id}~1updates~1{component}~1status'
+  /nodes/{id}/updates/{component}/{action}:
+    $ref: './updates.yaml#/paths/~1nodes~1{id}~1updates~1{component}~1{action}'
   /auth/token:
     $ref: './auth.yaml#/paths/~1auth~1token'
 

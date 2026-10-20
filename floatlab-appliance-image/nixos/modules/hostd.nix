@@ -1,5 +1,10 @@
 { config, floatlab-binaries, pkgs, ... }:
 {
+  # PID1 feeds supported watchdog hardware; the independent trial guard still owns readiness.
+  systemd.settings.Manager = {
+    RuntimeWatchdogSec = "30s";
+    RebootWatchdogSec = "2min";
+  };
   environment.systemPackages = [ (pkgs.writeShellApplication {
     name = "floatlab-installer-hostd";
     runtimeInputs = config.systemd.services.floatlab-hostd.path;
@@ -7,7 +12,7 @@
   }) ];
   systemd.services.floatlab-hostd = {
     description = "FloatLab host daemon";
-    path = with pkgs; [ coreutils docker inetutils iproute2 openssh zfs systemd ethtool ];
+    path = with pkgs; [ coreutils docker inetutils iproute2 openssh zfs systemd ethtool util-linux gnutar gzip nix efibootmgr floatlab-zbm-kcl nftables docker-compose ];
     wantedBy = [ "multi-user.target" ];
     requires = [ "floatlab-network-config.service" "floatlab-datasets.service" ];
     after = [ "floatlab-network-config.service" "floatlab-datasets.service" ];
@@ -25,6 +30,24 @@
       RuntimeDirectoryPreserve = "restart";
       EnvironmentFile = "-/floatlab/system/etc/hostd.env";
       RuntimeDirectoryMode = "0750";
+    };
+  };
+  # Independent from hostd and its network, Docker, and persistent-mount dependencies.
+  systemd.services.floatlab-boot-recovery = {
+    description = "Recover an uncommitted FloatLab OS boot";
+    wantedBy = [ "sysinit.target" ];
+    unitConfig.DefaultDependencies = false;
+    after = [ "local-fs.target" ];
+    before = [ "sysinit.target" "floatlab-datasets.service" "floatlab-network-config.service" "docker.service" "floatlab-hostd.service" ];
+    path = [ pkgs.systemd ];
+    serviceConfig = {
+      Type = "simple";
+      ExecStart = "${floatlab-binaries}/bin/floatlab-hostd boot-recovery";
+      RuntimeDirectory = "floatlab-boot-recovery";
+      RuntimeDirectoryMode = "0700";
+      RuntimeDirectoryPreserve = "yes";
+      Restart = "on-failure";
+      RestartSec = 1;
     };
   };
   systemd.paths.floatlab-hostd-dev = {

@@ -113,41 +113,7 @@ func installOS(stopCtx context.Context, runtimeDir, mediaDir string, p Payload, 
 		}
 		err = func() (err error) {
 			defer func() { err = errors.Join(err, run(ctx, "umount", image)) }()
-			archive := image + "/floatlab-root.tar.gz"
-			if err = copyVerifiedProgress(mediaDir+"/floatlab-root.tar.gz", archive, p.Files["floatlab-root.tar.gz"], progress); err != nil {
-				return err
-			}
-			if err = validateRootArchive(archive); err != nil {
-				return err
-			}
-			if err = step("tar", "--extract", "--gzip", "--file="+archive, "--directory="+image, "--numeric-owner", "--same-owner", "--same-permissions"); err != nil {
-				return err
-			}
-			if err = os.Remove(archive); err != nil {
-				return err
-			}
-			for _, path := range []string{p.Init, "/boot/vmlinuz", "/boot/initramfs", "/nix-path-registration"} {
-				if _, err = os.Stat(image + path); err != nil {
-					return fmt.Errorf("incomplete installed root: %w", err)
-				}
-			}
-			registration, err := os.Open(image + "/nix-path-registration")
-			if err != nil {
-				return err
-			}
-			defer registration.Close()
-			if err = stopCtx.Err(); err != nil {
-				return err
-			}
-			cmd := exec.CommandContext(ctx, "nix-store", "--store", "local?root="+image, "--load-db")
-			cmd.Stdin = registration
-			if out, e := cmd.CombinedOutput(); e != nil {
-				return fmt.Errorf("initialize installed Nix store: %w: %s", e, Diagnostic(out))
-			}
-			if err = credentials.WriteBytes(image+"/floatlab-manifest.json", manifest); err != nil {
-				return err
-			}
-			if err = credentials.WriteBytes(image+"/floatlab-host-id", []byte(a.HostID)); err != nil {
+			if err = PopulateOSRoot(ctx, image, mediaDir+"/floatlab-root.tar.gz", p, a.HostID, manifest, progress); err != nil {
 				return err
 			}
 			return step("zfs", "snapshot", base)
@@ -175,6 +141,9 @@ func installOS(stopCtx context.Context, runtimeDir, mediaDir string, p Payload, 
 	if err = step("zfs", "set", "readonly=on", version); err != nil {
 		return err
 	}
+	if err = step("zfs", "set", "org.floatlab:host-id="+a.HostID, "org.floatlab:version="+p.Version, "org.floatlab:init="+p.Init, version); err != nil {
+		return err
+	}
 	if _, e := Output(ctx, "zfs", "list", "-H", "-o", "name", "floatlab/os/current"); e != nil {
 		if err = step("zfs", "clone", "-o", "mountpoint=legacy", "-o", "canmount=noauto", "-o", "readonly=on", "-o", "org.zfsbootmenu:active=on", base, "floatlab/os/current"); err != nil {
 			return err
@@ -185,8 +154,51 @@ func installOS(stopCtx context.Context, runtimeDir, mediaDir string, p Payload, 
 			return fmt.Errorf("current OS belongs to another version; refusing replacement")
 		}
 	}
-	if err = step("zfs", "set", "org.zfsbootmenu:commandline=init="+p.Init+" console=ttyS0,115200n8 spl.spl_hostid=0x"+a.HostID+" floatlab.installed=1", "org.zfsbootmenu:rootprefix=root=zfs:", "floatlab/os/current"); err != nil {
+	if err = step("zfs", "set", "org.floatlab:host-id="+a.HostID, "org.floatlab:version="+p.Version, "org.floatlab:init="+p.Init, "org.floatlab:update=installer", "org.zfsbootmenu:commandline=init="+p.Init+" console=ttyS0,115200n8 spl.spl_hostid=0x"+a.HostID+" floatlab.installed=1", "org.zfsbootmenu:rootprefix=root=zfs:", "floatlab/os/current"); err != nil {
 		return err
 	}
 	return step("zpool", "set", "bootfs=floatlab/os/current", "floatlab")
+}
+
+// PopulateOSRoot verifies and populates a mounted, empty version dataset without changing boot selection.
+// Both installation and staged updates use the same archive and Nix-store trust boundary.
+func PopulateOSRoot(ctx context.Context, image, archiveSource string, p Payload, hostID string, manifest []byte, progress func(int)) (err error) {
+	archive := image + "/floatlab-root.tar.gz"
+	if err = copyVerifiedProgress(archiveSource, archive, p.Files["floatlab-root.tar.gz"], progress); err != nil {
+		return err
+	}
+	if err = validateRootArchive(archive); err != nil {
+		return err
+	}
+	if err = run(ctx, "tar", "--extract", "--gzip", "--file="+archive, "--directory="+image, "--numeric-owner", "--same-owner", "--same-permissions"); err != nil {
+		return err
+	}
+	if err = os.Remove(archive); err != nil {
+		return err
+	}
+	for _, path := range []string{p.Init, "/boot/vmlinuz", "/boot/initramfs", "/nix-path-registration"} {
+		if _, err = os.Stat(image + path); err != nil {
+			return fmt.Errorf("incomplete installed root: %w", err)
+		}
+	}
+	registration, err := os.Open(image + "/nix-path-registration")
+	if err != nil {
+		return err
+	}
+	defer registration.Close()
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "nix-store", "--store", "local?root="+image, "--load-db")
+	cmd.Stdin = registration
+	if out, e := cmd.CombinedOutput(); e != nil {
+		return fmt.Errorf("initialize installed Nix store: %w: %s", e, Diagnostic(out))
+	}
+	if err = credentials.WriteBytes(image+"/floatlab-manifest.json", manifest); err != nil {
+		return err
+	}
+	if err = credentials.WriteBytes(image+"/floatlab-host-id", []byte(hostID)); err != nil {
+		return err
+	}
+	return nil
 }

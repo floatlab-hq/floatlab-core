@@ -6,6 +6,15 @@ import { fixtureApi } from '../../dashboard/live-fixtures'
 enableAutoUnmount(afterEach)
 afterEach(() => vi.useRealTimers())
 describe('Live dashboard', () => {
+  it('shows appliance updates for a selected host when the API supports them', async () => {
+    const api = { ...fixtureApi(), listUpdateReleases: vi.fn().mockResolvedValue([]), getUpdateStatus: vi.fn().mockResolvedValue(null), runUpdateAction: vi.fn() }
+    const wrapper = mount(LiveDashboard, { props: { api } })
+    await flushPromises()
+    await wrapper.get('[aria-label="Inspect lab-alpha"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[aria-label="Appliance updates"]').exists()).toBe(true)
+    expect(api.getUpdateStatus).toHaveBeenCalledWith('node-1', 'management')
+  })
   it.each([false, true])('shows the development indicator only in dev mode (%s)', async devMode => {
     const api = fixtureApi()
     const health = await api.getRaftHealth()

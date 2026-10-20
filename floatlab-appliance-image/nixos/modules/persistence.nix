@@ -2,7 +2,7 @@
 let
   reconcile = pkgs.writeShellApplication {
     name = "floatlab-reconcile-datasets";
-    runtimeInputs = [ pkgs.zfs pkgs.coreutils pkgs.util-linux ];
+    runtimeInputs = [ pkgs.zfs pkgs.coreutils pkgs.util-linux pkgs.systemd ];
     text = ''
       set -euo pipefail
 
@@ -28,10 +28,28 @@ let
       ensure_dataset floatlab/system/db /floatlab/system/db -o compression=zstd
       ensure_dataset floatlab/system/metrics /floatlab/system/metrics -o compression=zstd
       ensure_dataset floatlab/system/logs /floatlab/system/logs -o compression=zstd
-      ensure_dataset floatlab/system/raft /floatlab/system/raft -o compression=zstd
-      ensure_dataset floatlab/system/rqlite /floatlab/system/rqlite -o compression=zstd
-      ensure_dataset floatlab/system/victoria-metrics /floatlab/system/victoria-metrics -o compression=zstd
-      ensure_dataset floatlab/system/victoria-logs /floatlab/system/victoria-logs -o compression=zstd
+      ensure_dataset floatlab/system/updates /floatlab/system/updates
+      ensure_dataset floatlab/system/management /floatlab/system/management
+      # Run before Docker so dataset adoption has no live database writers.
+      for name in rqlite raft victoria-metrics victoria-logs; do
+        old="floatlab/system/$name"
+        new="floatlab/system/management/$name"
+        if zfs list -H -o name "$old" >/dev/null 2>&1; then
+          if systemctl is-active --quiet docker.service; then
+            echo "Stop Docker before management dataset adoption" >&2; exit 1
+          fi
+          if zfs list -H -o name "$new" >/dev/null 2>&1; then
+            echo "Both old and new management datasets exist: $name" >&2; exit 1
+          fi
+          zfs rename "$old" "$new"
+        fi
+        ensure_dataset "$new" "/floatlab/system/management/$name" -o compression=zstd
+        # Old Compose containers can start safely during the one-time layout transition.
+        if [ ! -L "/floatlab/system/$name" ]; then
+          rmdir "/floatlab/system/$name" 2>/dev/null || { test ! -e "/floatlab/system/$name"; }
+          ln -s "management/$name" "/floatlab/system/$name"
+        fi
+      done
 
       mkdir -p \
         /floatlab/system/etc/systemd/network \

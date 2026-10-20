@@ -1,4 +1,4 @@
-{ pkgs, floatlab-development ? false, floatlab-dev-bundle ? null, ... }:
+{ pkgs, floatlab-binaries, floatlab-development ? false, floatlab-dev-bundle ? null, ... }:
 let
   devCompose = if floatlab-dev-bundle == null then null else pkgs.writeText "floatlab-dev-compose.yml" (
     builtins.replaceStrings
@@ -29,6 +29,12 @@ let
     text = ''
       set -euo pipefail
       ${seedCompose}/bin/floatlab-seed-core-stack
+      # Recovery runs before Compose can attach any management data writer.
+      ${floatlab-binaries}/bin/floatlab-hostd update-reconcile
+      if [ -e /floatlab/system/updates/management-blocked ]; then
+        state=$(jq -r '.state' /floatlab/system/updates/host.json)
+        case "$state" in trial|ready) exit 0 ;; *) exit 1 ;; esac
+      fi
       for _ in $(seq 1 30); do
         [ -S /run/floatlab/hostd.sock ] && break
         sleep 1
@@ -45,6 +51,9 @@ let
       composeArgs=(-f docker-compose.yml)
       if [ -f /floatlab/system/etc/development ]; then
         composeArgs+=(-f ${../../files/core-stack/docker-compose.dev.yml})
+      fi
+      if [ -f /floatlab/system/updates/restart-override.yml ]; then
+        composeArgs+=(-f /floatlab/system/updates/restart-override.yml)
       fi
       docker compose "''${composeArgs[@]}" up -d --pull never --remove-orphans
       # Do not report success merely because the management process is listening.
@@ -72,7 +81,7 @@ let
 in {
   environment.systemPackages = [ startStack (pkgs.writeShellApplication {
     name = "floatlab-mode";
-    runtimeInputs = [ pkgs.coreutils pkgs.util-linux pkgs.docker pkgs.systemd startStack ];
+    runtimeInputs = [ pkgs.coreutils pkgs.util-linux pkgs.docker pkgs.systemd pkgs.jq startStack ];
     text = builtins.readFile ../../../scripts/floatlab-mode.sh;
   }) ];
   systemd.services.floatlab-core-stack-seed = {

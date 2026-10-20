@@ -44,10 +44,12 @@ class LiveRoot(unittest.TestCase):
         shim.write_text(ZFS.format(python=sys.executable))
         shim.chmod(0o755)
         self.state = root / "state.json"
-        self.env = dict(os.environ, PATH=str(root) + ":" + os.environ["PATH"], ZFS_TEST_STATE=str(self.state))
+        self.cmdline = root / "cmdline"
+        self.cmdline.write_text("root=zfs:floatlab/os/current floatlab.installed=1 spl.spl_hostid=0x12345678 init=/nix/store/example/init")
+        self.env = dict(os.environ, FLOATLAB_CMDLINE_FILE=str(self.cmdline), PATH=str(root) + ":" + os.environ["PATH"], ZFS_TEST_STATE=str(self.state))
         self.data = {"commands": [], "datasets": {
-            "floatlab/os/current": {"origin": "floatlab/os/v1@base", "readonly": "on"},
-            "floatlab/os/v1": {"readonly": "on"},
+            "floatlab/os/current": {"origin": "floatlab/os/v1@base", "readonly": "on", "org.floatlab:host-id": "12345678", "org.floatlab:version": "v1", "org.floatlab:init": "/nix/store/example/init"},
+            "floatlab/os/v1": {"readonly": "on", "org.floatlab:host-id": "12345678"},
             "floatlab/os/v1@base": {},
             "floatlab/os/live": {"mounted": "no", "writes": ["dirty"]},
             "floatlab/system/etc": {"writes": ["persistent"]},
@@ -78,6 +80,28 @@ class LiveRoot(unittest.TestCase):
                 self.data["datasets"]["floatlab/os/live"]["mounted"] = mounted
                 self.boot(False)
                 self.assertFalse(any(c[0] == "destroy" for c in self.data["commands"]))
+
+    def test_selected_trial_uses_candidate_origin(self):
+        self.data["datasets"].update({"floatlab/os/next": {"origin": "floatlab/os/v2@base", "readonly": "on", "org.floatlab:host-id": "12345678", "org.floatlab:version": "v2", "org.floatlab:init": "/nix/store/example/init"}, "floatlab/os/v2": {"readonly": "on", "org.floatlab:host-id": "12345678"}, "floatlab/os/v2@base": {}})
+        self.cmdline.write_text("root=zfs:floatlab/os/next floatlab.trial=operation spl.spl_hostid=0x12345678 init=/nix/store/example/init")
+        self.boot()
+        self.assertEqual(self.data["datasets"]["floatlab/os/live"]["origin"], "floatlab/os/v2@base")
+
+    def test_missing_or_ambiguous_selected_root_fails_without_destruction(self):
+        for line in ["", "root=zfs:floatlab/system/etc", "root=zfs:floatlab/os/current root=zfs:floatlab/os/next"]:
+            self.cmdline.write_text(line)
+            self.data["commands"] = []
+            self.boot(False)
+            self.assertFalse(any(c[0] == "destroy" for c in self.data["commands"]))
+
+    def test_identity_or_init_mismatch_never_destroys_live(self):
+        for key, value in [("org.floatlab:host-id", "87654321"), ("org.floatlab:init", "/nix/store/other/init"), ("org.floatlab:version", "v99")]:
+            original = self.data["datasets"]["floatlab/os/current"][key]
+            self.data["datasets"]["floatlab/os/current"][key] = value
+            self.data["commands"] = []
+            self.boot(False)
+            self.assertFalse(any(c[0] == "destroy" for c in self.data["commands"]))
+            self.data["datasets"]["floatlab/os/current"][key] = original
 
     def test_destroy_and_clone_failures_stop_boot(self):
         for command in ["destroy", "clone"]:

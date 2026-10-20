@@ -1,0 +1,98 @@
+openapi: 3.0.3
+info: {title: Appliance updates, version: 0.1.0}
+paths:
+  /nodes/{id}/updates/{component}/releases:
+    parameters: &target
+      - {name: id, in: path, required: true, schema: {type: string}}
+      - {name: component, in: path, required: true, schema: {type: string, enum: [management, host]}}
+    get:
+      operationId: listUpdateReleases
+      summary: List official immutable releases for a local appliance update
+      tags: [updates]
+      responses:
+        '200':
+          description: Available releases; discovery does not download or activate them.
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/UpdateRelease'}}
+        '401': {description: Administrator authentication required.}
+        '503': {description: Host daemon or official release source unavailable.}
+  /nodes/{id}/updates/{component}/status:
+    parameters: *target
+    get:
+      operationId: getUpdateStatus
+      summary: Read hostd's durable update status without querying rqlite
+      tags: [updates]
+      parameters:
+        - {name: operation_id, in: query, schema: {type: string}}
+      responses:
+        '200':
+          description: Selected or latest transaction; null when none exists.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UpdateStatus'}
+        '401': {description: Administrator authentication required.}
+        '404': {description: Operation not found.}
+        '503': {description: Host daemon unavailable.}
+  /nodes/{id}/updates/{component}/{action}:
+    parameters: *target
+    post:
+      operationId: runUpdateAction
+      summary: Request a hostd-coordinated appliance update action
+      description: |
+        Management supports start, rollback and cleanup. Host supports prepare,
+        activate, commit, rollback and cleanup. Start/prepare require a matching
+        immutable manage-v or host-v release tag. Host activation reboots the
+        appliance; commitment is explicit. Rollback discards post-checkpoint
+        management state but does not undo workload changes. During maintenance
+        the management API may disconnect; hostd continues the transaction.
+      tags: [updates]
+      parameters:
+        - {name: action, in: path, required: true, schema: {type: string, enum: [start, prepare, activate, commit, rollback, cleanup]}}
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 255}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                release: {type: string, description: Official immutable release tag for start/prepare.}
+                operation_id: {type: string, description: Existing transaction for subsequent actions; defaults to the idempotency key on start/prepare.}
+      responses:
+        '202':
+          description: Accepted or previously recorded idempotent result.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UpdateStatus'}
+        '400': {description: Invalid payload, release or idempotency key.}
+        '401': {description: Administrator authentication required.}
+        '404': {description: Unknown component, action or transaction.}
+        '409': {description: Another update is active or the transaction is not ready for this action.}
+        '503': {description: Host daemon or required recovery facility unavailable.}
+components:
+  schemas:
+    UpdateRelease:
+      type: object
+      required: [tag_name]
+      properties:
+        tag_name: {type: string}
+        name: {type: string}
+        published_at: {type: string}
+        prerelease: {type: boolean}
+    UpdateStatus:
+      type: object
+      nullable: true
+      required: [operation_id, state, phase]
+      properties:
+        operation_id: {type: string}
+        state: {type: string}
+        phase: {type: string}
+        source_release: {type: string}
+        target_release: {type: string}
+        error: {type: string}
+        rollback_error: {type: string}
+        watchdog: {type: boolean, description: Whether the running kernel reports an active watchdog; this does not establish hardware reset qualification.}
+        started_at: {type: string}
+        updated_at: {type: string}

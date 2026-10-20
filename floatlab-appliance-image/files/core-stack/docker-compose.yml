@@ -5,7 +5,7 @@ services:
     image: rqlite/rqlite:8.26.0
     command: -node-id=${FLOATLAB_NODE_ID:-node1} -raft-addr=rqlite:4002 -raft-adv-addr=rqlite:4002
     volumes:
-      - /floatlab/system/rqlite:/rqlite/file
+      - /floatlab/system/management/rqlite:/rqlite/file
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:4001/readyz"]
@@ -21,7 +21,7 @@ services:
       - -storageDataPath=/victoria-metrics-data
       - -retentionPeriod=90d
     volumes:
-      - /floatlab/system/victoria-metrics:/victoria-metrics-data
+      - /floatlab/system/management/victoria-metrics:/victoria-metrics-data
     restart: unless-stopped
 
   victoria-logs:
@@ -32,13 +32,14 @@ services:
     ports:
       - "127.0.0.1:9428:9428"
     volumes:
-      - /floatlab/system/victoria-logs:/victoria-logs-data
+      - /floatlab/system/management/victoria-logs:/victoria-logs-data
     restart: unless-stopped
 
   floatlab-control:
     image: floatlab-control:local
     user: "0:0"
     environment:
+      FLOATLAB_ACTIVATION_DIR: /run/floatlab/activation
       FLOATLAB_APPLIANCE_CONFIG: /floatlab/system/etc/appliance.json
       FLOATLAB_CREDENTIAL_KEY_FILE: /floatlab/system/etc/credential.key
       FLOATLAB_BOOTSTRAP_FILE: /floatlab/system/etc/bootstrap.json
@@ -60,7 +61,7 @@ services:
       - /run/floatlab:/run/floatlab
       - /var/run/docker.sock:/var/run/docker.sock
       - /floatlab:/floatlab
-      - /floatlab/system/raft:/var/lib/floatlab/raft
+      - /floatlab/system/management/raft:/var/lib/floatlab/raft
     depends_on:
       rqlite:
         condition: service_healthy

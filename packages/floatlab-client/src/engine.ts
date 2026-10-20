@@ -1,5 +1,5 @@
 import { ApiError } from "./api";
-import type { CommandResult, CommandRuntime, Completion, Container, FloatLabApi, Node, Stack } from "./types";
+import type { CommandResult, CommandRuntime, Completion, Container, FloatLabApi, Node, Stack, UpdateApi, UpdateAction, UpdateComponent } from "./types";
 
 export class CommandError extends Error { constructor(message: string, readonly code = 2) { super(message); } }
 
@@ -31,6 +31,7 @@ const commands = [
   ["logs", [], "logs <stack> [container] [--search terms] [--since value] [--limit n]"],
   ["info", ["inspect"], "info <stack> [container]"], ["list", ["ls"], "list [stack] [--containers]"],
   ["upgrade", [], "upgrade <stack> [service=image ...]"], ["snapshot", [], "snapshot create|list <stack>"],
+  ["update", [], "update management|host releases|status|start|prepare|activate|commit|rollback|cleanup <node> [release|operation]"],
 ] as const;
 const aliases = new Map<string, string>(commands.flatMap(([name, names]) => [name, ...names].map((alias) => [alias, name])));
 const flagValues = new Set(["primary", "secondary", "search", "since", "limit", "file", "range"]);
@@ -73,7 +74,7 @@ const text = (value: unknown) => typeof value === "string" ? value : JSON.string
 export class CommandEngine {
   private stacks?: { at: number; value: Stack[] };
   private nodes?: { at: number; value: Node[] };
-  constructor(readonly api: FloatLabApi, readonly runtime: CommandRuntime, private readonly ttlMs = 10_000) {}
+  constructor(readonly api: FloatLabApi & Partial<UpdateApi>, readonly runtime: CommandRuntime, private readonly ttlMs = 10_000) {}
 
   async dispatch(input: string | string[]): Promise<{ code: number; result: CommandResult }> {
     try {
@@ -91,6 +92,13 @@ export class CommandEngine {
     const matching = (choices: Completion[]) => choices.filter((choice) => choice.value.toLowerCase().startsWith(last.toLowerCase()));
     if (words.length <= 1 && !input.endsWith(" ")) return matching([...commands.flatMap(([name, names, description]) => [name, ...names].map((value) => ({ value, description }))), ...["help", "exit", "quit"].map((value) => ({ value, description: "interactive command" }))]);
     const name = aliases.get(words[0] ?? ""); if (!name) return [];
+    if (name === "update") {
+      const index = input.endsWith(" ") ? words.length : words.length - 1;
+      if (index === 1) return matching(["management", "host"].map(value => ({ value })));
+      if (index === 2) return matching((words[1] === "host" ? ["releases", "status", "prepare", "activate", "commit", "rollback", "cleanup"] : ["releases", "status", "start", "rollback", "cleanup"]).map(value => ({ value })));
+      if (index === 3) return matching((await this.getNodes().catch(() => [])).map(node => ({ value: node.name, description: node.status })));
+      return [];
+    }
     if (name === "snapshot") {
       if (words.length === 1 && input.endsWith(" ")) return ["create", "list"].map((value) => ({ value, description: "snapshot" }));
       if (words.length === 2 && !input.endsWith(" ")) return matching(["create", "list"].map((value) => ({ value, description: "snapshot" })));
@@ -149,6 +157,7 @@ export class CommandEngine {
     if (name === "info") return this.info(args);
     if (name === "list") return this.list(args, Boolean(flags.containers));
     if (name === "upgrade") return this.upgrade(args);
+    if (name === "update") return this.update(args);
     return this.snapshot(args);
   }
 
@@ -295,5 +304,25 @@ export class CommandEngine {
     const snapshots = await this.api.listSnapshots(stack.id); const hasType = snapshots.some((snapshot) => snapshot.type);
     const columns = ["name", "created_at", ...(hasType ? ["type"] : []), "space"];
     return { kind: "table", columns, rows: snapshots.map((snapshot) => [text(snapshot.name ?? ""), text(snapshot.created_at ?? ""), ...(hasType ? [text(snapshot.type ?? "")] : []), text(snapshot.used ?? snapshot.space ?? "")]) };
+  }
+
+  private async update(args: string[]): Promise<CommandResult> {
+    const [component, action, nodeValue, target] = args;
+    const actions = component === "host" ? ["releases", "status", "prepare", "activate", "commit", "rollback", "cleanup"] : ["releases", "status", "start", "rollback", "cleanup"];
+    if ((component !== "management" && component !== "host") || !action || !actions.includes(action) || !nodeValue || args.length > 4) throw new CommandError("Usage: update management|host <action> <node> [release|operation]");
+    if (!this.api.listUpdateReleases || !this.api.getUpdateStatus || !this.api.runUpdateAction) throw new CommandError("Appliance updates are unavailable in this client");
+    const node = await this.node(nodeValue);
+    if (action === "releases") {
+      if (target) throw new CommandError("Usage: update management|host releases <node>");
+      const releases = await this.api.listUpdateReleases(node.id, component);
+      return { kind: "table", columns: ["release", "name", "published", "prerelease"], rows: releases.map(item => [item.tag_name, item.name ?? "", item.published_at ?? "", String(item.prerelease ?? false)]) };
+    }
+    if (action === "status") return { kind: "text", text: text(await this.api.getUpdateStatus(node.id, component, target)) };
+    const initial = action === "start" || action === "prepare";
+    if (!target) throw new CommandError(`A ${initial ? "release tag" : "transaction ID"} is required for ${action}`);
+    const consequence = action === "activate" ? " This reboots the appliance." : action === "rollback" ? " This discards management changes since the update checkpoint; workload changes are not undone." : "";
+    if (!await this.confirm(`${action} ${component} update on ${node.name}?${consequence}`)) return { kind: "text", text: "Update cancelled." };
+    const operation = await this.api.runUpdateAction(node.id, component as UpdateComponent, action as UpdateAction, initial ? { release: target } : { operation_id: target }, idempotencyKey());
+    return { kind: "operation", action: `update ${component} ${action}`, operationId: operation.operation_id, state: operation.state, text: text(operation) };
   }
 }

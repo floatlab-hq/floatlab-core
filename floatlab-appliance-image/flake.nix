@@ -68,6 +68,9 @@
         out = os.environ['out']
         files = {n: hashlib.file_digest(open(out+'/'+n, 'rb'), 'sha256').hexdigest() for n in ['floatlab-root.tar.gz', 'zfsbootmenu.EFI']}
         print(json.dumps({"version": "${hostVersion}", "git_commit": "${self.rev or self.dirtyRev or "unknown"}",
+          "recovery_protocol": 1, "bootloader": "zfsbootmenu-3.1.0", "pool_compatibility": "openzfs-2.3-linux",
+          "engine": {"docker": "${pkgs.docker.version}", "containerd": "${pkgs.containerd.version}", "storage_driver": "zfs", "data_root": "/floatlab/system/docker"},
+          "qualified_sources": ${builtins.toJSON ((builtins.fromJSON (builtins.readFile ../releases/host-compatibility.json)).qualified_transitions.${hostVersion} or [])},
           "architecture": "amd64", "init": "${installed.system.build.toplevel}/init",
           "kernel": "${installed.boot.kernelPackages.kernel}", "nixpkgs_rev": "${nixpkgs.rev}",
           "root_bytes": int(open(out+'/root-bytes').read()), "files": files,

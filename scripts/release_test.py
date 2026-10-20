@@ -51,6 +51,10 @@ class ReleaseTests(unittest.TestCase):
             release.manage_manifest("0.1.0", "commit", "ghcr.io/x:0.1.0", "docker.io/x:0.1.0", directory)
             metadata = release.read(Path(directory) / "manage-manifest.json")
             self.assertNotEqual(metadata["registries"]["ghcr"]["digest"], metadata["registries"]["dockerhub"]["digest"])
+            self.assertEqual(set(metadata["images"]), {"floatlab-control", "rqlite", "victoria-metrics", "victoria-logs"})
+            self.assertTrue(all(release.DIGEST.fullmatch(ref.split("@", 1)[1]) for ref in metadata["images"].values()))
+            self.assertEqual(metadata["rqlite_version"], "8.26.0")
+            self.assertEqual(metadata["rqlite_sources"], ["8.26.0"])
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(release, "registry_digest", return_value="sha256:" + "a" * 64), \
                 patch.object(release, "image_info", side_effect=[{"Id": "a"}, {"Id": "b"}]):

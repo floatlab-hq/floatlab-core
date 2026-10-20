@@ -25,13 +25,15 @@ import (
 // Dispatcher registers all IPC command handlers on the IPC server.
 // Each handler is a thin wrapper that shells out or calls a system API.
 type Dispatcher struct {
-	network   *hostnetwork.Manager
-	srv       *ipc.Server
-	log       *zap.Logger
-	docker    *docker.Client // nil if Docker daemon is unavailable at startup
-	zfs       store.ZFSStore
-	mu        sync.Mutex
-	terminals map[string]*docker.Terminal
+	network    *hostnetwork.Manager
+	srv        *ipc.Server
+	log        *zap.Logger
+	docker     *docker.Client // nil if Docker daemon is unavailable at startup
+	zfs        store.ZFSStore
+	mu         sync.Mutex
+	terminals  map[string]*docker.Terminal
+	mutationMu sync.Mutex
+	mutations  int
 }
 
 func newDispatcher(srv *ipc.Server, dc *docker.Client, log *zap.Logger) *Dispatcher {
@@ -40,7 +42,7 @@ func newDispatcher(srv *ipc.Server, dc *docker.Client, log *zap.Logger) *Dispatc
 
 func (d *Dispatcher) register() {
 	d.registerNetwork()
-	d.srv.Handle("docker.exec.run", func(ctx context.Context, raw json.RawMessage) (any, error) {
+	d.handle("docker.exec.run", func(ctx context.Context, raw json.RawMessage) (any, error) {
 		if d.docker == nil {
 			return nil, fmt.Errorf("docker client not available")
 		}
@@ -50,44 +52,44 @@ func (d *Dispatcher) register() {
 		}
 		return d.docker.Exec(ctx, p.StackID, p.ContainerID, p.Command)
 	})
-	d.srv.Handle("compose.up", d.composeUp)
-	d.srv.Handle("compose.down", d.composeDown)
-	d.srv.Handle("compose.pull", d.composePull)
-	d.srv.Handle("compose.source.write", d.composeSourceWrite)
-	d.srv.Handle("fs.dataset.create", d.datasetCreate)
-	d.srv.Handle("fs.dataset.destroy", d.datasetDestroy)
-	d.srv.Handle("fs.dataset.set", d.datasetSet)
-	d.srv.Handle("fs.dataset.clone", d.datasetClone)
-	d.srv.Handle("fs.dataset.rename", d.datasetRename)
-	d.srv.Handle("fs.dataset.promote", d.datasetPromote)
-	d.srv.Handle("fs.snapshot.create", d.snapshotCreate)
-	d.srv.Handle("fs.snapshot.destroy", d.snapshotDestroy)
-	d.srv.Handle("fs.snapshot.rollback", d.snapshotRollback)
-	d.srv.Handle("fs.repl.send", d.replSend)
-	d.srv.Handle("fs.repl.recv", d.replRecv)
-	d.srv.Handle("fs.repl.status", d.replStatus)
-	d.srv.Handle("net.addr.add", d.netAddrAdd)
-	d.srv.Handle("net.addr.del", d.netAddrDel)
-	d.srv.Handle("net.route.add", d.netRouteAdd)
-	d.srv.Handle("net.route.del", d.netRouteDel)
-	d.srv.Handle("net.veth.ensure", d.vethEnsure)
-	d.srv.Handle("net.veth.delete", d.vethDelete)
-	d.srv.Handle("sys.info", d.sysInfo)
-	d.srv.Handle("sys.version", func(context.Context, json.RawMessage) (any, error) {
+	d.handle("compose.up", d.composeUp)
+	d.handle("compose.down", d.composeDown)
+	d.handle("compose.pull", d.composePull)
+	d.handle("compose.source.write", d.composeSourceWrite)
+	d.handle("fs.dataset.create", d.datasetCreate)
+	d.handle("fs.dataset.destroy", d.datasetDestroy)
+	d.handle("fs.dataset.set", d.datasetSet)
+	d.handle("fs.dataset.clone", d.datasetClone)
+	d.handle("fs.dataset.rename", d.datasetRename)
+	d.handle("fs.dataset.promote", d.datasetPromote)
+	d.handle("fs.snapshot.create", d.snapshotCreate)
+	d.handle("fs.snapshot.destroy", d.snapshotDestroy)
+	d.handle("fs.snapshot.rollback", d.snapshotRollback)
+	d.handle("fs.repl.send", d.replSend)
+	d.handle("fs.repl.recv", d.replRecv)
+	d.handle("fs.repl.status", d.replStatus)
+	d.handle("net.addr.add", d.netAddrAdd)
+	d.handle("net.addr.del", d.netAddrDel)
+	d.handle("net.route.add", d.netRouteAdd)
+	d.handle("net.route.del", d.netRouteDel)
+	d.handle("net.veth.ensure", d.vethEnsure)
+	d.handle("net.veth.delete", d.vethDelete)
+	d.handle("sys.info", d.sysInfo)
+	d.handle("sys.version", func(context.Context, json.RawMessage) (any, error) {
 		return ipc.VersionResult{HostVersion: release.Version, GitCommit: release.GitCommit}, nil
 	})
-	d.srv.Handle("sys.docker.events", d.dockerEvents)
-	d.srv.Handle("docker.list", d.dockerList)
-	d.srv.Handle("docker.start", d.dockerStart)
-	d.srv.Handle("docker.stop", d.dockerStop)
-	d.srv.Handle("docker.exec.open", d.terminalOpen)
-	d.srv.Handle("docker.exec.write", d.terminalWrite)
-	d.srv.Handle("docker.exec.resize", d.terminalResize)
-	d.srv.Handle("docker.exec.close", d.terminalClose)
-	d.srv.Handle("fs.pool.list", d.poolList)
-	d.srv.Handle("fs.pool.health", d.poolHealth)
-	d.srv.Handle("fs.snapshot.list", d.snapshotList)
-	d.srv.Handle("fs.dataset.list", d.datasetList)
+	d.handle("sys.docker.events", d.dockerEvents)
+	d.handle("docker.list", d.dockerList)
+	d.handle("docker.start", d.dockerStart)
+	d.handle("docker.stop", d.dockerStop)
+	d.handle("docker.exec.open", d.terminalOpen)
+	d.handle("docker.exec.write", d.terminalWrite)
+	d.handle("docker.exec.resize", d.terminalResize)
+	d.handle("docker.exec.close", d.terminalClose)
+	d.handle("fs.pool.list", d.poolList)
+	d.handle("fs.pool.health", d.poolHealth)
+	d.handle("fs.snapshot.list", d.snapshotList)
+	d.handle("fs.dataset.list", d.datasetList)
 }
 
 func (d *Dispatcher) terminalOpen(ctx context.Context, raw json.RawMessage) (any, error) {

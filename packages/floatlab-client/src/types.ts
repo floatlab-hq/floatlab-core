@@ -87,3 +87,13 @@ export interface HostNetworkApi {
   updateNetworkPool(id: string, pool: NetworkPoolWrite, idempotencyKey: string): Promise<NetworkPool>;
   deleteNetworkPool(id: string, idempotencyKey: string): Promise<void>;
 }
+
+export type UpdateComponent = "management" | "host";
+export type UpdateAction = "start" | "prepare" | "activate" | "commit" | "rollback" | "cleanup";
+export type UpdateRelease = components["schemas"]["UpdateRelease"];
+export type UpdateStatus = NonNullable<components["schemas"]["UpdateStatus"]>;
+export interface UpdateApi {
+  listUpdateReleases(nodeId: string, component: UpdateComponent): Promise<UpdateRelease[]>;
+  getUpdateStatus(nodeId: string, component: UpdateComponent, operationId?: string): Promise<UpdateStatus | null>;
+  runUpdateAction(nodeId: string, component: UpdateComponent, action: UpdateAction, request: { release?: string; operation_id?: string }, idempotencyKey: string): Promise<UpdateStatus>;
+}

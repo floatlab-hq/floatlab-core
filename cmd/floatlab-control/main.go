@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -27,28 +28,36 @@ import (
 )
 
 var (
-	devMode           bool
-	listenAddr        string
-	uiDir             string
-	rqliteURL         string
-	raftNodeID        string
-	raftBindAddr      string
-	raftAdvAddr       string
-	raftDataDir       string
-	raftBootstrap     bool
-	vlogsURL          string
-	vmetricsURL       string
-	jwtSecret         string
-	jwtIssuer         string
-	jwtAudience       string
-	registerLocalNode bool
-	bootstrapFile     string
-	applianceConfig   string
-	credentialKeyFile string
-	bootstrapUser     string
-	bootstrapPass     string
-	hostNodeID        string
-	hostSocket        string
+	devMode             bool
+	listenAddr          string
+	uiDir               string
+	rqliteURL           string
+	raftNodeID          string
+	raftBindAddr        string
+	raftAdvAddr         string
+	raftDataDir         string
+	raftBootstrap       bool
+	vlogsURL            string
+	vmetricsURL         string
+	jwtSecret           string
+	jwtIssuer           string
+	jwtAudience         string
+	registerLocalNode   bool
+	bootstrapFile       string
+	applianceConfig     string
+	credentialKeyFile   string
+	bootstrapUser       string
+	bootstrapPass       string
+	hostNodeID          string
+	hostSocket          string
+	preflight           bool
+	selfTestMode        bool
+	isolationTest       bool
+	selfTestToken       string
+	selfTestPersistence string
+	expectedRelease     string
+	releaseInfo         bool
+	isolationProbes     []string
 )
 
 func main() {
@@ -80,6 +89,14 @@ func main() {
 	root.Flags().StringVar(&bootstrapPass, "bootstrap-password", os.Getenv("FLOATLAB_BOOTSTRAP_PASSWORD"), "Initial administrator password")
 	root.Flags().StringVar(&hostNodeID, "host-node-id", "node1", "Node ID served by the local host daemon")
 	root.Flags().StringVar(&hostSocket, "host-socket", "/run/floatlab/hostd.sock", "Local host daemon socket")
+	root.Flags().BoolVar(&preflight, "preflight", false, "Run isolated management checks without controllers")
+	root.Flags().BoolVar(&selfTestMode, "self-test", false, "Check running local management dependencies and exit")
+	root.Flags().BoolVar(&isolationTest, "isolation-test", false, "Verify preflight network and restricted IPC isolation")
+	root.Flags().StringVar(&selfTestToken, "self-test-token", "", "Disposable preflight persistence token")
+	root.Flags().StringVar(&selfTestPersistence, "self-test-persistence", "", "Preflight persistence phase: write or verify")
+	root.Flags().StringVar(&expectedRelease, "expected-release", "", "Expected management release version")
+	root.Flags().BoolVar(&releaseInfo, "release-info", false, "Print release compatibility information and exit")
+	root.Flags().StringSliceVar(&isolationProbes, "isolation-probe", nil, "Known reachable host/production TCP endpoints that sandbox must deny")
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -92,6 +109,12 @@ func run(cmd *cobra.Command, args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if selfTestMode {
+		return selfTest(ctx)
+	}
+	if releaseInfo {
+		return printReleaseInfo()
+	}
 
 	var identity struct {
 		NodeID    string `json:"node_id"`
@@ -177,74 +200,92 @@ func run(cmd *cobra.Command, args []string) error {
 	hosts := hostclient.NewPool(log)
 	hosts.Register(hostNodeID, hostSocket)
 	defer hosts.Close()
-
-	if err := ipam.MigratePools(ctx, db, hosts); err != nil {
-		log.Warn("network pool migration incomplete", zap.Error(err))
+	if err := serveRuntimeChecks(ctx, raftNode); err != nil {
+		return err
 	}
-	if err := ipam.RestoreNodeServices(ctx, db, hosts, hostNodeID); err != nil {
-		log.Warn("service address restoration incomplete", zap.Error(err))
-	}
-	// Retry ownership reconciliation after DHCP startup or hostd reconnection.
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if err := ipam.RestoreNodeServices(ctx, db, hosts, hostNodeID); err != nil {
-					log.Debug("service address reconciliation deferred", zap.Error(err))
-				}
-			}
+	if preflight {
+		// A cloned database may contain queued work and remote nodes; none may be activated.
+		if err := os.Setenv("FLOATLAB_PREFLIGHT", "true"); err != nil {
+			return err
 		}
-	}()
-	// Notification broker — fan-out SSE publisher.
+	}
 	broker := notify.NewBroker()
-	go control.RunHostCompatibility(ctx, hosts, db, broker, log)
+	seq := failover.NewSequence(db, store, raftNode, hosts, broker, log)
+	startControllers := func(controllerCtx context.Context) {
+		ctx := controllerCtx
+		var controllers sync.WaitGroup
+		launch := func(fn func()) { controllers.Add(1); go func() { defer controllers.Done(); fn() }() }
 
-	// Notification retention: purge read notifications older than 30 days, daily.
-	go func() {
-		t := time.NewTicker(24 * time.Hour)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				if err := notify.Cleanup(ctx, db); err != nil {
-					log.Warn("notify cleanup", zap.Error(err))
-				}
-				if err := operation.Cleanup(ctx, db, time.Now().UTC().AddDate(-1, 0, 0)); err != nil {
-					log.Warn("operation cleanup", zap.Error(err))
+		if err := ipam.MigratePools(ctx, db, hosts); err != nil {
+			log.Warn("network pool migration incomplete", zap.Error(err))
+		}
+		if err := ipam.RestoreNodeServices(ctx, db, hosts, hostNodeID); err != nil {
+			log.Warn("service address restoration incomplete", zap.Error(err))
+		}
+		// Retry ownership reconciliation after DHCP startup or hostd reconnection.
+		launch(func() {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if err := ipam.RestoreNodeServices(ctx, db, hosts, hostNodeID); err != nil {
+						log.Debug("service address reconciliation deferred", zap.Error(err))
+					}
 				}
 			}
-		}
-	}()
+		})
+		// Notification broker — fan-out SSE publisher.
+		launch(func() { control.RunHostCompatibility(ctx, hosts, db, broker, log) })
 
-	// Failover detector — pings primaries and auto-triggers when configured.
-	seq := failover.NewSequence(db, store, raftNode, hosts, broker, log)
-	detector := failover.NewDetector(store, raftNode.FSM(), hosts, seq, log)
-	go detector.Run(ctx)
+		// Notification retention: purge read notifications older than 30 days, daily.
+		launch(func() {
+			t := time.NewTicker(24 * time.Hour)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					if err := notify.Cleanup(ctx, db); err != nil {
+						log.Warn("notify cleanup", zap.Error(err))
+					}
+					if err := operation.Cleanup(ctx, db, time.Now().UTC().AddDate(-1, 0, 0)); err != nil {
+						log.Warn("operation cleanup", zap.Error(err))
+					}
+				}
+			}
+		})
 
-	// Orchestrator: drives stack state machine from Raft + IPC events.
-	orch := orchestrator.New(store, raftNode, hosts, db, log)
-	go func() {
-		if err := orch.Run(ctx); err != nil && err != context.Canceled {
-			log.Error("orchestrator exited", zap.Error(err))
-		}
-	}()
+		// Failover detector — pings primaries and auto-triggers when configured.
+		detector := failover.NewDetector(store, raftNode.FSM(), hosts, seq, log)
+		launch(func() { detector.Run(ctx) })
 
-	// Snapshot scheduler: minute-tick loop that enqueues snapshot tasks.
-	go orchestrator.RunScheduler(ctx, orch, db, log)
+		// Orchestrator: drives stack state machine from Raft + IPC events.
+		orch := orchestrator.New(store, raftNode, hosts, db, log)
+		launch(func() {
+			if err := orch.Run(ctx); err != nil && err != context.Canceled {
+				log.Error("orchestrator exited", zap.Error(err))
+			}
+		})
 
-	// Task worker: polls rqlite tasks table and dispatches IPC to hostd.
-	w := worker.New(db, store, hosts, raftNode, log)
-	go func() {
-		if err := w.Run(ctx); err != nil && err != context.Canceled {
-			log.Error("worker exited", zap.Error(err))
-		}
-	}()
+		// Snapshot scheduler: minute-tick loop that enqueues snapshot tasks.
+		launch(func() { orchestrator.RunScheduler(ctx, orch, db, log) })
+
+		// Task worker: polls rqlite tasks table and dispatches IPC to hostd.
+		w := worker.New(db, store, hosts, raftNode, log)
+		launch(func() {
+			if err := w.Run(ctx); err != nil && err != context.Canceled {
+				log.Error("worker exited", zap.Error(err))
+			}
+		})
+		controllers.Wait()
+	}
+	if !preflight {
+		go superviseControllers(ctx, startControllers, log)
+	}
 
 	// HTTP control server.
 	srv := control.NewServer(&control.Config{

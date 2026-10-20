@@ -7,14 +7,14 @@ import (
 )
 
 func (d *Dispatcher) registerNetwork() {
-	d.srv.Handle("net.settings.retry", func(_ context.Context, raw json.RawMessage) (any, error) {
+	d.handle("net.settings.retry", func(_ context.Context, raw json.RawMessage) (any, error) {
 		var p hostnetwork.ApplyPayload
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return nil, hostnetwork.Error("invalid", "invalid retry payload")
 		}
 		return d.network.Retry(p)
 	})
-	d.srv.Handle("net.service.sync", func(ctx context.Context, raw json.RawMessage) (any, error) {
+	d.handle("net.service.sync", func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var services []hostnetwork.Service
 		if err := json.Unmarshal(raw, &services); err != nil {
 			return nil, err
@@ -22,8 +22,8 @@ func (d *Dispatcher) registerNetwork() {
 		err := d.network.SyncServices(ctx, services)
 		return map[string]bool{"ok": err == nil}, err
 	})
-	d.srv.Handle("net.settings.get", func(ctx context.Context, _ json.RawMessage) (any, error) { return d.network.Status(ctx) })
-	d.srv.Handle("net.settings.apply", func(ctx context.Context, raw json.RawMessage) (any, error) {
+	d.handle("net.settings.get", func(ctx context.Context, _ json.RawMessage) (any, error) { return d.network.Status(ctx) })
+	d.handle("net.settings.apply", func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var p hostnetwork.ApplyPayload
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return nil, hostnetwork.Error("invalid", "invalid apply payload")
@@ -32,7 +32,7 @@ func (d *Dispatcher) registerNetwork() {
 	})
 	for name, action := range map[string]string{"net.settings.change": "get", "net.settings.confirm": "confirm", "net.settings.rollback": "rollback"} {
 		action := action
-		d.srv.Handle(name, func(_ context.Context, raw json.RawMessage) (any, error) {
+		d.handle(name, func(_ context.Context, raw json.RawMessage) (any, error) {
 			var p struct {
 				ID string `json:"id"`
 			}
@@ -51,7 +51,7 @@ func (d *Dispatcher) registerNetwork() {
 	}
 	for name, add := range map[string]bool{"net.service.add": true, "net.service.del": false} {
 		add := add
-		d.srv.Handle(name, func(ctx context.Context, raw json.RawMessage) (any, error) {
+		d.handle(name, func(ctx context.Context, raw json.RawMessage) (any, error) {
 			var p hostnetwork.Service
 			if err := json.Unmarshal(raw, &p); err != nil {
 				return nil, hostnetwork.Error("invalid", "invalid service payload")
@@ -60,7 +60,7 @@ func (d *Dispatcher) registerNetwork() {
 			return map[string]bool{"ok": err == nil}, err
 		})
 	}
-	d.srv.Handle("net.settings.default.migrate", func(_ context.Context, raw json.RawMessage) (any, error) {
+	d.handle("net.settings.default.migrate", func(_ context.Context, raw json.RawMessage) (any, error) {
 		var p struct {
 			PoolID string `json:"pool_id"`
 		}
