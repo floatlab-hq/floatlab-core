@@ -295,7 +295,8 @@ def run_case(args, count):
         child.expect("Set up administrator")  # Network settings passed service validation.
         if args.totp:
             wait_guest(guest_socket, 'test "$(timedatectl show -p NTPSynchronized --value)" = yes', child)
-        for value in ["installer-test", "installer-test-password", "installer-test-password"]:
+        for value in ["installer-test", "installer-test-password", "installer-test-password",
+                      "console-recovery-password", "console-recovery-password"]:
             fill(value)
         child.send("\x1b[D" if args.totp else "\x1b[C")
         child.sendline("")
@@ -365,6 +366,23 @@ def run_case(args, count):
             output = guest_command(guest_socket, "hostname; timedatectl show -p Timezone --value; "
                                    "test ! -e /floatlab/system/etc/bootstrap.json && echo SETTINGS_OK")
             assert output.splitlines() == [name, args.timezone, "SETTINGS_OK"], output
+            guest_command(guest_socket, 'test "$(stat -c %u:%g:%a /floatlab/system/etc/root-password.hash)" = 0:0:600; '
+                          '! runuser -u nobody -- cat /floatlab/system/etc/root-password.hash >/dev/null 2>&1; '
+                          'systemctl restart serial-getty@ttyS0')
+            child.expect("login:")
+            child.sendline("root")
+            child.expect("Password:")
+            child.sendline("wrong-recovery-password")
+            child.expect("Login incorrect")
+            child.expect("login:")
+            child.sendline("root")
+            child.expect("Password:")
+            child.sendline("console-recovery-password")
+            child.expect("root@" + name)
+            child.sendline("printf '\\nRECOVERY_ROOT=%s\\n' \"$(id -u)\"")
+            child.expect("RECOVERY_ROOT=0")
+            child.sendline("exit")
+            child.expect("login:")
             output = guest_command(guest_socket, 'set -e; test "$(findmnt -n -o SOURCE /)" = floatlab/os/live; '
                                    '! zfs list floatlab/os/installer >/dev/null 2>&1; '
                                    'test ! -e /os-ephemeral-test; '

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/floatlab/floatlab-core/internal/installer"
@@ -54,6 +55,28 @@ func TestCenteredLayoutKeepsFieldsAndActionsVisible(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestRecoveryPasswordFieldsStayMaskedAndReachSubmission(t *testing.T) {
+	m := New("unused", nil)
+	m.settings()
+	m.stage = "account"
+	for _, index := range []int{11, 12} {
+		m.fields[index].SetValue("private-console-password")
+		m.setFocus(index)
+		if m.fields[index].EchoMode != textinput.EchoPassword || strings.Contains(m.View(), "private-console-password") {
+			t.Fatal("console recovery password is exposed")
+		}
+	}
+	config := m.config()
+	if config.RecoveryPassword != "private-console-password" || config.RecoveryConfirmation != config.RecoveryPassword {
+		t.Fatal("console recovery fields did not reach the installer config")
+	}
+	m.fields[11].SetValue("")
+	m.fields[12].SetValue("")
+	if m.config().RecoveryPassword != "" {
+		t.Fatal("empty console recovery password is not preserved for validation")
 	}
 }
 

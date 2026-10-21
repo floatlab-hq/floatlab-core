@@ -113,6 +113,11 @@ func TestWorkerRetriesFinalizationWithoutErasing(t *testing.T) {
 	hash, _ := bcrypt.GenerateFromPassword([]byte("test"), bcrypt.MinCost)
 	proof, _ := credentials.Encrypt(key, "test")
 	sub := Submission{Host: a, Admin: credentials.Bootstrap{Username: "admin", PasswordHash: string(hash), NodeID: "node", NodeName: "floatlab"}, VerificationPassword: proof}
+	recoveryHash, err := bcrypt.GenerateFromPassword([]byte("console-password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub.RecoveryPasswordHash = string(recoveryHash)
 	if err := credentials.WritePrivate(runtimeDir+"/submission.json", sub); err != nil {
 		t.Fatal(err)
 	}
@@ -141,6 +146,17 @@ func TestWorkerRetriesFinalizationWithoutErasing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	recovery, err := os.ReadFile(persistentDir + "/root-password.hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(recovery) != sub.RecoveryPasswordHash+"\n" || bcrypt.CompareHashAndPassword([]byte(strings.TrimSpace(string(recovery))), []byte("console-password")) != nil {
+		t.Fatal("recovery hash does not match the console password")
+	}
+	info, err := os.Stat(persistentDir + "/root-password.hash")
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatal("recovery hash is not private", err)
+	}
 	for _, command := range []string{"wipefs --all", "sfdisk --wipe", "zpool create -f"} {
 		if strings.Count(string(commands), command) != 1 {
 			t.Fatalf("destructive work repeated: %s\n%s", command, commands)
@@ -151,6 +167,15 @@ func TestWorkerRetriesFinalizationWithoutErasing(t *testing.T) {
 	}
 	if strings.Contains(string(commands), "reboot") {
 		t.Fatal("failed installation rebooted")
+	}
+	for _, invalid := range []string{"", "not-a-hash", sub.RecoveryPasswordHash[:59] + "\n"} {
+		sub.RecoveryPasswordHash = invalid
+		if err := credentials.WritePrivate(runtimeDir+"/submission.json", sub); err != nil {
+			t.Fatal(err)
+		}
+		if err := worker(context.Background(), runtimeDir, persistentDir, mediaDir, inventory); err == nil || !strings.Contains(err.Error(), "invalid console recovery password hash") {
+			t.Fatal("invalid recovery hash accepted", err)
+		}
 	}
 	if dry, create := strings.Index(string(commands), "zpool create -n"), strings.Index(string(commands), "zpool create -f"); dry < 0 || create < dry {
 		t.Fatal("pool creation did not follow a partition dry-run", string(commands))

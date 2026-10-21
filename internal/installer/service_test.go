@@ -11,6 +11,7 @@ import (
 
 	"github.com/floatlab/floatlab-core/internal/credentials"
 	"github.com/floatlab/floatlab-core/internal/hostnetwork"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type serviceTest struct {
@@ -110,7 +111,26 @@ func (s *serviceTest) request(t *testing.T, req Request) Event {
 	}
 }
 func validConfig() InstallConfig {
-	return InstallConfig{NodeName: "node-a", Timezone: "Australia/Melbourne", Network: hostnetwork.DefaultConfig(), Username: "admin", Password: "test-password", PasswordConfirmation: "test-password"}
+	return InstallConfig{NodeName: "node-a", Timezone: "Australia/Melbourne", Network: hostnetwork.DefaultConfig(), Username: "admin", Password: "test-password", PasswordConfirmation: "test-password", RecoveryPassword: "console-password", RecoveryConfirmation: "console-password"}
+}
+
+func TestSubmissionStoresOnlyRecoveryPasswordHash(t *testing.T) {
+	s := &Service{Mock: true, key: make([]byte, 32), identity: Appliance{NodeID: "node", HostID: "12345678", JWTSecret: strings.Repeat("a", 64)}}
+	config := validConfig()
+	sub, err := s.submission(context.Background(), config, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bcrypt.CompareHashAndPassword([]byte(sub.RecoveryPasswordHash), []byte(config.RecoveryPassword)) != nil {
+		t.Fatal("console recovery hash does not match its password")
+	}
+	if bcrypt.CompareHashAndPassword([]byte(sub.RecoveryPasswordHash), []byte(config.Password)) == nil {
+		t.Fatal("console recovery uses the FloatLab password")
+	}
+	data, err := json.Marshal(sub)
+	if err != nil || strings.Contains(string(data), config.RecoveryPassword) {
+		t.Fatal("submission exposed the recovery password", err)
+	}
 }
 func confirmMock(t *testing.T, s *serviceTest) Event {
 	inventory := s.event(t, "inventory")
@@ -260,6 +280,17 @@ func TestAccountAndAuthenticatorValidateBeforeReview(t *testing.T) {
 		func(c *InstallConfig) { c.Password = "" },
 		func(c *InstallConfig) { c.PasswordConfirmation = "" },
 		func(c *InstallConfig) { c.PasswordConfirmation = "different" },
+		func(c *InstallConfig) { c.RecoveryPassword = "" },
+		func(c *InstallConfig) { c.RecoveryConfirmation = "" },
+		func(c *InstallConfig) { c.RecoveryConfirmation = "different" },
+		func(c *InstallConfig) {
+			c.RecoveryPassword, c.RecoveryConfirmation = "bad\x00password", "bad\x00password"
+		},
+		func(c *InstallConfig) { c.RecoveryPassword, c.RecoveryConfirmation = "bad\npassword", "bad\npassword" },
+		func(c *InstallConfig) { c.RecoveryPassword, c.RecoveryConfirmation = "bad\rpassword", "bad\rpassword" },
+		func(c *InstallConfig) {
+			c.RecoveryPassword, c.RecoveryConfirmation = strings.Repeat("a", 73), strings.Repeat("a", 73)
+		},
 		func(c *InstallConfig) {
 			c.Password, c.PasswordConfirmation = strings.Repeat("a", 73), strings.Repeat("a", 73)
 		},

@@ -106,7 +106,7 @@ func TestAccountAndTOTPStayOnTheirScreensUntilValidated(t *testing.T) {
 	if m.stage != "account" || !strings.Contains(m.View(), "passwords do not match") {
 		t.Fatal("account error did not stay on its screen")
 	}
-	if len(m.visibleFields()) != 4 || m.visibleFields()[3] != 10 {
+	if len(m.visibleFields()) != 6 || m.visibleFields()[5] != 10 {
 		t.Fatal("account screen does not include the TOTP choice")
 	}
 	m.fields[10].SetValue("yes")
@@ -286,7 +286,7 @@ func TestReviewIncludesOnlyHostAndSecurityWithoutExposingSecrets(t *testing.T) {
 	m.settings()
 	m.stage = "review"
 	m.width, m.height = 160, 47
-	for index, value := range map[int]string{0: "review-node", 1: "Australia/Melbourne", 2: "static", 3: "192.0.2.10", 4: "255.255.255.0", 5: "192.0.2.1", 6: "1.1.1.1", 7: "review-admin", 8: "private-password", 9: "private-password", 10: "yes"} {
+	for index, value := range map[int]string{0: "review-node", 1: "Australia/Melbourne", 2: "static", 3: "192.0.2.10", 4: "255.255.255.0", 5: "192.0.2.1", 6: "1.1.1.1", 7: "review-admin", 8: "private-password", 9: "private-password", 10: "yes", 11: "private-console-password", 12: "private-console-password"} {
 		m.fields[index].SetValue(value)
 	}
 	m.preview = installer.Event{Disks: []installer.Disk{{Device: "/dev/sda", Model: "Review SSD"}}, Command: "zpool create floatlab /dev/sda2"}
@@ -294,12 +294,12 @@ func TestReviewIncludesOnlyHostAndSecurityWithoutExposingSecrets(t *testing.T) {
 	m.totpCode = "123456"
 	m.confirmation.SetValue("SAVED")
 	view := ansi.Strip(m.View())
-	for _, want := range []string{"review-node", "Australia/Melbourne", "STATIC", "192.0.2.10", "255.255.255.0", "192.0.2.1", "1.1.1.1", "review-admin", "Set and confirmed", "Enabled and verified", "Recovery codes", "Saved", "Finish →", "Enter Finish"} {
+	for _, want := range []string{"review-node", "Australia/Melbourne", "STATIC", "192.0.2.10", "255.255.255.0", "192.0.2.1", "1.1.1.1", "review-admin", "Set and confirmed", "Enabled and verified", "Recovery codes", "Saved", "Console recovery", "Set and confirmed (root)", "Finish →", "Enter Finish"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("Review is missing %q", want)
 		}
 	}
-	for _, secret := range []string{"Review SSD", "Installation disk", "zpool", "/dev/sda2", "private-password", "PRIVATE-TOTP-SECRET", "private-recovery-code", "123456"} {
+	for _, secret := range []string{"Review SSD", "Installation disk", "zpool", "/dev/sda2", "private-password", "private-console-password", "PRIVATE-TOTP-SECRET", "private-recovery-code", "123456"} {
 		if strings.Contains(view, secret) {
 			t.Fatalf("Review exposed %q", secret)
 		}

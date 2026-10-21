@@ -497,15 +497,15 @@ func (m *Model) reboot() tea.Cmd {
 }
 
 func (m *Model) settings() {
-	m.labels = []string{"Node name", "Timezone", "IPv4 configuration", "IPv4 address (static only)", "Netmask (static only)", "Gateway (static only)", "DNS servers (comma separated)", "Administrator username", "Password", "Confirm password", "Set up TOTP"}
-	defaults := []string{"floatlab", "", "dhcp", "", "", "", "1.1.1.1,8.8.8.8", "admin", "", "", "no"}
+	m.labels = []string{"Node name", "Timezone", "IPv4 configuration", "IPv4 address (static only)", "Netmask (static only)", "Gateway (static only)", "DNS servers (comma separated)", "Administrator username", "Password", "Confirm password", "Set up TOTP", "Console recovery password", "Confirm recovery password"}
+	defaults := []string{"floatlab", "", "dhcp", "", "", "", "1.1.1.1,8.8.8.8", "admin", "", "", "no", "", ""}
 	m.fields = make([]textinput.Model, len(m.labels))
 	for i := range m.fields {
 		f := textinput.New()
 		f.Prompt = ""
 		f.CharLimit = 256
 		f.SetValue(defaults[i])
-		if i == 8 || i == 9 {
+		if i == 8 || i == 9 || i == 11 || i == 12 {
 			f.EchoMode = textinput.EchoPassword
 			f.EchoCharacter = '•'
 		}
@@ -518,7 +518,7 @@ func (m *Model) settings() {
 }
 func (m *Model) visibleFields() []int {
 	if m.stage == "account" {
-		return []int{7, 8, 9, 10}
+		return []int{7, 8, 9, 11, 12, 10}
 	}
 	fields := []int{0, 1, 2}
 	if m.fields[2].Value() == "static" {
@@ -615,7 +615,7 @@ func (m *Model) resize() {
 				reserve = min(11, max(1, fieldWidth-4))
 			}
 			fieldWidth -= reserve + 3
-		case 9:
+		case 9, 12:
 			fieldWidth -= 4
 		}
 		m.fields[i].Width = max(1, fieldWidth)
@@ -636,7 +636,7 @@ func (m *Model) config() installer.InstallConfig {
 			network.DNSServers = append(network.DNSServers, v)
 		}
 	}
-	return installer.InstallConfig{NodeName: value(0), Timezone: value(1), Network: network, Username: value(7), Password: value(8), PasswordConfirmation: value(9), TOTP: value(10) == "yes", TOTPCode: m.totpCode, RecoverySaved: m.enrollment != nil && m.confirmation.Value() == "SAVED"}
+	return installer.InstallConfig{NodeName: value(0), Timezone: value(1), Network: network, Username: value(7), Password: value(8), PasswordConfirmation: value(9), RecoveryPassword: value(11), RecoveryConfirmation: value(12), TOTP: value(10) == "yes", TOTPCode: m.totpCode, RecoverySaved: m.enrollment != nil && m.confirmation.Value() == "SAVED"}
 }
 func size(bytes int64) string { return fmt.Sprintf("%.1f GiB", float64(bytes)/float64(installer.GiB)) }
 func partitions(d installer.Disk) string {
@@ -708,7 +708,7 @@ func (m *Model) body() string {
 		help := "Storage installation is running. Network settings remain editable."
 		if m.stage == "account" {
 			title = "Set up administrator"
-			help = "Create the account used to manage this appliance."
+			help = "Create your FloatLab account and set a separate local root recovery password."
 		}
 		lines = []string{title, help, ""}
 		if m.tableLayout() {
@@ -723,9 +723,9 @@ func (m *Model) body() string {
 			indicator := ""
 			if i == 8 {
 				indicator = m.passwordStrength()
-			} else if i == 9 && m.fields[9].Value() != "" {
+			} else if (i == 9 || i == 12) && m.fields[i].Value() != "" {
 				indicator = "✗"
-				if m.fields[8].Value() == m.fields[9].Value() {
+				if m.fields[i-1].Value() == m.fields[i].Value() {
 					indicator = "✓"
 				}
 			}
@@ -784,6 +784,11 @@ func (m *Model) body() string {
 		}
 		rows = append(rows, [2]string{"DNS", strings.Join(c.Network.DNSServers, ", ")},
 			[2]string{"Administrator", c.Username}, [2]string{"Password", password}, [2]string{"TOTP", totp})
+		recoveryPassword := "Not set"
+		if c.RecoveryPassword != "" && c.RecoveryPassword == c.RecoveryConfirmation {
+			recoveryPassword = "Set and confirmed (root)"
+		}
+		rows = append(rows, [2]string{"Console recovery", recoveryPassword})
 		if c.TOTP {
 			recovery := "Not saved"
 			if c.RecoverySaved {

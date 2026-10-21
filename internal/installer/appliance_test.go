@@ -55,7 +55,7 @@ func TestApplianceInstall(t *testing.T) {
 		case "preview":
 			send(Request{Type: "confirm", Command: event.Command, Confirmation: "ERASE ALL DATA"})
 		case "confirm":
-			send(Request{Type: "configure", Config: &InstallConfig{NodeName: "upgrade-appliance", Timezone: "UTC", Network: hostnetwork.DefaultConfig(), Username: "admin", Password: "test-password", PasswordConfirmation: "test-password"}})
+			send(Request{Type: "configure", Config: &InstallConfig{NodeName: "upgrade-appliance", Timezone: "UTC", Network: hostnetwork.DefaultConfig(), Username: "admin", Password: "test-password", PasswordConfirmation: "test-password", RecoveryPassword: "console-password", RecoveryConfirmation: "console-password"}})
 		case "status":
 			t.Logf("%s: %s", event.Status.Phase, event.Status.Activity)
 		case "failed":

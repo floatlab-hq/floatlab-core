@@ -173,7 +173,16 @@ for the edit/rebuild loop and cache locations.
    at least 16 GiB of data. The service repeats the dry-run against the actual
    ZFS partitions before creating the pool. It copies and verifies the OS once
    into ZFS and installs each UEFI bootloader.
-3. Account credentials validate before advancing. The same screen offers TOTP
+3. Account credentials validate before advancing. Enter and confirm a separate
+   console recovery password for the local `root` account. Only its bcrypt hash is
+   saved, in the root-owned, mode `0600` file
+   `/floatlab/system/etc/root-password.hash`, outside the distro image.
+   The persistent configuration datasets mount in the initrd before NixOS account
+   activation reads `users.users.root.hashedPasswordFile`; no Nix build runs at boot.
+   SSH root password login remains disabled. Console recovery does not depend on
+   FloatLab, rqlite, or TOTP. The persisted hash is authoritative after reboot;
+   change that file to rotate recovery credentials, rather than using `passwd` alone.
+   The same screen offers TOTP
    Yes/No; if enabled, scan the compact theme-colored QR or enter its manual
    secret when NTP is synchronized. Verify the code and save the ten single-use
    recovery codes before reviewing host, network, and account settings and choosing

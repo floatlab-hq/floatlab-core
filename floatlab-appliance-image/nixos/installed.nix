@@ -24,6 +24,21 @@
     fi
   '';
   fileSystems."/" = { device = "floatlab/os/live"; fsType = "zfs"; };
+  # Mount persistent credentials in stage 1, before stage-2 user activation.
+  fileSystems."/floatlab/system" = {
+    device = "floatlab/system";
+    fsType = "zfs";
+    options = [ "zfsutil" ];
+    neededForBoot = true;
+  };
+  fileSystems."/floatlab/system/etc" = {
+    device = "floatlab/system/etc";
+    fsType = "zfs";
+    options = [ "zfsutil" ];
+    neededForBoot = true;
+  };
+  users.mutableUsers = false;
+  users.users.root.hashedPasswordFile = "/floatlab/system/etc/root-password.hash";
   services.timesyncd.enable = true;
   environment.systemPackages = [ pkgs.zfs pkgs.gitMinimal ];
   system.stateVersion = "26.05";

@@ -34,6 +34,8 @@ type InstallConfig struct {
 	Username             string             `json:"username"`
 	Password             string             `json:"password"`
 	PasswordConfirmation string             `json:"password_confirmation"`
+	RecoveryPassword     string             `json:"recovery_password"`
+	RecoveryConfirmation string             `json:"recovery_password_confirmation"`
 	TOTP                 bool               `json:"totp"`
 	TOTPCode             string             `json:"totp_code,omitempty"`
 	RecoverySaved        bool               `json:"recovery_saved,omitempty"`
@@ -501,6 +503,12 @@ func validateAccount(config InstallConfig) error {
 	if !credentials.Valid(config.Username, config.Password) {
 		return fmt.Errorf("username must be 1–64 characters without line breaks; password must be 1–72 bytes")
 	}
+	if !credentials.Valid("root", config.RecoveryPassword) || strings.ContainsAny(config.RecoveryPassword, "\x00\r\n") {
+		return fmt.Errorf("console recovery password must be 1–72 bytes without NUL or line breaks")
+	}
+	if config.RecoveryPassword != config.RecoveryConfirmation {
+		return fmt.Errorf("console recovery passwords do not match")
+	}
 	return nil
 }
 
@@ -556,6 +564,11 @@ func (s *Service) submission(ctx context.Context, config InstallConfig, enroll b
 	}
 	sub.Admin.Username, sub.Admin.PasswordHash = config.Username, string(hash)
 	sub.Admin.NodeID, sub.Admin.NodeName = sub.Host.NodeID, sub.Host.NodeName
+	recoveryHash, err := bcrypt.GenerateFromPassword([]byte(config.RecoveryPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return sub, err
+	}
+	sub.RecoveryPasswordHash = string(recoveryHash)
 	sub.VerificationPassword, err = credentials.Encrypt(s.key, config.Password)
 	return sub, err
 }

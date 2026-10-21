@@ -174,6 +174,7 @@
           touch "$out"
         '';
         host-network = import ./tests/network.nix { inherit pkgs floatlab-binaries; };
+        recovery-password = import ./tests/recovery-password.nix { inherit pkgs installed; };
         image-trim =
         let
           configurations = map (name: self.nixosConfigurations.${name}.config)
@@ -218,6 +219,12 @@
            assert builtins.elem "floatlab-installer-root.service" cfg.systemd.services.floatlab-core-stack.requires;
            assert installed.fileSystems."/".fsType == "zfs";
            assert installed.fileSystems."/".device == "floatlab/os/live";
+           assert installed.fileSystems."/floatlab/system".neededForBoot;
+           assert installed.fileSystems."/floatlab/system/etc".neededForBoot;
+           assert installed.fileSystems."/floatlab/system/etc".device == "floatlab/system/etc";
+           assert installed.users.users.root.hashedPasswordFile == "/floatlab/system/etc/root-password.hash";
+           assert !installed.users.mutableUsers;
+           assert installed.services.openssh.settings.PermitRootLogin == "prohibit-password";
            assert installed.hardware.enableAllHardware;
            assert pkgs.lib.all (name: builtins.elem name installed.boot.initrd.availableKernelModules)
              [ "virtio_blk" "virtio_scsi" "nvme" "ahci" "uas" "hpsa" "hv_storvsc" ];

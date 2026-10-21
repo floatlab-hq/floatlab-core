@@ -21,6 +21,7 @@ import (
 	"github.com/floatlab/floatlab-core/internal/credentials"
 	"github.com/floatlab/floatlab-core/internal/hostnetwork"
 	"github.com/pelletier/go-toml/v2"
+	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/sys/unix"
 )
 
@@ -45,6 +46,7 @@ type Submission struct {
 	Admin                credentials.Bootstrap `json:"admin"`
 	VerificationCode     string                `json:"verification_code,omitempty"`
 	VerificationPassword string                `json:"verification_password"` // encrypted; only retained in /run until success.
+	RecoveryPasswordHash string                `json:"recovery_password_hash"`
 }
 type Status struct {
 	Phase          string    `json:"phase"`
@@ -483,10 +485,16 @@ func installWorker(stopCtx context.Context, runtimeDir, persistentDir, mediaDir 
 	if err = credentials.ValidateBootstrap(sub.Admin); err != nil {
 		return err
 	}
+	if _, e := bcrypt.Cost([]byte(sub.RecoveryPasswordHash)); e != nil || len(sub.RecoveryPasswordHash) != 60 || strings.ContainsAny(sub.RecoveryPasswordHash, "\x00:\r\n") {
+		return fmt.Errorf("invalid console recovery password hash")
+	}
 	if sub.Host.NodeID != op.Identity.NodeID || sub.Host.HostID != op.Identity.HostID || sub.Host.JWTSecret != op.Identity.JWTSecret || sub.Admin.NodeID != sub.Host.NodeID || sub.Admin.NodeName != sub.Host.NodeName {
 		return fmt.Errorf("staged identity does not match confirmed installation")
 	}
 	if err = phase("Persist and apply host configuration", func() error {
+		if e := credentials.WriteBytes(persistentDir+"/root-password.hash", []byte(sub.RecoveryPasswordHash+"\n")); e != nil {
+			return e
+		}
 		if e := credentials.WritePrivate(persistentDir+"/appliance.json", sub.Host); e != nil {
 			return e
 		}
