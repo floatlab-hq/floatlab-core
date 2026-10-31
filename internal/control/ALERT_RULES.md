@@ -1,11 +1,33 @@
 # Management alert rule catalogue
 
-Status: proposed rule catalogue, 2026-10-20. See the
+Status: evaluator implemented; built-in catalogue and additional collectors
+remain outstanding. Updated 2026-10-28. See the
 [implemented evaluator](../../pkg/alerts/README.md) for current capabilities and
 configuration. This document defines the rules and
 evaluation behaviours needed by an evaluator running in the management service.
 It does not implement rules or promise that their inputs are already collected.
 Thresholds below are initial product defaults for review, not hardware guarantees.
+
+## Current implementation and outstanding tasks
+
+Implemented: leader-owned custom management/Compose rule evaluation,
+resource-specific persistent incidents, recovery/freshness predicates, duration
+continuity, recurrence, and transactional notifications. The appliance scenario
+in `integration/alert_evaluator_test.go` exercises real VictoriaMetrics and
+management restart behavior. Compose CPU, memory, lifetime restart count, and
+managed-volume space adapters are available.
+
+- [ ] Install the reviewed built-in rule catalogue with calibrated defaults.
+- [ ] Add missing host, SMART, pool/vdev/scrub/resilver, desired-workload, and
+  protection collectors with durable destination recovery-point evidence.
+- [ ] Add replacement-aware restart/OOM event windows; Docker's lifetime restart
+  count resets when a container is replaced.
+- [ ] Add notification endpoint configuration and external delivery with failure
+  and retry handling. Existing persistence/SSE provides local delivery.
+- [ ] Implement maintenance/inhibition policies and automatic severity bands.
+- [ ] Define and implement the deferred setup-alert lifecycle below.
+- [ ] Validate the full catalogue acceptance scenarios and external node-down
+  monitoring. An evaluator on the appliance cannot notify while that node is down.
 
 ## Scope and existing integration points
 
@@ -34,11 +56,12 @@ Existing code to reuse or reconcile during implementation:
   provide some workload inputs. Additional collection is required below.
 
 `pkg/stats/README.md` describes default rules and metrics that must not be assumed
-to be implemented. The root Compose file also configures vmalert. Assign each rule
-to one evaluator during migration so both paths do not send duplicate incidents.
-Existing custom condition strings and Compose rule names need a compatibility
-decision before changing their representation. This catalogue does not select a
-new expression language or database schema.
+to be implemented. The default Compose deployment no longer starts vmalert.
+External webhook rules may still be operated separately; assign each rule to one
+evaluator to avoid duplicate incidents. Management conditions use MetricsQL;
+legacy rules without recovery/freshness expressions stay unknown until updated.
+Compose rules use the implemented numeric-comparator adapter. See the evaluator
+README for compatibility and schema behavior.
 
 ## Deferred: setup alerts
 

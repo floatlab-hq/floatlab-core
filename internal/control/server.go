@@ -2,8 +2,10 @@ package control
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -24,21 +26,28 @@ import (
 )
 
 type Server struct {
-	startedAt time.Time
-	cfg       *Config
-	router    *chi.Mux
-	log       *zap.Logger
-	db        *rqlite.Client
-	store     *config.Store
-	raft      *floatraft.Node
-	hosts     *hostclient.Pool
-	sm        run.StateMachine
-	broker    *notify.Broker
-	vlogs     *logs.Client
-	vmets     *stats.Client
-	seq       *failover.Sequence
-	ops       *operation.Store
-	auth      *authLimiter
+	startedAt     time.Time
+	cfg           *Config
+	router        *chi.Mux
+	log           *zap.Logger
+	db            *rqlite.Client
+	store         *config.Store
+	raft          *floatraft.Node
+	hosts         *hostclient.Pool
+	sm            run.StateMachine
+	broker        *notify.Broker
+	vlogs         *logs.Client
+	vmets         *stats.Client
+	seq           *failover.Sequence
+	ops           *operation.Store
+	auth          *authLimiter
+	labHandler    http.Handler
+	secretMu      sync.RWMutex
+	labServer     *Server
+	workloadDB    *rqlite.Client
+	peerWorkloads *workloadPeers
+	joinPending   func() bool
+	membershipMu  sync.RWMutex
 }
 
 type Config struct {
@@ -53,6 +62,9 @@ type Config struct {
 	JWTIssuer     string
 	JWTAudience   string
 	CredentialKey []byte
+	LabDB         *rqlite.Client
+	LocalNodeID   string
+	RefreshLab    func(context.Context) error
 }
 
 func NewServer(
@@ -66,22 +78,29 @@ func NewServer(
 	log *zap.Logger,
 ) *Server {
 	s := &Server{
-		startedAt: time.Now(),
-		cfg:       cfg,
-		log:       log,
-		db:        db,
-		store:     store,
-		raft:      raftNode,
-		hosts:     hosts,
-		sm:        run.New(),
-		broker:    broker,
-		vlogs:     logs.NewClient(cfg.VLogsURL),
-		vmets:     stats.NewClient(cfg.VMetricsURL),
-		seq:       seq,
-		ops:       operation.NewStore(db),
-		auth:      newAuthLimiter(),
+		startedAt:  time.Now(),
+		cfg:        cfg,
+		log:        log,
+		db:         db,
+		workloadDB: db,
+		store:      store,
+		raft:       raftNode,
+		hosts:      hosts,
+		sm:         run.New(),
+		broker:     broker,
+		vlogs:      logs.NewClient(cfg.VLogsURL),
+		vmets:      stats.NewClient(cfg.VMetricsURL),
+		seq:        seq,
+		ops:        operation.NewStore(db),
+		auth:       newAuthLimiter(),
 	}
 	s.router = s.buildRouter()
+	if cfg.LabDB != nil {
+		labCfg := *cfg
+		labCfg.LabDB = nil
+		s.labServer = NewServer(&labCfg, cfg.LabDB, config.NewStore(cfg.LabDB), raftNode, hosts, broker, seq, log)
+		s.labServer.workloadDB = db
+	}
 	return s
 }
 
@@ -93,12 +112,24 @@ func (s *Server) buildRouter() *chi.Mux {
 	r.Use(pangolinIdentity)
 	r.Use(chimiddleware.Recoverer)
 	r.Use(updateMutationFence)
+	r.Use(s.labJoinFence)
 	r.Get("/swagger", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/swagger/", http.StatusMovedPermanently)
 	})
 	r.Handle("/swagger/*", http.StripPrefix("/swagger", managementapi.Handler()))
 
 	r.Route("/api/v1", func(r chi.Router) {
+		r.Group(func(r chi.Router) {
+			r.Use(s.requireAdminJWT)
+			r.Get("/lab/status", s.serveLab)
+			r.Get("/lab/members", s.serveLab)
+			r.Post("/lab/invitations", s.serveLab)
+			r.Post("/lab/join", s.serveLab)
+			r.Post("/lab/members/{id}/remove", s.serveLab)
+			r.Get("/lab/members/{id}/removal", s.serveLab)
+			r.Post("/lab/members/{id}/release-peer-address", s.serveLab)
+			r.Post("/lab/identity/rotate", s.serveLab)
+		})
 		registerAuthRoutes(r, s)
 		registerHealthRoutes(r, s)
 		r.Group(func(r chi.Router) { r.Use(s.requireAdminJWT); r.Use(s.idempotency); registerNodeRoutes(r, s) })
@@ -121,6 +152,102 @@ func (s *Server) buildRouter() *chi.Mux {
 	}
 
 	return r
+}
+
+func (s *Server) SetLabHandler(h http.Handler) { s.labHandler = h }
+
+func (s *Server) Handler() http.Handler { return s.router }
+
+func (s *Server) SetLabJoinGate(pending func() bool) { s.joinPending = pending }
+
+func (s *Server) labJoinFence(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.joinPending == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/lab/join" {
+			// Drain earlier writes before checking emptiness and switching lab credentials.
+			s.membershipMu.Lock()
+			defer s.membershipMu.Unlock()
+		} else {
+			s.membershipMu.RLock()
+			defer s.membershipMu.RUnlock()
+			if s.joinPending() {
+				writeErrorCode(w, http.StatusConflict, "lab_join_pending", "lab enrollment is pending; mutations and login resume after configuration sync")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) serveLab(w http.ResponseWriter, r *http.Request) {
+	if s.labHandler == nil {
+		writeError(w, 503, "lab enrollment is not configured")
+		return
+	}
+	s.labHandler.ServeHTTP(w, r)
+}
+
+func (s *Server) SetLabSecrets(jwtKey, encodedKey string) {
+	s.secretMu.Lock()
+	defer s.secretMu.Unlock()
+	s.cfg.JWTSecret = jwtKey
+	if key, err := base64.StdEncoding.DecodeString(encodedKey); err == nil && len(key) == 32 {
+		s.cfg.CredentialKey = key
+	}
+	if s.labServer != nil {
+		s.labServer.SetLabSecrets(jwtKey, encodedKey)
+	}
+}
+
+func (s *Server) ExportLabSecrets() map[string]string {
+	s.secretMu.RLock()
+	defer s.secretMu.RUnlock()
+	secrets := map[string]string{"jwt_secret": s.cfg.JWTSecret}
+	if len(s.cfg.CredentialKey) > 0 {
+		secrets["credential_key"] = base64.StdEncoding.EncodeToString(s.cfg.CredentialKey)
+	}
+	return secrets
+}
+
+// labMutation keeps shared writes on consensus while reads remain locally available.
+func (s *Server) labMutation(selectHandler func(*Server) http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		target := s
+		if s.labServer != nil {
+			target = s.labServer
+		}
+		selectHandler(target)(w, r)
+		if s.cfg.RefreshLab != nil {
+			if err := s.cfg.RefreshLab(r.Context()); err != nil {
+				s.log.Warn("lab cache refresh deferred", zap.Error(err))
+			}
+		}
+	}
+}
+
+func (s *Server) jwtKey() string {
+	s.secretMu.RLock()
+	defer s.secretMu.RUnlock()
+	return s.cfg.JWTSecret
+}
+func (s *Server) credentialKey() []byte {
+	s.secretMu.RLock()
+	defer s.secretMu.RUnlock()
+	return append([]byte(nil), s.cfg.CredentialKey...)
+}
+
+func (s *Server) labDatabase() *rqlite.Client {
+	if s.cfg.LabDB != nil {
+		return s.cfg.LabDB
+	}
+	return s.db
 }
 
 func (s *Server) Run(ctx context.Context) error {

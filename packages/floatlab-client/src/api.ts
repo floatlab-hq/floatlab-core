@@ -1,5 +1,6 @@
 import type { Container, ExecResult, FloatLabApi, HostNetworkApi, HostNetworkStatus, HostNetworkChange, NetworkPool, LogLine, Node, Stack, StackMetricSeries, UpdateApi, UpdateRelease, UpdateStatus } from "./types";
 import type { DashboardApi, TokenResponse, RaftHealth, Notification, NodeStats, StorageStats } from "./types";
+import type { LabApi } from "./types";
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) { super(message); }
@@ -16,7 +17,7 @@ export function normalizeApiUrl(url: string): string {
   return parsed.toString().replace(/\/$/, "");
 }
 
-export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNetworkApi & DashboardApi & UpdateApi {
+export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNetworkApi & DashboardApi & UpdateApi & LabApi {
   const baseUrl = normalizeApiUrl(options.baseUrl);
   const send = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
     const headers = new Headers(init.headers);
@@ -46,6 +47,14 @@ export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNe
   const changePath = (node: string, change: string) => `${hostNetworkPath(node)}/changes/${encodeURIComponent(change)}`;
   const updatePath = (node: string, component: string) => `/nodes/${encodeURIComponent(node)}/updates/${component}`;
   return {
+    getLabStatus: () => send("/lab/status"),
+    listLabMembers: () => send("/lab/members"),
+    createLabInvitation: () => send("/lab/invitations", { method: "POST" }),
+    joinLab: request => send("/lab/join", { method: "POST", body: JSON.stringify(request) }),
+    previewLabRemoval: node => send(`/lab/members/${encodeURIComponent(node)}/removal`),
+    removeLabMember: (node, operationId) => send(`/lab/members/${encodeURIComponent(node)}/remove`, { method: "POST", body: JSON.stringify({ confirm_node_id: node, operation_id: operationId }) }),
+    rotateLabIdentity: operationId => send("/lab/identity/rotate", { method: "POST", body: JSON.stringify({ operation_id: operationId }) }),
+    releaseLabPeerAddress: (node, operationId) => send(`/lab/members/${encodeURIComponent(node)}/release-peer-address`, { method: "POST", body: JSON.stringify({ confirm_node_id: node, operation_id: operationId, confirm_fenced: true, confirm_reset: true }) }),
     listUpdateReleases: (node, component) => send<UpdateRelease[]>(`${updatePath(node, component)}/releases`),
     getUpdateStatus: (node, component, operationId) => send<UpdateStatus | null>(`${updatePath(node, component)}/status${query({ operation_id: operationId })}`),
     runUpdateAction: (node, component, action, request, key) => mutation<UpdateStatus>(`${updatePath(node, component)}/${action}`, "POST", key, request),

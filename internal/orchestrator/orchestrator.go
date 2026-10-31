@@ -419,12 +419,7 @@ func (o *Orchestrator) doStart(ctx context.Context, stackID string) {
 			return
 		}
 	}
-	if _, err := o.pool.Execute(ctx, stack.PrimaryNodeID, "compose.pull", ipc.ComposePullPayload{StackID: stack.ID, DatasetPath: stack.ZFSDataset, ComposeFile: composeFile}); err != nil {
-		o.log.Error("orchestrator: start: compose.pull", zap.String("id", stackID), zap.Error(err))
-		o.applyEvent(stack.PrimaryNodeID, stackID, run.EventStartFailed)
-		_ = o.ops.FinishForStack(context.Background(), stackID, "start", "failed", err.Error())
-		return
-	}
+	// Compose up pulls missing images and respects explicit service pull policies.
 	if _, err := o.pool.Execute(ctx, stack.PrimaryNodeID, "compose.up", ipc.ComposeUpPayload{StackID: stack.ID, DatasetPath: stack.ZFSDataset, ComposeFile: composeFile}); err != nil {
 		o.log.Error("orchestrator: start: compose.up", zap.String("id", stackID), zap.Error(err))
 		o.applyEvent(stack.PrimaryNodeID, stackID, run.EventStartFailed)

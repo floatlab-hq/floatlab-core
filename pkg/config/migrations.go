@@ -2,6 +2,9 @@ package config
 
 import (
 	"context"
+	"encoding/binary"
+	"fmt"
+	"net/netip"
 
 	"github.com/floatlab/floatlab-core/pkg/alerts"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
@@ -12,6 +15,9 @@ func Migrate(ctx context.Context, db *rqlite.Client) error {
 	if err := db.Execute(ctx, []rqlite.Statement{
 		{SQL: `CREATE TABLE IF NOT EXISTS failover_steps (stack_id TEXT NOT NULL, sequence_id TEXT NOT NULL, step INTEGER NOT NULL, name TEXT NOT NULL, state TEXT NOT NULL, started_at TEXT, completed_at TEXT, detail TEXT, PRIMARY KEY(stack_id, sequence_id, step))`},
 		{SQL: `CREATE TABLE IF NOT EXISTS prefix_pools (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, prefix TEXT NOT NULL UNIQUE, stack_id TEXT, created_at TEXT NOT NULL)`},
+		{SQL: `CREATE TABLE IF NOT EXISTS node_pool_ranges (pool_id TEXT PRIMARY KEY, start INTEGER NOT NULL, end INTEGER NOT NULL, owner TEXT NOT NULL, CHECK(start<=end))`},
+		{SQL: `CREATE TRIGGER IF NOT EXISTS node_pool_range_insert BEFORE INSERT ON node_pool_ranges BEGIN SELECT RAISE(ABORT,'address range overlaps a reserved node range') WHERE EXISTS(SELECT 1 FROM node_pool_ranges WHERE pool_id<>NEW.pool_id AND start<=NEW.end AND end>=NEW.start); END`},
+		{SQL: `CREATE TRIGGER IF NOT EXISTS node_pool_range_update BEFORE UPDATE ON node_pool_ranges BEGIN SELECT RAISE(ABORT,'range ownership cannot be transferred implicitly') WHERE OLD.owner<>NEW.owner; SELECT RAISE(ABORT,'address range overlaps a reserved node range') WHERE EXISTS(SELECT 1 FROM node_pool_ranges WHERE pool_id<>NEW.pool_id AND start<=NEW.end AND end>=NEW.start); END`},
 		{SQL: `CREATE TABLE IF NOT EXISTS nodes (
 			id           TEXT PRIMARY KEY,
 			cluster_uuid TEXT NOT NULL,
@@ -54,6 +60,23 @@ func Migrate(ctx context.Context, db *rqlite.Client) error {
 			channel     TEXT
 		)`},
 	}); err != nil {
+		return err
+	}
+	// Reservations survive pool deletion and member removal until explicit retirement.
+	ranges, err := db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT p.id,p.start_ip,p.end_ip,COALESCE((SELECT MIN(node_id) FROM network_pool_nodes WHERE pool_id=p.id),'') FROM network_pools p WHERE NOT EXISTS(SELECT 1 FROM node_pool_ranges WHERE pool_id=p.id)`})
+	if err != nil {
+		return err
+	}
+	var reservations []rqlite.Statement
+	for _, row := range ranges.Values {
+		start, e1 := netip.ParseAddr(fmt.Sprint(row[1]))
+		end, e2 := netip.ParseAddr(fmt.Sprint(row[2]))
+		if e1 != nil || e2 != nil || !start.Is4() || !end.Is4() {
+			return fmt.Errorf("invalid existing pool range %v", row[0])
+		}
+		reservations = append(reservations, rqlite.Statement{SQL: `INSERT INTO node_pool_ranges(pool_id,start,end,owner) VALUES(?,?,?,?) ON CONFLICT(pool_id) DO NOTHING`, Params: []any{row[0], binary.BigEndian.Uint32(start.AsSlice()), binary.BigEndian.Uint32(end.AsSlice()), row[3]}})
+	}
+	if err = db.Execute(ctx, reservations); err != nil {
 		return err
 	}
 	// Preserve legacy columns and records while adding the management contract.

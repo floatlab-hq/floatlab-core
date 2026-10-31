@@ -37,6 +37,7 @@ func main() {
 	rollback.Flags().BoolVar(&expired, "expired", false, "Only restore expired unconfirmed changes")
 	network.AddCommand(rollback)
 	root.AddCommand(network)
+	addLabCommands(root)
 	root.AddCommand(&cobra.Command{Use: "update-reconcile", Short: "Recover updates before management startup", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		management := managementupdate.NewDefault()
 		host := hostd.NewHostUpdateCoordinator(management)

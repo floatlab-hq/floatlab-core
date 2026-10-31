@@ -55,7 +55,7 @@ func (c *Client) ComposeUp(ctx context.Context, projectName, path string) error 
 	if err != nil {
 		return err
 	}
-	return c.compose.Up(ctx, project, composeapi.UpOptions{Create: composeapi.CreateOptions{Build: &composeapi.BuildOptions{Pull: true}, RemoveOrphans: true}, Start: composeapi.StartOptions{}})
+	return c.compose.Up(ctx, project, composeapi.UpOptions{Create: composeapi.CreateOptions{Build: &composeapi.BuildOptions{}, RemoveOrphans: true}, Start: composeapi.StartOptions{}})
 }
 
 func (c *Client) ComposeDown(ctx context.Context, projectName, path string, volumes bool) error {

@@ -13,6 +13,21 @@
   services.openssh.enable = true;
   services.openssh.settings.PermitRootLogin = "prohibit-password";
 
+  users.groups.floatlab-replica = { };
+  users.users.floatlab-replica = {
+    isSystemUser = true;
+    group = "floatlab-replica";
+    home = "/var/lib/floatlab-replica";
+    createHome = true;
+    shell = pkgs.bashInteractive;
+    # Public-key-only access is confined by forced-command authorized keys.
+    hashedPassword = "*";
+  };
+  security.sudo.extraRules = [{
+    users = [ "floatlab-replica" ];
+    commands = [{ command = "/floatlab/system/etc/lab/replica-receive-root.sh"; options = [ "NOPASSWD" ]; }];
+  }];
+
   environment.systemPackages = with pkgs; [
     bashInteractive
     coreutils
@@ -24,6 +39,7 @@
     jq
     lsof
     pciutils
+    sqlite
     tmux
     usbutils
     nano

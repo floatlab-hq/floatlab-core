@@ -62,6 +62,22 @@ tags:
     description: Hostd-coordinated management and OS updates
 
 paths:
+  /lab/status:
+    $ref: './lab.yaml#/paths/~1lab~1status'
+  /lab/members:
+    $ref: './lab.yaml#/paths/~1lab~1members'
+  /lab/invitations:
+    $ref: './lab.yaml#/paths/~1lab~1invitations'
+  /lab/join:
+    $ref: './lab.yaml#/paths/~1lab~1join'
+  /lab/members/{id}/remove:
+    $ref: './lab.yaml#/paths/~1lab~1members~1{id}~1remove'
+  /lab/members/{id}/removal:
+    $ref: './lab.yaml#/paths/~1lab~1members~1{id}~1removal'
+  /lab/members/{id}/release-peer-address:
+    $ref: './lab.yaml#/paths/~1lab~1members~1{id}~1release-peer-address'
+  /lab/identity/rotate:
+    $ref: './lab.yaml#/paths/~1lab~1identity~1rotate'
   /nodes/{id}/updates/{component}/releases:
     $ref: './updates.yaml#/paths/~1nodes~1{id}~1updates~1{component}~1releases'
   /nodes/{id}/updates/{component}/status:

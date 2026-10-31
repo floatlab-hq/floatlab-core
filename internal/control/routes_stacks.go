@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -24,21 +25,28 @@ import (
 
 // stackResponse matches the frontend Stack interface field names exactly.
 type stackResponse struct {
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	State            string    `json:"state"`
-	PrimaryNode      string    `json:"primary_node"`
-	SecondaryNode    string    `json:"secondary_node"`
-	ComposeFile      string    `json:"compose_file"`
-	DatasetPath      string    `json:"dataset_path"`
-	FailoverMode     string    `json:"failover_mode"`
-	AutoTriggerAfter string    `json:"auto_trigger_after"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	OwnerNode          string     `json:"owner_node,omitempty"`
+	Replica            bool       `json:"replica"`
+	Stale              bool       `json:"stale"`
+	ObservedGeneration string     `json:"observed_generation,omitempty"`
+	ObservedRevision   int64      `json:"observed_revision,omitempty"`
+	ObservedAt         *time.Time `json:"observed_at,omitempty"`
+	ID                 string     `json:"id"`
+	Name               string     `json:"name"`
+	State              string     `json:"state"`
+	PrimaryNode        string     `json:"primary_node"`
+	SecondaryNode      string     `json:"secondary_node"`
+	ComposeFile        string     `json:"compose_file"`
+	DatasetPath        string     `json:"dataset_path"`
+	FailoverMode       string     `json:"failover_mode"`
+	AutoTriggerAfter   string     `json:"auto_trigger_after"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 func toStackResponse(st *config.Stack, fsmState string) stackResponse {
 	return stackResponse{
+		OwnerNode:        st.PrimaryNodeID,
 		ID:               st.ID,
 		Name:             st.Name,
 		State:            fsmState,
@@ -68,10 +76,12 @@ type containerResponse struct {
 func registerStackRoutes(r chi.Router, s *Server) {
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireAdminJWT)
+		r.Use(s.routeWorkloadOwner)
 		r.Post("/stacks/validate", s.handleValidateStack)
 	})
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireAdminJWT)
+		r.Use(s.routeWorkloadOwner)
 		r.Use(s.idempotency)
 		r.Get("/stacks", s.handleListStacks)
 		r.Post("/stacks", s.handleCreateStack)
@@ -104,20 +114,30 @@ func registerStackRoutes(r chi.Router, s *Server) {
 }
 
 func (s *Server) handleListStacks(w http.ResponseWriter, r *http.Request) {
-	stacks, err := s.store.ListStacks(r.Context())
+	result, err := s.stackViews(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) stackViews(ctx context.Context) ([]stackResponse, error) {
+	stacks, err := s.store.ListStacks(ctx)
+	if err != nil {
+		return nil, err
+	}
 	result := make([]stackResponse, 0, len(stacks))
 	for _, st := range stacks {
 		var state string
-		if inst, ok := s.raft.FSM().State(st.ID); ok {
-			state = string(inst.State)
+		if s.raft != nil {
+			if inst, ok := s.raft.FSM().State(st.ID); ok {
+				state = string(inst.State)
+			}
 		}
 		result = append(result, toStackResponse(st, state))
 	}
-	writeJSON(w, http.StatusOK, result)
+	return s.appendReplicaStacks(ctx, result)
 }
 
 func (s *Server) handleGetStack(w http.ResponseWriter, r *http.Request) {
@@ -237,6 +257,10 @@ func (s *Server) handleCreateStack(w http.ResponseWriter, r *http.Request) {
 	canonical, parsed, err := validateCompose(r, req.ComposeFile, name)
 	if err != nil {
 		writeComposeValidationError(w, err)
+		return
+	}
+	if s.cfg != nil && s.cfg.LocalNodeID != "" && parsed.Extension.PrimaryNode != s.cfg.LocalNodeID {
+		writeErrorCode(w, 409, "workload_owner_mismatch", "create this stack through its owner node")
 		return
 	}
 	if req.PrimaryNodeID != nil && parsed.Extension.PrimaryNode != *req.PrimaryNodeID {
@@ -494,8 +518,22 @@ func (s *Server) handleCreateAndStartStack(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusServiceUnavailable, "no execution node is registered")
 		return
 	}
+	executionNode := nodes[0].ID
+	if s.cfg != nil && s.cfg.LocalNodeID != "" {
+		executionNode = ""
+		for _, node := range nodes {
+			if node.ID == s.cfg.LocalNodeID {
+				executionNode = node.ID
+				break
+			}
+		}
+		if executionNode == "" {
+			writeError(w, http.StatusServiceUnavailable, "local execution node is not registered")
+			return
+		}
+	}
 	if staging != "" {
-		if _, err := s.hosts.Execute(r.Context(), nodes[0].ID, "fs.dataset.create", ipc.DatasetCreatePayload{Dataset: "floatlab/" + name, BlockSize: "32K", Compression: "lz4"}); err != nil {
+		if _, err := s.hosts.Execute(r.Context(), executionNode, "fs.dataset.create", ipc.DatasetCreatePayload{Dataset: "floatlab/" + name, BlockSize: "32K", Compression: "lz4"}); err != nil {
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
@@ -504,7 +542,7 @@ func (s *Server) handleCreateAndStartStack(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	stack := &config.Stack{ID: uuid.NewString(), Name: name, PrimaryNodeID: nodes[0].ID, ComposeYAML: source, ZFSDataset: "floatlab/" + name, FailoverMode: "manual"}
+	stack := &config.Stack{ID: uuid.NewString(), Name: name, PrimaryNodeID: executionNode, ComposeYAML: source, ZFSDataset: "floatlab/" + name, FailoverMode: "manual"}
 	if err := s.store.CreateStack(r.Context(), stack); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return

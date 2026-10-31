@@ -12,9 +12,9 @@
   }) ];
   systemd.services.floatlab-hostd = {
     description = "FloatLab host daemon";
-    path = with pkgs; [ coreutils docker inetutils iproute2 openssh zfs systemd ethtool util-linux gnutar gzip nix efibootmgr floatlab-zbm-kcl nftables docker-compose ];
+    path = with pkgs; [ coreutils docker inetutils iproute2 openssh zfs systemd ethtool util-linux gnutar gzip nix efibootmgr floatlab-zbm-kcl nftables docker-compose sqlite ];
     wantedBy = [ "multi-user.target" ];
-    requires = [ "floatlab-network-config.service" "floatlab-datasets.service" ];
+    requires = [ "floatlab-network-config.service" "floatlab-datasets.service" "floatlab-lab-quarantine.service" ];
     after = [ "floatlab-network-config.service" "floatlab-datasets.service" ];
     before = [ "floatlab-core-stack.service" ];
     serviceConfig = {
@@ -31,6 +31,32 @@
       EnvironmentFile = "-/floatlab/system/etc/hostd.env";
       RuntimeDirectoryMode = "0750";
     };
+  };
+  # An interrupted explicit lab recovery must remain quarantined across reboot.
+  systemd.services.floatlab-lab-quarantine = {
+    description = "Restore pending FloatLab lab recovery quarantine";
+    wantedBy = [ "multi-user.target" ];
+    requires = [ "floatlab-datasets.service" ];
+    after = [ "floatlab-datasets.service" ];
+    before = [ "docker.service" "sshd.service" "floatlab-hostd.service" ];
+    path = [ pkgs.nftables ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    script = ''
+      if [ -f /floatlab/system/etc/lab/recovery-quarantine.nft ]; then
+        if nft list table inet floatlab_lab_recovery >/dev/null 2>&1; then
+          { echo 'delete table inet floatlab_lab_recovery'; cat /floatlab/system/etc/lab/recovery-quarantine.nft; } | nft -f -
+        else
+          nft -f /floatlab/system/etc/lab/recovery-quarantine.nft
+        fi
+      fi
+    '';
+  };
+  systemd.services.docker = {
+    requires = [ "floatlab-lab-quarantine.service" ];
+    after = [ "floatlab-lab-quarantine.service" ];
   };
   # Independent from hostd and its network, Docker, and persistent-mount dependencies.
   systemd.services.floatlab-boot-recovery = {

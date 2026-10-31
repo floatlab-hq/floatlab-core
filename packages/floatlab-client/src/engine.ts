@@ -1,5 +1,5 @@
 import { ApiError } from "./api";
-import type { CommandResult, CommandRuntime, Completion, Container, FloatLabApi, Node, Stack, UpdateApi, UpdateAction, UpdateComponent } from "./types";
+import type { CommandResult, CommandRuntime, Completion, Container, FloatLabApi, Node, Stack, UpdateApi, UpdateAction, UpdateComponent, LabApi, LabJoinRequest } from "./types";
 
 export class CommandError extends Error { constructor(message: string, readonly code = 2) { super(message); } }
 
@@ -21,6 +21,7 @@ export function tokenize(input: string): string[] {
 
 type Parsed = { name: string; positionals: string[]; flags: Record<string, string | boolean> };
 const commands = [
+  ["lab", [], "lab status|members|invite|join <request-json>|preview <node>|remove <node> <operation>|rotate <operation>|release-peer-address <node> <operation> --confirm-fenced --confirm-reset"],
   ["create", ["new", "add", "mk", "make"], "create <name> [--file path | --primary node] [--secondary node] [--start]"],
   ["config", [], "config <stack>"],
   ["stats", [], "stats <stack> [--range 1h|6h|24h|7d]"],
@@ -53,7 +54,7 @@ function parse(input: string | string[]): Parsed {
     const equal = word.indexOf("=");
     const key = word.slice(2, equal < 0 ? undefined : equal);
     const inline = equal < 0 ? undefined : word.slice(equal + 1);
-    if (!key || !["primary", "secondary", "start", "purge", "search", "since", "limit", "containers", "file", "range"].includes(key)) throw new CommandError(`Unknown flag: ${word}`);
+    if (!key || !["primary", "secondary", "start", "purge", "search", "since", "limit", "containers", "file", "range", "confirm-fenced", "confirm-reset"].includes(key)) throw new CommandError(`Unknown flag: ${word}`);
     if (flagValues.has(key)) {
       const value = inline ?? words[++index]; if (!value || value.startsWith("--")) throw new CommandError(`--${key} needs a value`);
       flags[key] = value;
@@ -74,7 +75,7 @@ const text = (value: unknown) => typeof value === "string" ? value : JSON.string
 export class CommandEngine {
   private stacks?: { at: number; value: Stack[] };
   private nodes?: { at: number; value: Node[] };
-  constructor(readonly api: FloatLabApi & Partial<UpdateApi>, readonly runtime: CommandRuntime, private readonly ttlMs = 10_000) {}
+  constructor(readonly api: FloatLabApi & Partial<UpdateApi & LabApi>, readonly runtime: CommandRuntime, private readonly ttlMs = 10_000) {}
 
   async dispatch(input: string | string[]): Promise<{ code: number; result: CommandResult }> {
     try {
@@ -92,6 +93,7 @@ export class CommandEngine {
     const matching = (choices: Completion[]) => choices.filter((choice) => choice.value.toLowerCase().startsWith(last.toLowerCase()));
     if (words.length <= 1 && !input.endsWith(" ")) return matching([...commands.flatMap(([name, names, description]) => [name, ...names].map((value) => ({ value, description }))), ...["help", "exit", "quit"].map((value) => ({ value, description: "interactive command" }))]);
     const name = aliases.get(words[0] ?? ""); if (!name) return [];
+    if (name === "lab") return words.length <= 2 ? matching(["status", "members", "invite", "join", "preview", "remove", "rotate", "release-peer-address"].map(value => ({ value }))) : [];
     if (name === "update") {
       const index = input.endsWith(" ") ? words.length : words.length - 1;
       if (index === 1) return matching(["management", "host"].map(value => ({ value })));
@@ -129,7 +131,12 @@ export class CommandEngine {
     if (this.nodes && Date.now() - this.nodes.at < this.ttlMs) return this.nodes.value;
     const value = await this.api.listNodes(); this.nodes = { at: Date.now(), value }; return value;
   }
-  private async stack(value: string): Promise<Stack> { return exactOne(await this.getStacks(), value, "stack"); }
+  private async stack(value: string): Promise<Stack> {
+    const separator = value.indexOf("/");
+    if (separator < 0) return exactOne(await this.getStacks(), value, "stack");
+    const node = await this.node(value.slice(0, separator));
+    return exactOne((await this.getStacks()).filter(stack => stack.primary_node === node.id), value.slice(separator + 1), "stack");
+  }
   private async container(stack: Stack, value: string): Promise<Container> { return exactOne(await this.api.listContainers(stack.id), value, "container"); }
   private async node(value: string): Promise<Node> { return exactOne(await this.getNodes(), value, "node"); }
   private async ask(message: string): Promise<string> { const value = await this.runtime.ask?.(message); if (!value) throw new CommandError(`${message} is required`); return value; }
@@ -139,6 +146,7 @@ export class CommandEngine {
   private async run(parsed: Parsed): Promise<CommandResult> {
     if (parsed.name === "help") return { kind: "text", text: commands.map(([, aliases, help]) => `${help}${aliases.length ? ` (${aliases.join(", ")})` : ""}`).join("\n") + "\nhelp, exit, quit" };
     const { name, positionals: args, flags } = parsed;
+    if (name === "lab") return this.lab(args, flags);
     if (name === "config") {
       if (args.length !== 1) throw new CommandError("Usage: config <stack>");
       return { kind: "text", text: await this.api.getStackConfig((await this.stack(args[0]!)).id) };
@@ -159,6 +167,33 @@ export class CommandEngine {
     if (name === "upgrade") return this.upgrade(args);
     if (name === "update") return this.update(args);
     return this.snapshot(args);
+  }
+
+  private async lab(args: string[], flags: Record<string, string | boolean>): Promise<CommandResult> {
+    const [action, target, operation] = args;
+    const api = this.api;
+    let value: unknown;
+    if (args.length === 1 && action === "status" && api.getLabStatus) value = await api.getLabStatus();
+    else if (args.length === 1 && action === "members" && api.listLabMembers) value = await api.listLabMembers();
+    else if (args.length === 1 && action === "invite" && api.createLabInvitation) value = await api.createLabInvitation();
+    else if (args.length === 2 && action === "join" && api.joinLab) {
+      const request = JSON.parse(target!) as LabJoinRequest;
+      if (!request.invitation?.token || !request.peer_url || !request.raft_address || !request.rqlite_address) throw new CommandError("Join requires invitation, peer_url, raft_address and rqlite_address");
+      if (!await this.confirm("Join this empty appliance to the invited lab?")) return { kind: "text", text: "Join cancelled." };
+      value = await api.joinLab(request); this.changed();
+    } else if (args.length === 2 && action === "preview" && api.previewLabRemoval) value = await api.previewLabRemoval((await this.node(target!)).id);
+    else if (args.length === 3 && action === "remove" && api.removeLabMember && api.previewLabRemoval) {
+      const node = await this.node(target!);
+      await this.runtime.present({ kind: "text", text: text(await api.previewLabRemoval(node.id)) });
+      if (!await this.confirm(`Remove ${node.id}? Its workloads may still be running and its addresses remain reserved.`)) return { kind: "text", text: "Removal cancelled." };
+      value = await api.removeLabMember(node.id, operation!); this.changed();
+    } else if (args.length === 2 && action === "rotate" && api.rotateLabIdentity) value = await api.rotateLabIdentity(target!);
+    else if (args.length === 3 && action === "release-peer-address" && flags["confirm-fenced"] && flags["confirm-reset"] && api.releaseLabPeerAddress) {
+      const node = await this.node(target!);
+      if (!await this.confirm(`Confirm ${node.id} is fenced and reset to an empty appliance before releasing its peer address?`)) return { kind: "text", text: "Address release cancelled." };
+      value = await api.releaseLabPeerAddress(node.id, operation!);
+    } else throw new CommandError("Invalid or unsupported lab command. See help; removal and rotation require a stable operation ID.");
+    return { kind: "text", text: text(value) };
   }
 
   private async create(args: string[], flags: Record<string, string | boolean>): Promise<CommandResult> {
@@ -277,7 +312,11 @@ export class CommandEngine {
   private async list(args: string[], allContainers: boolean): Promise<CommandResult> {
     if (args.length > 1 || (args.length && allContainers)) throw new CommandError("Usage: list [stack] [--containers]");
     if (args[0]) { const stack = await this.stack(args[0]); return this.containerTable(await this.api.listContainers(stack.id)); }
-    const stacks = await this.getStacks(); if (!allContainers) return { kind: "table", columns: ["name", "state", "primary", "secondary"], rows: stacks.map((stack) => [stack.name, stack.state, stack.primary_node, stack.secondary_node ?? ""]) };
+    const stacks = await this.getStacks();
+    if (!allContainers) {
+      const peerViews = stacks.some(stack => stack.replica);
+      return { kind: "table", columns: ["name", "state", "primary", "secondary", ...(peerViews ? ["view"] : [])], rows: stacks.map(stack => [stack.name, stack.state, stack.primary_node, stack.secondary_node ?? "", ...(peerViews ? [stack.replica ? `cached revision ${stack.observed_revision ?? "unknown"}` : "local"] : [])]) };
+    }
     const rows = (await Promise.all(stacks.map(async (stack) => (await this.api.listContainers(stack.id)).map((container) => [stack.name, ...this.containerRow(container)])))).flat();
     return { kind: "table", columns: ["stack", "service", "container", "image", "state", "health", "active node"], rows };
   }

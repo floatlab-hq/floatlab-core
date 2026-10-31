@@ -40,7 +40,7 @@ func TestCLICaddy(t *testing.T) {
 	}
 	temporary := t.TempDir()
 	binary := filepath.Join(temporary, "floatlab")
-	run(t, root, nil, "bun", "build", "--compile", "cli/src/main.ts", "--outfile", binary)
+	run(t, temporary, nil, "bun", "build", "--compile", filepath.Join(root, "cli/src/main.ts"), "--outfile", binary)
 	c := newAPIClient(t, startAppliance(t))
 	c.waitReady()
 	c.login()

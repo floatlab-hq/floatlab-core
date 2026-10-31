@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { appItem, hostItem, labEvent, latest, percentage } from './live'
 import { node, stack } from './live-fixtures'
 describe('Live dashboard mapping', () => {
+  it('labels remote snapshots as cached without renaming local workloads', () => {
+    expect(appItem({ ...stack, replica: true, stale: true }, [node]).name).toBe(stack.name + ' (cached)')
+    expect(appItem(stack, [node]).name).toBe(stack.name)
+  })
   it('does not manufacture missing metrics', () => {
     expect(latest()).toBeUndefined()
     expect(latest({ name: 'cpu', labels: {}, points: [{ ts: 1, value: NaN }] })).toBeUndefined()

@@ -58,11 +58,17 @@ func (s *Server) handleHealthRaft(w http.ResponseWriter, r *http.Request) {
 
 func registerNodeRoutes(r chi.Router, s *Server) {
 	r.Get("/nodes", s.handleListNodes)
-	r.Post("/nodes", s.handleCreateNode)
+	r.Post("/nodes", s.labMutation(func(target *Server) http.HandlerFunc { return target.handleCreateNode }))
 	r.Get("/nodes/{id}", s.handleGetNode)
-	r.Put("/nodes/{id}", s.handleUpdateNode)
-	r.Delete("/nodes/{id}", s.handleDeleteNode)
-	r.Get("/nodes/{id}/health", s.handleNodeHealth)
+	r.Put("/nodes/{id}", s.labMutation(func(target *Server) http.HandlerFunc { return target.handleUpdateNode }))
+	r.Delete("/nodes/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if s.labHandler != nil {
+			writeError(w, http.StatusConflict, "use /lab/members/{id}/removal to preview and /lab/members/{id}/remove to remove an enrolled member")
+			return
+		}
+		s.labMutation(func(target *Server) http.HandlerFunc { return target.handleDeleteNode })(w, r)
+	})
+	r.With(s.routeNodeHealth).Get("/nodes/{id}/health", s.handleNodeHealth)
 	r.Get("/nodes/{id}/stacks", s.handleNodeStacks)
 }
 
@@ -175,14 +181,14 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleNodeStacks(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	all, err := s.store.ListStacks(r.Context())
+	all, err := s.stackViews(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	result := make([]*config.Stack, 0)
+	result := make([]stackResponse, 0)
 	for _, st := range all {
-		if st.PrimaryNodeID == id || st.BackupNodeID == id {
+		if st.PrimaryNode == id || st.SecondaryNode == id {
 			result = append(result, st)
 		}
 	}
@@ -194,11 +200,11 @@ func registerNetworkRoutes(r chi.Router, s *Server) {
 		r.Use(s.requireAdminJWT)
 		r.Use(s.idempotency)
 		r.Get("/settings/network-pools", s.handleListNetworkPools)
-		r.Post("/settings/network-pools", s.handleCreateNetworkPool)
-		r.Put("/settings/network-pools/{id}", s.handleUpdateNetworkPool)
-		r.Delete("/settings/network-pools/{id}", s.handleDeleteNetworkPool)
+		r.Post("/settings/network-pools", s.labMutation(func(target *Server) http.HandlerFunc { return target.handleCreateNetworkPool }))
+		r.Put("/settings/network-pools/{id}", s.labMutation(func(target *Server) http.HandlerFunc { return target.handleUpdateNetworkPool }))
+		r.Delete("/settings/network-pools/{id}", s.labMutation(func(target *Server) http.HandlerFunc { return target.handleDeleteNetworkPool }))
 		r.Get("/network/pools", s.handleListPrefixPools)
-		r.Post("/network/pools", s.handleCreatePrefixPool)
+		r.Post("/network/pools", s.labMutation(func(target *Server) http.HandlerFunc { return target.handleCreatePrefixPool }))
 		r.Post("/network/allocations", s.handleCreateAllocation)
 		r.Get("/network/allocations", s.handleListAllocations)
 		r.Delete("/network/allocations/{id}", s.handleDeleteAllocation)

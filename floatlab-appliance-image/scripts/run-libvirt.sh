@@ -43,7 +43,7 @@ virt-install --connect "$uri" \
   --boot cdrom \
   --disk "path=$iso,device=cdrom,readonly=on" \
   --disk "vol=$pool/$volume,bus=virtio,serial=floatlab-zfs" \
-  --network network=default,model=virtio \
+  --network "network=${LIBVIRT_NETWORK:-default},model=virtio" \
   --channel unix,target_type=virtio,name=org.qemu.guest_agent.0 \
   --graphics none \
   --console pty,target_type=serial \

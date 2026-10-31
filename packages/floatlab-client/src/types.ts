@@ -97,3 +97,16 @@ export interface UpdateApi {
   getUpdateStatus(nodeId: string, component: UpdateComponent, operationId?: string): Promise<UpdateStatus | null>;
   runUpdateAction(nodeId: string, component: UpdateComponent, action: UpdateAction, request: { release?: string; operation_id?: string }, idempotencyKey: string): Promise<UpdateStatus>;
 }
+
+export type LabInvitation = { lab_id: string; bootstrap_url: string; token: string; fingerprint: string; expires_at: string };
+export type LabJoinRequest = { invitation: LabInvitation; peer_url: string; raft_address: string; rqlite_address: string };
+export interface LabApi {
+  getLabStatus(): Promise<Record<string, unknown>>;
+  listLabMembers(): Promise<Record<string, unknown>>;
+  createLabInvitation(): Promise<LabInvitation>;
+  joinLab(request: LabJoinRequest): Promise<Record<string, unknown>>;
+  previewLabRemoval(nodeId: string): Promise<Record<string, unknown>>;
+  removeLabMember(nodeId: string, operationId: string): Promise<Record<string, unknown>>;
+  rotateLabIdentity(operationId: string): Promise<Record<string, unknown>>;
+  releaseLabPeerAddress(nodeId: string, operationId: string): Promise<Record<string, unknown>>;
+}

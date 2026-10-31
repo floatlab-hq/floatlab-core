@@ -61,7 +61,7 @@ func BootstrapUser(ctx context.Context, db *rqlite.Client, username, password st
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.JWTSecret == "" {
+	if s.jwtKey() == "" {
 		writeError(w, http.StatusServiceUnavailable, "JWT authentication is not configured")
 		return
 	}
@@ -126,7 +126,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.JWTAudience != "" {
 		claims.Audience = jwt.ClaimStrings{s.cfg.JWTAudience}
 	}
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(s.cfg.JWTSecret))
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(s.jwtKey()))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not issue token")
 		return
@@ -188,13 +188,15 @@ func (s *Server) verifySecondFactor(ctx context.Context, request loginRequest, e
 		return false, nil
 	}
 	if request.RecoveryCode != "" {
-		result, err := s.db.Request(ctx, rqlite.Statement{SQL: `DELETE FROM user_recovery_codes WHERE username=? AND code_hash=?`, Params: []interface{}{request.Username, credentials.RecoveryHash(request.RecoveryCode)}})
+		// Recovery codes remain lab-wide single-use; offline login can use TOTP,
+		// but must not consume a code independently on several partitioned nodes.
+		result, err := s.labDatabase().Request(ctx, rqlite.Statement{SQL: `DELETE FROM user_recovery_codes WHERE username=? AND code_hash=?`, Params: []interface{}{request.Username, credentials.RecoveryHash(request.RecoveryCode)}})
 		if err != nil {
 			return false, err
 		}
 		return result.RowsAffected == 1, nil
 	}
-	secret, err := credentials.Decrypt(s.cfg.CredentialKey, encrypted)
+	secret, err := credentials.Decrypt(s.credentialKey(), encrypted)
 	if err != nil {
 		return false, err
 	}

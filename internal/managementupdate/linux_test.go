@@ -54,6 +54,20 @@ func TestSandboxWaitsForRecoveredDatabaseWithoutWeakeningIsolation(t *testing.T)
 	s := &Status{Manifest: Manifest{Images: map[string]string{"floatlab-control": "control:target", "rqlite": "rqlite:target", "victoria-metrics": "metrics:target", "victoria-logs": "logs:target"}}}
 	doc := sandboxCompose(s, "floatlab/system/update-tests/test", "/updates/test/identity.json", "node1", "test-isolated")
 	ss := services(doc)
+	control := ss["floatlab-control"]
+	if !strings.Contains(strings.Join(control["command"].([]string), " "), "--workload-db=/var/lib/floatlab/workloads/local.sqlite") {
+		t.Fatal("candidate does not check the disposable local workload schema")
+	}
+	localCopy := false
+	for _, volume := range control["volumes"].([]any) {
+		bind := volume.(map[string]any)
+		if bind["target"] == "/var/lib/floatlab/workloads" {
+			localCopy = bind["source"] == "/updates/test/workloads"
+		}
+	}
+	if !localCopy {
+		t.Fatal("candidate local database is not isolated from production")
+	}
 	depends := ss["floatlab-control"]["depends_on"].(map[string]any)
 	if depends["rqlite"].(map[string]string)["condition"] != "service_healthy" {
 		t.Fatal("control can start before database recovery")

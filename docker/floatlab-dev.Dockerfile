@@ -1,9 +1,16 @@
+FROM debian:12-slim AS sqlite-builder
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gcc libc6-dev unzip && rm -rf /var/lib/apt/lists/*
+COPY docker/build-sqlite-tools.sh /build-sqlite-tools.sh
+RUN sh /build-sqlite-tools.sh /sqlite-tools
+
 FROM node:22-bookworm-slim AS node
 FROM docker:cli AS docker
 FROM golang:1.25-bookworm
 
 COPY --from=node /usr/local/ /usr/local/
 COPY --from=docker /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=sqlite-builder /sqlite-tools/ /usr/local/bin/
+ENV FLOATLAB_SQLITE_RSYNC_VERSION=3.50.4
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl git gh openssh-client tini ripgrep python3 \
     && rm -rf /var/lib/apt/lists/*
@@ -29,7 +36,8 @@ RUN git init && git remote add origin "$SOURCE_REPOSITORY" \
 COPY docker/dev/entrypoint.sh /usr/local/bin/floatlab-dev
 COPY docker/dev/hostd.sh /usr/local/bin/floatlab-dev-hostd
 COPY docker/dev/pr.sh /usr/local/bin/floatlab-dev-pr
-RUN chmod +x /usr/local/bin/floatlab-dev*
+RUN chmod +x /usr/local/bin/floatlab-dev* \
+    && ln -s /tmp/floatlab-control /usr/local/bin/floatlab-control
 ENV HOME=/root VITE_API_PROXY_TARGET=http://127.0.0.1:8081
 WORKDIR /workspace
 ENTRYPOINT ["tini", "--", "floatlab-dev"]

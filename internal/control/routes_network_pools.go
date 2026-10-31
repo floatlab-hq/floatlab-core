@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/floatlab/floatlab-core/internal/ipam"
+	"github.com/floatlab/floatlab-core/pkg/rqlite"
 )
 
 func (s *Server) handleListNetworkPools(w http.ResponseWriter, r *http.Request) {
@@ -25,11 +26,15 @@ func (s *Server) handleCreateNetworkPool(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	pool.ID = ""
+	if err := s.validateLocalPool(r.Context(), pool); err != nil {
+		writeError(w, 409, err.Error())
+		return
+	}
 	if err := ipam.ValidateHosts(r.Context(), s.db, s.hosts, pool); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	if err := ipam.SavePool(r.Context(), s.db, &pool); err != nil {
+	if err := s.saveNetworkPool(r.Context(), &pool); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
@@ -60,6 +65,10 @@ func (s *Server) handleUpdateNetworkPool(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	pool.ID, pool.CreatedAt = id, existing.CreatedAt
+	if err := s.validateLocalPool(r.Context(), pool); err != nil {
+		writeError(w, 409, err.Error())
+		return
+	}
 	if err := ipam.ValidateHosts(r.Context(), s.db, s.hosts, pool); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
@@ -77,7 +86,7 @@ func (s *Server) handleUpdateNetworkPool(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
-	if err := ipam.SavePool(r.Context(), s.db, &pool); err != nil {
+	if err := s.saveNetworkPool(r.Context(), &pool); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
@@ -85,6 +94,17 @@ func (s *Server) handleUpdateNetworkPool(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleDeleteNetworkPool(w http.ResponseWriter, r *http.Request) {
+	if s.workloadDB != nil && s.workloadDB.LocalPath() != "" {
+		rows, err := s.workloadDB.Query(r.Context(), rqlite.Statement{SQL: `SELECT 1 FROM network_allocations WHERE pool_id=? LIMIT 1`, Params: []any{chi.URLParam(r, "id")}})
+		if err != nil {
+			networkError(w, err)
+			return
+		}
+		if len(rows.Values) > 0 {
+			writeError(w, 409, "pool has active local allocations")
+			return
+		}
+	}
 	pools, err := ipam.ListPools(r.Context(), s.db)
 	if err != nil {
 		networkError(w, err)
@@ -93,6 +113,10 @@ func (s *Server) handleDeleteNetworkPool(w http.ResponseWriter, r *http.Request)
 	id := chi.URLParam(r, "id")
 	for _, pool := range pools {
 		if pool.ID == id {
+			if s.cfg.LocalNodeID != "" && (len(pool.NodeIDs) != 1 || pool.NodeIDs[0] != s.cfg.LocalNodeID) {
+				writeError(w, http.StatusConflict, "a remote node's range remains reserved; remove it through its owner")
+				return
+			}
 			for _, node := range pool.NodeIDs {
 				status, err := ipam.HostStatus(r.Context(), s.hosts, node)
 				if err != nil {

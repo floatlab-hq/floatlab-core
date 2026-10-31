@@ -44,7 +44,7 @@
             && builtins.baseNameOf path != "node_modules";
         };
         inherit subPackages;
-        vendorHash = "sha256-znUitkzi9j+N4oQrtwqqeaG6aPoODXWgfcIcS585JN0=";
+        vendorHash = "sha256-pf6wVL6HqxV6RygqpGvCKxOyhtJYVQlBeJRey7821mw=";
       };
       floatlab-binaries = buildBinaries "floatlab-host" hostVersion [ "cmd/floatlab-hostd" ];
       floatlab-manage-binaries = buildBinaries "floatlab-manage" "0.1.0-dev" [ "cmd/floatlab-control" ];

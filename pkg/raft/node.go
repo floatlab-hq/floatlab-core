@@ -25,6 +25,7 @@ const (
 )
 
 type Node struct {
+	local                 *localState
 	raft                  *hraft.Raft
 	fsm                   *FSM
 	log                   *zap.Logger
@@ -124,6 +125,9 @@ func NewNode(cfg Config, log *zap.Logger) (*Node, error) {
 // Apply commits a StackStateChanged entry to the Raft log.
 // Must be called on the leader.
 func (n *Node) Apply(entry run.StackStateChanged, timeout time.Duration) error {
+	if n.local != nil {
+		return n.applyLocal(entry, timeout)
+	}
 	b, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("raft: marshal: %w", err)
@@ -140,17 +144,35 @@ func (n *Node) Apply(entry run.StackStateChanged, timeout time.Duration) error {
 	return nil
 }
 
-func (n *Node) IsLeader() bool { return n.raft.State() == hraft.Leader }
+func (n *Node) IsLeader() bool { return n.local != nil || n.raft.State() == hraft.Leader }
 
-func (n *Node) Leader() string { return string(n.raft.Leader()) }
+func (n *Node) Leader() string {
+	if n.local != nil {
+		return n.local.nodeID
+	}
+	return string(n.raft.Leader())
+}
 
-func (n *Node) State() hraft.RaftState { return n.raft.State() }
+func (n *Node) State() hraft.RaftState {
+	if n.local != nil {
+		return hraft.Leader
+	}
+	return n.raft.State()
+}
 
-func (n *Node) Stats() map[string]string { return n.raft.Stats() }
+func (n *Node) Stats() map[string]string {
+	if n.local != nil {
+		return map[string]string{"state": "local", "node_id": n.local.nodeID}
+	}
+	return n.raft.Stats()
+}
 
 func (n *Node) FSM() *FSM { return n.fsm }
 
 func (n *Node) Shutdown() error {
+	if n.local != nil {
+		return nil
+	}
 	n.shutdownOnce.Do(func() {
 		n.shutdownErr = errors.Join(n.raft.Shutdown().Error(), n.transport.Close(), n.logStore.Close(), n.stableStore.Close())
 	})
@@ -159,6 +181,9 @@ func (n *Node) Shutdown() error {
 
 // Peers returns the configured Raft server addresses.
 func (n *Node) Peers() []string {
+	if n.local != nil {
+		return []string{n.local.nodeID}
+	}
 	future := n.raft.GetConfiguration()
 	if future.Error() != nil {
 		return []string{}
@@ -171,6 +196,16 @@ func (n *Node) Peers() []string {
 }
 
 // Barrier waits until all preceding committed log entries have been applied.
-func (n *Node) Barrier(timeout time.Duration) error { return n.raft.Barrier(timeout).Error() }
+func (n *Node) Barrier(timeout time.Duration) error {
+	if n.local != nil {
+		return nil
+	}
+	return n.raft.Barrier(timeout).Error()
+}
 
-func (n *Node) LeadershipChanges() <-chan bool { return n.raft.LeaderCh() }
+func (n *Node) LeadershipChanges() <-chan bool {
+	if n.local != nil {
+		return nil
+	}
+	return n.raft.LeaderCh()
+}

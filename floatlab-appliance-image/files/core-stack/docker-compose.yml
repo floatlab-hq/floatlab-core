@@ -39,6 +39,9 @@ services:
     image: floatlab-control:local
     user: "0:0"
     environment:
+      FLOATLAB_PEER_URL: ${FLOATLAB_PEER_URL:-}
+      FLOATLAB_RQLITE_RAFT_ADDRESS: ${FLOATLAB_RQLITE_RAFT_ADDRESS:-}
+      FLOATLAB_RQLITE_ADDRESS: ${FLOATLAB_RQLITE_ADDRESS:-}
       FLOATLAB_ACTIVATION_DIR: /run/floatlab/activation
       FLOATLAB_APPLIANCE_CONFIG: /floatlab/system/etc/appliance.json
       FLOATLAB_CREDENTIAL_KEY_FILE: /floatlab/system/etc/credential.key
@@ -56,6 +59,7 @@ services:
       - --host-socket=/run/floatlab/hostd.sock
       - --register-local-node
     ports:
+      - "9443:9443"
       - "0.0.0.0:8080:8080"
     volumes:
       - /run/floatlab:/run/floatlab

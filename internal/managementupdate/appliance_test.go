@@ -195,7 +195,7 @@ func requireAppliance(t *testing.T) {
 	if err = os.Setenv("PATH", path); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"nft", "docker", "zfs", "systemctl"} {
+	for _, name := range []string{"nft", "docker", "zfs", "systemctl", "sqlite3"} {
 		if _, err = exec.LookPath(name); err != nil {
 			t.Fatalf("production hostd PATH missing %s: %v", name, err)
 		}

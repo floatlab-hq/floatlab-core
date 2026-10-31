@@ -15,12 +15,23 @@ import (
 // backed by rqlite. It also maintains a change watch channel for reactive updates.
 type Store struct {
 	db      *rqlite.Client
+	lab     *rqlite.Client
 	mu      sync.RWMutex
 	watches []chan ChangeEvent
 }
 
 func NewStore(db *rqlite.Client) *Store {
 	return &Store{db: db}
+}
+
+// NewSplitStore reads the committed local cache, but changes lab entities through consensus.
+func NewSplitStore(local, lab *rqlite.Client) *Store { return &Store{db: local, lab: lab} }
+
+func (s *Store) labWriter() *rqlite.Client {
+	if s.lab != nil {
+		return s.lab
+	}
+	return s.db
 }
 
 // Watch returns a channel that receives a ChangeEvent whenever any entity is
@@ -65,7 +76,7 @@ func (s *Store) CreateNode(ctx context.Context, n *Node) error {
 		n.Addresses = []NodeAddress{}
 	}
 	addrsJSON, _ := json.Marshal(n.Addresses)
-	err := s.db.Execute(ctx, []rqlite.Statement{{
+	err := s.labWriter().Execute(ctx, []rqlite.Statement{{
 		SQL:    `INSERT INTO nodes(id, cluster_uuid, name, addresses, created_at, updated_at,hostname,role,zfs_pool) VALUES(?,?,?,?,?,?,?,?,?)`,
 		Params: []interface{}{n.ID, n.ClusterUUID, n.Name, string(addrsJSON), n.CreatedAt, n.UpdatedAt, n.Hostname, n.Role, n.ZFSPool},
 	}})
@@ -111,7 +122,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]*Node, error) {
 func (s *Store) UpdateNode(ctx context.Context, n *Node) error {
 	n.UpdatedAt = time.Now().UTC()
 	addrsJSON, _ := json.Marshal(n.Addresses)
-	err := s.db.Execute(ctx, []rqlite.Statement{{
+	err := s.labWriter().Execute(ctx, []rqlite.Statement{{
 		SQL:    `UPDATE nodes SET cluster_uuid=?, name=?, addresses=?, updated_at=?,hostname=?,role=?,zfs_pool=? WHERE id=?`,
 		Params: []interface{}{n.ClusterUUID, n.Name, string(addrsJSON), n.UpdatedAt, n.Hostname, n.Role, n.ZFSPool, n.ID},
 	}})
@@ -123,7 +134,7 @@ func (s *Store) UpdateNode(ctx context.Context, n *Node) error {
 }
 
 func (s *Store) DeleteNode(ctx context.Context, id string) error {
-	err := s.db.Execute(ctx, []rqlite.Statement{{
+	err := s.labWriter().Execute(ctx, []rqlite.Statement{{
 		SQL:    `DELETE FROM nodes WHERE id=?`,
 		Params: []interface{}{id},
 	}})

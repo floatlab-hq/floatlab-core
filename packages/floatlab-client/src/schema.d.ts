@@ -4,6 +4,154 @@
  */
 
 export interface paths {
+    "/lab/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Local workload identity, lab quorum and read-only replica revisions */
+        get: operations["getLabStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lab/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List cached membership including removed-node tombstones */
+        get: operations["listLabMembers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lab/invitations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Issue a single-use 15-minute enrollment invitation */
+        post: operations["createLabInvitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lab/join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Join an existing lab from an empty local appliance */
+        post: operations["joinLab"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lab/members/{id}/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Explicitly remove a member while lab quorum remains */
+        post: operations["removeLabMember"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lab/members/{id}/removal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** Inspect retained workloads, recovery material and address reservations before removal */
+        get: operations["previewLabMemberRemoval"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lab/members/{id}/release-peer-address": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Permit a fenced and reset removed appliance's management IP to be enrolled under a fresh identity
+         * @description Retains the tombstone and all workload IP reservations. This operation never wipes a server or transfers workload ownership.
+         */
+        post: operations["releaseLabMemberPeerAddress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lab/identity/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate this node's TLS certificate and dedicated replication SSH key
+         * @description Reuse the operation ID to resume. Old credentials remain authorized until every active member acknowledges the new trust revision. Host SSH keys and the lab root CA are not silently replaced.
+         */
+        post: operations["rotateLabIdentity"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/nodes/{id}/updates/{component}/releases": {
         parameters: {
             query?: never;
@@ -1603,6 +1751,65 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        WorkloadIdentity: {
+            node_id: string;
+            generation: string;
+            /** Format: int64 */
+            revision: number;
+        };
+        LabMember: {
+            node_id: string;
+            peer_url: string;
+            raft_address: string;
+            rqlite_address: string;
+            certificate_fingerprint?: string;
+            previous_certificate_fingerprint?: string;
+            /** Format: int64 */
+            applied_trust_revision?: number;
+            peer_address_released?: boolean;
+            /** @enum {string} */
+            status: "enrolling" | "active" | "removing" | "removed";
+            operation_id?: string;
+            removed_at?: string;
+            ssh_host_key?: string;
+            ssh_replication_key?: string;
+            previous_ssh_replication_key?: string;
+        };
+        JoinInvitation: {
+            lab_id: string;
+            /** Format: uri */
+            bootstrap_url: string;
+            token: string;
+            fingerprint: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        RemovalPreview: {
+            member: components["schemas"]["LabMember"];
+            remaining_voters: number;
+            workloads: {
+                [key: string]: unknown;
+            }[];
+            recovery_points: {
+                [key: string]: unknown;
+            }[];
+            address_reservations: {
+                [key: string]: unknown;
+            }[];
+            replica_identity?: components["schemas"]["WorkloadIdentity"];
+            /** Format: date-time */
+            observed_at: string;
+            stale: boolean;
+            warnings: string[];
+        };
+        IdentityRotation: {
+            operation_id: string;
+            /** @enum {string} */
+            phase: "prepared" | "authorized" | "awaiting-trust" | "complete";
+            /** Format: int64 */
+            trust_revision: number;
+            pending_members: string[] | null;
+        };
         UpdateRelease: {
             tag_name: string;
             name?: string;
@@ -1661,6 +1868,17 @@ export interface components {
              * @example node-alpha
              */
             primary_node: string;
+            /** @description Authoritative node for workload mutations; replicas never grant execution authority. */
+            owner_node?: string;
+            /** @description True when this record comes from a read-only peer database. */
+            replica?: boolean;
+            /** @description Remote views are eventually consistent and may omit recent commits. */
+            stale?: boolean;
+            observed_generation?: string;
+            /** Format: int64 */
+            observed_revision?: number;
+            /** Format: date-time */
+            observed_at?: string;
             /**
              * @description Node ID of the failover host.
              * @example node-beta
@@ -2614,7 +2832,19 @@ export interface components {
             cleared_at?: string | null;
         };
     };
-    responses: never;
+    responses: {
+        /** @description Request rejected or lab configuration unavailable */
+        Error: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": {
+                    error?: string;
+                };
+            };
+        };
+    };
     parameters: {
         /** @description Unique key used to safely retry this mutation. */
         IdempotencyKey: string;
@@ -2625,6 +2855,256 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getLabStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current local status; unavailable peer views may be stale */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        lab_id?: string;
+                        node_id?: string;
+                        quorum?: boolean;
+                        join_pending?: boolean;
+                        /** Format: int64 */
+                        trust_revision?: number;
+                        /** Format: int64 */
+                        applied_trust_revision?: number;
+                        /** Format: int64 */
+                        acknowledged_trust_revision?: number;
+                        local?: components["schemas"]["WorkloadIdentity"];
+                        replicas?: components["schemas"]["WorkloadIdentity"][];
+                        members?: components["schemas"]["LabMember"][];
+                    };
+                };
+            };
+            401: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    listLabMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Lab membership */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        lab_id?: string;
+                        node_id?: string;
+                        /** Format: int64 */
+                        trust_revision?: number;
+                        /** Format: int64 */
+                        applied_trust_revision?: number;
+                        /** Format: int64 */
+                        acknowledged_trust_revision?: number;
+                        members?: components["schemas"]["LabMember"][];
+                    };
+                };
+            };
+            401: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    createLabInvitation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sensitive invitation; never log or share with untrusted parties */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JoinInvitation"];
+                };
+            };
+            401: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    joinLab: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    invitation: components["schemas"]["JoinInvitation"];
+                    /** Format: uri */
+                    peer_url: string;
+                    raft_address: string;
+                    rqlite_address: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Enrolled local member */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabMember"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    removeLabMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    confirm_node_id: string;
+                    operation_id: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Removed member; workloads and backup data are preserved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabMember"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    previewLabMemberRemoval: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cached inventory is explicitly labelled stale or unavailable */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemovalPreview"];
+                };
+            };
+            401: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    releaseLabMemberPeerAddress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    operation_id: string;
+                    confirm_node_id: string;
+                    /** @enum {boolean} */
+                    confirm_fenced: true;
+                    /** @enum {boolean} */
+                    confirm_reset: true;
+                };
+            };
+        };
+        responses: {
+            /** @description Tombstone retained and peer management address explicitly released */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabMember"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    rotateLabIdentity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    operation_id: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Rotation progress; awaiting-trust includes disconnected members that must catch up before revocation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentityRotation"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
     listUpdateReleases: {
         parameters: {
             query?: never;

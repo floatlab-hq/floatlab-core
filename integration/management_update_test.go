@@ -17,6 +17,9 @@ func TestManagementUpdateAppliance(t *testing.T) {
 		t.Skip("set FLOATLAB_UPDATE_INTEGRATION=1 for destructive disposable-appliance upgrade tests")
 	}
 	if os.Getenv("API_URL") == "" {
+		if os.Getenv("MEMORY_MB") == "" {
+			t.Setenv("MEMORY_MB", "8192")
+		}
 		t.Setenv("VM_NAME", fmt.Sprintf("floatlab-management-upgrade-%d", time.Now().UnixNano()))
 	}
 	c := newAPIClient(t, startAppliance(t))

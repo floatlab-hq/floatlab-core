@@ -48,6 +48,22 @@ func (l *Linux) Preflight(ctx context.Context, s *Status) (result error) {
 	if e := os.MkdirAll(directory, 0700); e != nil {
 		return e
 	}
+	workloads := filepath.Join(directory, "workloads")
+	if e := os.MkdirAll(workloads, 0700); e != nil {
+		return e
+	}
+	workloadCopy := filepath.Join(workloads, "local.sqlite")
+	if e := os.Remove(workloadCopy); e != nil && !os.IsNotExist(e) {
+		return e
+	}
+	if _, e := os.Stat("/floatlab/system/workloads/local.sqlite"); e == nil {
+		// Candidate migrations see a consistent disposable copy, never the live workload database.
+		if _, e = l.run(ctx, "sqlite3", "-readonly", "/floatlab/system/workloads/local.sqlite", "VACUUM INTO '"+strings.ReplaceAll(workloadCopy, "'", "''")+"'"); e != nil {
+			return e
+		}
+	} else if !os.IsNotExist(e) {
+		return e
+	}
 	// Preserve consensus identity without sharing appliance credentials with candidate code.
 	b, e := os.ReadFile("/floatlab/system/etc/appliance.json")
 	if e != nil {
@@ -223,9 +239,10 @@ func sandboxCompose(s *Status, root, identityPath, nodeID, network string) map[s
 	control := service(s.Manifest.Images["floatlab-control"])
 	control["user"] = "0:0"
 	control["depends_on"] = map[string]any{"rqlite": map[string]string{"condition": "service_healthy"}, "victoria-metrics": map[string]string{"condition": "service_started"}, "victoria-logs": map[string]string{"condition": "service_started"}}
-	control["command"] = []string{"--preflight", "--listen=:8080", "--rqlite-url=http://rqlite:4001", "--raft-id=" + nodeID, "--raft-bind=0.0.0.0:7000", "--raft-advertise=floatlab-control:7000", "--raft-data=/var/lib/floatlab/raft", "--vlogs-url=http://victoria-logs:9428", "--vmetrics-url=http://victoria-metrics:8428", "--host-node-id=" + nodeID, "--host-socket=/run/preflight/hostd.sock"}
+	control["command"] = []string{"--preflight", "--workload-db=/var/lib/floatlab/workloads/local.sqlite", "--listen=:8080", "--rqlite-url=http://rqlite:4001", "--raft-id=" + nodeID, "--raft-bind=0.0.0.0:7000", "--raft-advertise=floatlab-control:7000", "--raft-data=/var/lib/floatlab/raft", "--vlogs-url=http://victoria-logs:9428", "--vmetrics-url=http://victoria-metrics:8428", "--host-node-id=" + nodeID, "--host-socket=/run/preflight/hostd.sock"}
 	control["environment"] = map[string]string{"FLOATLAB_APPLIANCE_CONFIG": "/config/appliance.json", "FLOATLAB_UPDATE_RELEASE": s.TargetRelease}
 	control["volumes"] = append(volumes("raft", "/var/lib/floatlab/raft"), map[string]any{"type": "bind", "source": identityPath, "target": "/config/appliance.json", "read_only": true}, map[string]any{"type": "bind", "source": "/run/floatlab/preflight", "target": "/run/preflight", "read_only": true})
+	control["volumes"] = append(control["volumes"].([]any), map[string]any{"type": "bind", "source": filepath.Join(filepath.Dir(identityPath), "workloads"), "target": "/var/lib/floatlab/workloads"})
 	ss["floatlab-control"] = control
 	return map[string]any{"services": ss, "networks": map[string]any{"sandbox": map[string]any{"external": true, "name": network}}}
 }

@@ -113,6 +113,10 @@ func (s *Server) handleStackRestore(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) submitFailover(w http.ResponseWriter, r *http.Request, id string, restore bool) {
+	if s.peerWorkloads != nil {
+		writeErrorCode(w, http.StatusConflict, "coordinated_takeover_required", "cross-node takeover requires the fenced ownership handoff in the protection workflow")
+		return
+	}
 	stack, err := s.store.GetStack(r.Context(), id)
 	if err != nil {
 		writeError(w, 404, "stack not found")

@@ -1,0 +1,271 @@
+openapi: 3.0.3
+info:
+  title: FloatLab lab membership
+  version: 0.1.0
+paths:
+  /lab/status:
+    get:
+      operationId: getLabStatus
+      summary: Local workload identity, lab quorum and read-only replica revisions
+      tags: [lab]
+      responses:
+        '200':
+          description: Current local status; unavailable peer views may be stale
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lab_id: {type: string}
+                  node_id: {type: string}
+                  quorum: {type: boolean}
+                  join_pending: {type: boolean}
+                  trust_revision: {type: integer, format: int64}
+                  applied_trust_revision: {type: integer, format: int64}
+                  acknowledged_trust_revision: {type: integer, format: int64}
+                  local: {$ref: '#/components/schemas/WorkloadIdentity'}
+                  replicas:
+                    type: array
+                    items: {$ref: '#/components/schemas/WorkloadIdentity'}
+                  members:
+                    type: array
+                    items: {$ref: '#/components/schemas/LabMember'}
+        '401': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /lab/members:
+    get:
+      operationId: listLabMembers
+      summary: List cached membership including removed-node tombstones
+      tags: [lab]
+      responses:
+        '200':
+          description: Lab membership
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lab_id: {type: string}
+                  node_id: {type: string}
+                  trust_revision: {type: integer, format: int64}
+                  applied_trust_revision: {type: integer, format: int64}
+                  acknowledged_trust_revision: {type: integer, format: int64}
+                  members:
+                    type: array
+                    items: {$ref: '#/components/schemas/LabMember'}
+        '401': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /lab/invitations:
+    post:
+      operationId: createLabInvitation
+      summary: Issue a single-use 15-minute enrollment invitation
+      tags: [lab]
+      responses:
+        '200':
+          description: Sensitive invitation; never log or share with untrusted parties
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/JoinInvitation'}
+        '401': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /lab/join:
+    post:
+      operationId: joinLab
+      summary: Join an existing lab from an empty local appliance
+      tags: [lab]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [invitation, peer_url, raft_address, rqlite_address]
+              properties:
+                invitation: {$ref: '#/components/schemas/JoinInvitation'}
+                peer_url: {type: string, format: uri}
+                raft_address: {type: string}
+                rqlite_address: {type: string}
+      responses:
+        '200':
+          description: Enrolled local member
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LabMember'}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /lab/members/{id}/remove:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: {type: string}
+    post:
+      operationId: removeLabMember
+      summary: Explicitly remove a member while lab quorum remains
+      tags: [lab]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm_node_id, operation_id]
+              properties:
+                confirm_node_id: {type: string}
+                operation_id: {type: string}
+      responses:
+        '200':
+          description: Removed member; workloads and backup data are preserved
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LabMember'}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /lab/members/{id}/removal:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: {type: string}
+    get:
+      operationId: previewLabMemberRemoval
+      summary: Inspect retained workloads, recovery material and address reservations before removal
+      tags: [lab]
+      responses:
+        '200':
+          description: Cached inventory is explicitly labelled stale or unavailable
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RemovalPreview'}
+        '401': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /lab/members/{id}/release-peer-address:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: {type: string}
+    post:
+      operationId: releaseLabMemberPeerAddress
+      summary: Permit a fenced and reset removed appliance's management IP to be enrolled under a fresh identity
+      description: Retains the tombstone and all workload IP reservations. This operation never wipes a server or transfers workload ownership.
+      tags: [lab]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation_id, confirm_node_id, confirm_fenced, confirm_reset]
+              properties:
+                operation_id: {type: string}
+                confirm_node_id: {type: string}
+                confirm_fenced: {type: boolean, enum: [true]}
+                confirm_reset: {type: boolean, enum: [true]}
+      responses:
+        '200':
+          description: Tombstone retained and peer management address explicitly released
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LabMember'}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /lab/identity/rotate:
+    post:
+      operationId: rotateLabIdentity
+      summary: Rotate this node's TLS certificate and dedicated replication SSH key
+      description: Reuse the operation ID to resume. Old credentials remain authorized until every active member acknowledges the new trust revision. Host SSH keys and the lab root CA are not silently replaced.
+      tags: [lab]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation_id]
+              properties:
+                operation_id: {type: string}
+      responses:
+        '200':
+          description: Rotation progress; awaiting-trust includes disconnected members that must catch up before revocation
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/IdentityRotation'}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+components:
+  responses:
+    Error:
+      description: Request rejected or lab configuration unavailable
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error: {type: string}
+  schemas:
+    WorkloadIdentity:
+      type: object
+      required: [node_id, generation, revision]
+      properties:
+        node_id: {type: string}
+        generation: {type: string}
+        revision: {type: integer, format: int64}
+    LabMember:
+      type: object
+      required: [node_id, peer_url, raft_address, rqlite_address, status]
+      properties:
+        node_id: {type: string}
+        peer_url: {type: string}
+        raft_address: {type: string}
+        rqlite_address: {type: string}
+        certificate_fingerprint: {type: string}
+        previous_certificate_fingerprint: {type: string}
+        applied_trust_revision: {type: integer, format: int64}
+        peer_address_released: {type: boolean}
+        status: {type: string, enum: [enrolling, active, removing, removed]}
+        operation_id: {type: string}
+        removed_at: {type: string}
+        ssh_host_key: {type: string}
+        ssh_replication_key: {type: string}
+        previous_ssh_replication_key: {type: string}
+    RemovalPreview:
+      type: object
+      required: [member, remaining_voters, workloads, recovery_points, address_reservations, observed_at, stale, warnings]
+      properties:
+        member: {$ref: '#/components/schemas/LabMember'}
+        remaining_voters: {type: integer}
+        workloads: {type: array, items: {type: object, additionalProperties: true}}
+        recovery_points: {type: array, items: {type: object, additionalProperties: true}}
+        address_reservations: {type: array, items: {type: object, additionalProperties: true}}
+        replica_identity: {$ref: '#/components/schemas/WorkloadIdentity'}
+        observed_at: {type: string, format: date-time}
+        stale: {type: boolean}
+        warnings: {type: array, items: {type: string}}
+    IdentityRotation:
+      type: object
+      required: [operation_id, phase, trust_revision, pending_members]
+      properties:
+        operation_id: {type: string}
+        phase: {type: string, enum: [prepared, authorized, awaiting-trust, complete]}
+        trust_revision: {type: integer, format: int64}
+        pending_members: {type: array, nullable: true, items: {type: string}}
+    JoinInvitation:
+      type: object
+      required: [lab_id, bootstrap_url, token, fingerprint, expires_at]
+      properties:
+        lab_id: {type: string}
+        bootstrap_url: {type: string, format: uri}
+        token: {type: string}
+        fingerprint: {type: string}
+        expires_at: {type: string, format: date-time}

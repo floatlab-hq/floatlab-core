@@ -29,7 +29,7 @@ export function hostItem(node: Node, stacks: Stack[], stats?: NodeStats, storage
 export function appItem(stack: Stack, nodes: Node[]): DirectoryApp {
   const nodeName = (id?: string | null) => nodes.find(node => node.id === id)?.name ?? id ?? ''
   return {
-    id: stack.id, name: stack.name, logo: '',
+    id: stack.id, name: stack.name + (stack.replica ? ' (cached)' : ''), logo: '',
     state: stack.state === 'RunningPrimary' || stack.state === 'RunningBackup' ? 'Running'
       : stack.state === 'Idle' ? 'Stopped' : stack.state,
     host: nodeName(stack.state === 'RunningBackup' ? stack.secondary_node : stack.primary_node),

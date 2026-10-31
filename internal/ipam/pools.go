@@ -2,6 +2,7 @@ package ipam
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/netip"
@@ -83,6 +84,18 @@ func ListPools(ctx context.Context, db *rqlite.Client) ([]Pool, error) {
 }
 
 func SavePool(ctx context.Context, db *rqlite.Client, pool *Pool) error {
+	return savePool(ctx, db, pool, "")
+}
+
+// SaveNodePool commits the disjoint node reservation with the pool definition.
+func SaveNodePool(ctx context.Context, db *rqlite.Client, pool *Pool, node string) error {
+	if node == "" || len(pool.NodeIDs) != 1 || pool.NodeIDs[0] != node {
+		return fmt.Errorf("ipam: node range requires one matching owner")
+	}
+	return savePool(ctx, db, pool, node)
+}
+
+func savePool(ctx context.Context, db *rqlite.Client, pool *Pool, node string) error {
 	if err := ValidateMembers(pool.NodeIDs); err != nil {
 		return err
 	}
@@ -145,6 +158,12 @@ func SavePool(ctx context.Context, db *rqlite.Client, pool *Pool) error {
 	}
 	pool.UpdatedAt = now
 	statements := []rqlite.Statement{}
+	if node != "" {
+		start, _ := netip.ParseAddr(pool.StartIP)
+		end, _ := netip.ParseAddr(pool.EndIP)
+		// Shrinking a definition cannot release addresses an offline owner may still use.
+		statements = append(statements, rqlite.Statement{SQL: `INSERT INTO node_pool_ranges(pool_id,start,end,owner) VALUES(?,?,?,?) ON CONFLICT(pool_id) DO UPDATE SET start=MIN(start,excluded.start),end=MAX(end,excluded.end),owner=excluded.owner`, Params: []any{pool.ID, binary.BigEndian.Uint32(start.AsSlice()), binary.BigEndian.Uint32(end.AsSlice()), node}})
+	}
 	statements = append(statements, rqlite.Statement{
 		SQL: `INSERT INTO network_pools(id,name,cidr,start_ip,end_ip,is_default,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)
 		      ON CONFLICT(id) DO UPDATE SET name=excluded.name,cidr=excluded.cidr,start_ip=excluded.start_ip,end_ip=excluded.end_ip,is_default=excluded.is_default,updated_at=excluded.updated_at`,

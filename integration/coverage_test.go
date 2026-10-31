@@ -41,12 +41,33 @@ func newCoverage(t *testing.T) *coverageRun {
 		if multiNodeOperation(op) {
 			entry.Deferred = []string{"real multi-node success"}
 		}
+		if strings.HasPrefix(op.Path, "/api/v1/lab/") {
+			entry.Deferred = []string{"successful lab behavior is tested separately by scripts/test-multi-node.sh; this single-node report records unconfigured rejection only"}
+		}
+		if strings.Contains(op.Path, "/release-peer-address") {
+			entry.Deferred = []string{"single-node rejection only; successful peer-address release is unit-tested, appliance reset and fresh enrollment acceptance remains outstanding"}
+		}
 		run.evidence[op.Method+" "+op.Path] = entry
 	}
 	return run
 }
 func multiNodeOperation(op openapi.Operation) bool {
-	return op.Method == "POST" && (strings.Contains(op.Path, "/failover") || op.Path == "/api/v1/stacks/{id}/restore" || strings.Contains(op.Path, "/storage/replication/"))
+	return strings.HasPrefix(op.Path, "/api/v1/lab/") || op.Method == "POST" && (strings.Contains(op.Path, "/failover") || op.Path == "/api/v1/stacks/{id}/restore" || strings.Contains(op.Path, "/storage/replication/"))
+}
+
+func TestLabCoverageSeparatesRejectionFromSuccess(t *testing.T) {
+	coverage := newCoverage(t)
+	for _, method := range []string{"GET", "POST"} {
+		op := openapi.Operation{Method: method, Path: "/api/v1/lab/status"}
+		if !multiNodeOperation(op) {
+			t.Fatalf("lab %s operation must record its separate acceptance requirement", method)
+		}
+	}
+	for _, entry := range coverage.evidence {
+		if strings.HasPrefix(entry.Operation.Path, "/api/v1/lab/") && (len(entry.Successful) != 0 || len(entry.Deferred) != 1 || !strings.Contains(entry.Deferred[0], "rejection only")) {
+			t.Fatalf("lab success was implied without an executed scenario: %+v", entry)
+		}
+	}
 }
 func matchesPath(pattern, path string) bool {
 	a, b := strings.Split(pattern, "/"), strings.Split(path, "/")

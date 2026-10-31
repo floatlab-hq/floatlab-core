@@ -157,7 +157,7 @@ func (l *Linux) Prepare(ctx context.Context, s *Status) error {
 	if e != nil || n < 2<<30 {
 		return fmt.Errorf("at least 2 GiB free pool capacity required")
 	}
-	version, e := l.run(ctx, "docker", "exec", l.controlID(ctx), "wget", "-qO-", "http://rqlite:4001/status")
+	version, e := l.rqliteRead(ctx, "/status")
 	if e != nil {
 		return e
 	}
@@ -181,7 +181,7 @@ func (l *Linux) Prepare(ctx context.Context, s *Status) error {
 	if !supported {
 		return fmt.Errorf("rqlite source %q has no tested transition", status.Build.Version)
 	}
-	nodes, e := l.run(ctx, "docker", "exec", l.controlID(ctx), "wget", "-qO-", "http://rqlite:4001/nodes")
+	nodes, e := l.rqliteRead(ctx, "/nodes")
 	if e != nil {
 		return e
 	}

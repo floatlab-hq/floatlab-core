@@ -3,6 +3,7 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/floatlab/floatlab-core/api/openapi"
@@ -20,6 +21,10 @@ func TestWorkloadConfidence(t *testing.T) {
 		t.Skip("run scripts/test-workloads.sh for the complete single-node suite")
 	}
 	preflightWorkloads(t)
+	if os.Getenv("API_URL") == "" && os.Getenv("MEMORY_MB") == "" {
+		// Management preflight needs 4 GiB for its sandbox plus host headroom.
+		t.Setenv("MEMORY_MB", "8192")
+	}
 	// Never recreate an existing user-selected domain; this suite owns a unique VM.
 	if os.Getenv("API_URL") == "" {
 		t.Setenv("VM_NAME", fmt.Sprintf("floatlab-confidence-%d", time.Now().UnixNano()))
@@ -38,7 +43,7 @@ func TestWorkloadConfidence(t *testing.T) {
 	diagnostics := func(target *testing.T) {
 		if target.Failed() {
 			root, _ := os.Getwd()
-			out, err := guestCommand(root, `docker ps -a; docker compose -f /floatlab/system/docker-compose.yml logs --tail=100 floatlab-control; journalctl -u floatlab-hostd --no-pager -n 100; zfs list -t all; docker ps -aq --filter label=com.docker.compose.project | while read -r container; do docker inspect --format '{{.Name}} {{json .State}}' "$container"; docker logs --tail=40 "$container" 2>&1; done; rqlite_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $(docker ps -q --filter label=com.docker.compose.service=rqlite --filter label=com.docker.compose.project=floatlab-system)); curl -fsS -H 'Content-Type: application/json' --data '["SELECT id,state,checkpoint,error FROM operations ORDER BY created_at DESC LIMIT 20","SELECT * FROM lifecycle_events ORDER BY occurred_at DESC LIMIT 30"]' "http://$rqlite_ip:4001/db/query"`)
+			out, err := guestCommand(root, `docker ps -a; docker compose -f /floatlab/system/docker-compose.yml logs --tail=100 floatlab-control; journalctl -u floatlab-hostd --no-pager -n 100; zfs list -t all; docker ps -aq --filter label=com.docker.compose.project | while read -r container; do docker inspect --format '{{.Name}} {{json .State}}' "$container"; docker logs --tail=40 "$container" 2>&1; done; sqlite3 -readonly -json /floatlab/system/workloads/local.sqlite 'SELECT id,state,checkpoint,error FROM operations ORDER BY created_at DESC LIMIT 20; SELECT * FROM lifecycle_events ORDER BY occurred_at DESC LIMIT 30'`)
 			target.Logf("appliance diagnostics: %s\n%v", out, err)
 		}
 	}
@@ -50,6 +55,7 @@ func TestWorkloadConfidence(t *testing.T) {
 		{"container-management", TestContainerManagementAPI},
 		{"cli-caddy", TestCLICaddy},
 		{"documented-management", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertManagementContracts() }},
+		{"unconfigured-lab-rejections", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertUnconfiguredLab() }},
 		{"alert-evaluator", TestAlertEvaluator},
 		{"persistence-recovery-rollback", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertRecoveryWorkload() }},
 		{"network-settings", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertHostNetworkTransactions() }},
@@ -61,6 +67,21 @@ func TestWorkloadConfidence(t *testing.T) {
 		}) {
 			return
 		}
+	}
+}
+
+func (c *apiClient) assertUnconfiguredLab() {
+	c.t.Helper()
+	operations, err := openapi.ManagementOperations()
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	for _, operation := range operations {
+		if !strings.HasPrefix(operation.Path, "/api/v1/lab/") {
+			continue
+		}
+		path := strings.NewReplacer("{id}", "unconfigured-node", "{node_id}", "unconfigured-node").Replace(operation.Path)
+		c.expect(operation.Method, path, map[string]any{}, http.StatusServiceUnavailable)
 	}
 }
 
@@ -227,9 +248,9 @@ func (c *apiClient) assertManagementContracts() {
 
 func (c *apiClient) cleanupSQL(statement string, id string) {
 	c.t.Helper()
-	payload := mustJSON(c.t, [][]interface{}{{statement, id}})
+	binding := `.parameter set ?1 "CAST(X'` + hex.EncodeToString([]byte(id)) + `' AS TEXT)"`
 	root, _ := os.Getwd()
-	out, err := guestCommand(root, `rqlite_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $(docker ps -q --filter label=com.docker.compose.service=rqlite --filter label=com.docker.compose.project=floatlab-system)); curl -fsS -H 'Content-Type: application/json' --data '`+strings.ReplaceAll(string(payload), "'", "'\\''")+`' "http://$rqlite_ip:4001/db/execute?transaction"`)
+	out, err := guestCommand(root, "sqlite3 -batch -bail -cmd "+shellQuote(".timeout 10000")+" -cmd "+shellQuote(binding)+" /floatlab/system/workloads/local.sqlite "+shellQuote(statement))
 
 	if err != nil || strings.Contains(out, `"error"`) {
 		c.t.Errorf("cleanup owned record: %s %v", out, err)

@@ -38,7 +38,7 @@ type adminClaims struct {
 func (s *Server) requireAdminJWT(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		header := r.Header.Get("Authorization")
-		if s.cfg.JWTSecret == "" {
+		if s.jwtKey() == "" {
 			writeError(w, http.StatusServiceUnavailable, "JWT authentication is not configured")
 			return
 		}
@@ -55,7 +55,7 @@ func (s *Server) requireAdminJWT(next http.Handler) http.Handler {
 			options = append(options, jwt.WithAudience(s.cfg.JWTAudience))
 		}
 		token, err := jwt.ParseWithClaims(strings.TrimPrefix(header, "Bearer "), claims,
-			func(*jwt.Token) (interface{}, error) { return []byte(s.cfg.JWTSecret), nil }, options...)
+			func(*jwt.Token) (interface{}, error) { return []byte(s.jwtKey()), nil }, options...)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "error parsing JWT token: "+err.Error())
 			return

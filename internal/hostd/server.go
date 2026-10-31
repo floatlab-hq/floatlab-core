@@ -2,9 +2,11 @@ package hostd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/floatlab/floatlab-core/internal/managementupdate"
@@ -55,6 +57,11 @@ func (s *Server) Run(ctx context.Context) error {
 	hostUpdates := NewHostUpdateCoordinator(s.updates)
 	// Register all command handlers on the IPC server.
 	s.dispatcher.register()
+	registerLabIPC(s.ipc)
+	s.ipc.Handle("lab.ssh.host-key", func(context.Context, json.RawMessage) (any, error) {
+		data, err := os.ReadFile("/etc/ssh/ssh_host_ed25519_key.pub")
+		return map[string]string{"public_key": strings.TrimSpace(string(data))}, err
+	})
 	registerManagementUpdates(ctx, s.ipc, s.updates)
 	registerHostUpdates(s.ipc, hostUpdates)
 	if err := os.MkdirAll("/run/floatlab/preflight", 0750); err != nil {

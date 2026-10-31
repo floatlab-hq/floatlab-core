@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -17,6 +19,7 @@ import (
 	"github.com/floatlab/floatlab-core/internal/credentials"
 	"github.com/floatlab/floatlab-core/internal/failover"
 	"github.com/floatlab/floatlab-core/internal/ipam"
+	"github.com/floatlab/floatlab-core/internal/lab"
 	"github.com/floatlab/floatlab-core/internal/orchestrator"
 	"github.com/floatlab/floatlab-core/internal/worker"
 	"github.com/floatlab/floatlab-core/pkg/config"
@@ -32,6 +35,12 @@ var (
 	listenAddr          string
 	uiDir               string
 	rqliteURL           string
+	workloadDBPath      string
+	labPeerURL          string
+	labListen           string
+	labRaftAddress      string
+	labRQLiteAddress    string
+	labDataDir          string
 	raftNodeID          string
 	raftBindAddr        string
 	raftAdvAddr         string
@@ -70,6 +79,13 @@ func main() {
 	root.Flags().StringVar(&listenAddr, "listen", ":8080", "HTTP API and UI listen address")
 	root.Flags().BoolVar(&devMode, "dev-mode", os.Getenv("FLOATLAB_DEV_MODE") == "true", "Identify this control plane as development mode")
 	root.Flags().StringVar(&uiDir, "ui-dir", "ui/dist", "Built UI directory")
+	root.Flags().StringVar(&workloadDBPath, "workload-db", "/floatlab/system/workloads/local.sqlite", "Node-owned SQLite workload database")
+	root.Flags().StringVar(&labPeerURL, "lab-peer-url", os.Getenv("FLOATLAB_PEER_URL"), "Advertised HTTPS lab peer origin")
+	root.Flags().StringVar(&labListen, "lab-listen", ":9443", "Lab mutual TLS peer listener")
+	root.Flags().StringVar(&labRaftAddress, "lab-raft-address", os.Getenv("FLOATLAB_RQLITE_RAFT_ADDRESS"), "Reachable rqlite consensus address")
+	root.Flags().StringVar(&labRQLiteAddress, "lab-rqlite-address", os.Getenv("FLOATLAB_RQLITE_ADDRESS"), "Reachable rqlite HTTP address")
+	root.Flags().StringVar(&labDataDir, "lab-data", "/floatlab/system/workloads/lab", "Private lab identity and journals")
+	addReplicaCommand(root)
 	root.Flags().StringVar(&rqliteURL, "rqlite-url", "http://localhost:4001", "rqlite base URL")
 	root.Flags().StringVar(&raftNodeID, "raft-id", "node1", "Unique Raft node ID")
 	root.Flags().StringVar(&raftBindAddr, "raft-bind", "0.0.0.0:7000", "Raft TCP bind address")
@@ -147,51 +163,58 @@ func run(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("credential key must be 32 bytes")
 		}
 	}
-	// Persistent state via rqlite.
-	db := rqlite.NewClient(rqliteURL)
-	if err := rqlite.Migrate(ctx, db); err != nil {
-		log.Error("rqlite migrate failed", zap.Error(err))
-		return err
-	}
-	if (bootstrapUser == "") != (bootstrapPass == "") {
-		return fmt.Errorf("bootstrap user and password must be configured together")
-	}
-	if bootstrapUser != "" {
-		if err := control.BootstrapUser(ctx, db, bootstrapUser, bootstrapPass); err != nil {
+	if !preflight {
+		var shared map[string]string
+		if err := credentials.ReadPrivate(labDataDir+"/auth.json", &shared); err == nil {
+			if len(shared["jwt_secret"]) < 32 {
+				return fmt.Errorf("invalid persisted lab authentication")
+			}
+			jwtSecret = shared["jwt_secret"]
+			if encoded := shared["credential_key"]; encoded != "" {
+				decoded, decodeErr := base64.StdEncoding.DecodeString(encoded)
+				if decodeErr != nil || len(decoded) != 32 {
+					return fmt.Errorf("invalid persisted lab credential key")
+				}
+				credentialKey = decoded
+			}
+		} else if !os.IsNotExist(err) {
 			return err
 		}
 	}
-
-	if err := config.Migrate(ctx, db); err != nil {
-		log.Error("config migrate failed", zap.Error(err))
-		return err
+	// Lab configuration is consensus-backed; workload authority is always local.
+	labDB := rqlite.NewClient(rqliteURL)
+	if !preflight {
+		if err := lab.PreparePendingIdentity(labDataDir); err != nil {
+			return fmt.Errorf("restore pending lab identity: %w", err)
+		}
 	}
-	if bootstrapFile != "" {
-		if err := control.BootstrapFile(ctx, db, bootstrapFile); err != nil {
+	if _, err := os.Stat(labDataDir + "/ca.pem"); err == nil && labPeerURL != "" {
+		transport := &labTransport{}
+		if err = transport.reload(labDataDir); err != nil {
 			return err
 		}
+		labDB.ConfigureHTTP("https://rqlite:4001", &http.Client{Transport: transport, Timeout: 10 * time.Second})
 	}
-	if registerLocalNode {
-		name := identity.NodeName
-		if name == "" {
-			name = "floatlab"
-		}
-		if err := control.RegisterApplianceNode(ctx, db, hostNodeID, name); err != nil {
-			return err
-		}
+	labErr := initializeLab(ctx, labDB)
+	if labErr != nil {
+		log.Warn("lab configuration unavailable; using committed local cache", zap.Error(labErr))
 	}
-	store := config.NewStore(db)
-
-	// Raft node.
-	raftNode, err := floatraft.NewNode(floatraft.Config{
-		NodeID:        raftNodeID,
-		BindAddr:      raftBindAddr,
-		AdvertiseAddr: raftAdvAddr,
-		DataDir:       raftDataDir,
-		Bootstrap:     raftBootstrap,
-	}, log)
+	db, err := openWorkloads(ctx, labDB)
 	if err != nil {
-		log.Error("raft init failed", zap.Error(err))
+		return err
+	}
+	defer db.Close()
+	if labErr == nil {
+		if err = cacheLab(ctx, labDB, db); err != nil {
+			return err
+		}
+	}
+	store := config.NewSplitStore(db, labDB)
+	if err = importLifecycle(ctx, db, log); err != nil {
+		return err
+	}
+	raftNode, err := floatraft.NewLocalNode(ctx, db, hostNodeID, log)
+	if err != nil {
 		return err
 	}
 	defer raftNode.Shutdown()
@@ -259,9 +282,7 @@ func run(cmd *cobra.Command, args []string) error {
 			}
 		})
 
-		// Failover detector — pings primaries and auto-triggers when configured.
-		detector := failover.NewDetector(store, raftNode.FSM(), hosts, seq, log)
-		launch(func() { detector.Run(ctx) })
+		// Cross-node failover is explicit; loss of reachability never grants ownership.
 
 		// Orchestrator: drives stack state machine from Raft + IPC events.
 		orch := orchestrator.New(store, raftNode, hosts, db, log)
@@ -299,7 +320,16 @@ func run(cmd *cobra.Command, args []string) error {
 		JWTIssuer:     jwtIssuer,
 		JWTAudience:   jwtAudience,
 		CredentialKey: credentialKey,
+		LabDB:         labDB,
+		LocalNodeID:   hostNodeID,
+		RefreshLab:    func(ctx context.Context) error { return cacheLab(ctx, labDB, db) },
 	}, db, store, raftNode, hosts, broker, seq, log)
+
+	if !preflight {
+		if err := startLab(ctx, srv, labDB, db, hosts, log); err != nil {
+			return err
+		}
+	}
 
 	log.Info("floatlab-control starting",
 		zap.String("listen", listenAddr),

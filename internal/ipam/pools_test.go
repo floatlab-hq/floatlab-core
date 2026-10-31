@@ -1,6 +1,94 @@
 package ipam
 
-import "testing"
+import (
+	"context"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/floatlab/floatlab-core/pkg/config"
+	"github.com/floatlab/floatlab-core/pkg/rqlite"
+)
+
+func TestConcurrentNodeRangesRemainDisjoint(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "lab.sqlite")
+	first, err := rqlite.OpenLocal(path, "lab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	if err = rqlite.Migrate(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if err = config.Migrate(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	second, err := rqlite.OpenLocal(path, "lab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	pools := []Pool{
+		{Name: "a", CIDR: "192.0.2.0/24", StartIP: "192.0.2.10", EndIP: "192.0.2.20", NodeIDs: []string{"a"}},
+		{Name: "b", CIDR: "192.0.2.0/24", StartIP: "192.0.2.20", EndIP: "192.0.2.30", NodeIDs: []string{"b"}},
+	}
+	start := make(chan struct{})
+	results := make(chan int, 2)
+	errors := make(chan error, 2)
+	for i, db := range []*rqlite.Client{first, second} {
+		go func() {
+			<-start
+			if err := SaveNodePool(ctx, db, &pools[i], pools[i].NodeIDs[0]); err != nil {
+				errors <- err
+				results <- -1
+			} else {
+				results <- i
+			}
+		}()
+	}
+	close(start)
+	winner, other := <-results, <-results
+	if winner < 0 {
+		winner, other = other, winner
+	}
+	if winner < 0 || other != -1 {
+		t.Fatalf("expected exactly one committed range: %d, %d", winner, other)
+	}
+	if err = <-errors; !strings.Contains(err.Error(), "reserved node range") {
+		t.Fatalf("loser failed without enforcing the range constraint: %v", err)
+	}
+	stored, err := ListPools(ctx, first)
+	if err != nil || len(stored) != 1 || stored[0].ID != pools[winner].ID {
+		t.Fatalf("failed reservation partially wrote its pool: %v, %v", stored, err)
+	}
+	if err = DeletePool(ctx, first, pools[winner].ID); err != nil {
+		t.Fatal(err)
+	}
+	loser := &pools[1-winner]
+	if err = SaveNodePool(ctx, second, loser, loser.NodeIDs[0]); err == nil {
+		t.Fatal("deleting a pool released its reserved node range")
+	}
+	changed := pools[winner]
+	changed.NodeIDs = []string{"replacement"}
+	if err = SaveNodePool(ctx, second, &changed, "replacement"); err == nil {
+		t.Fatal("deleted pool reservation changed owners")
+	}
+	legacy := Pool{Name: "legacy", CIDR: "192.0.2.0/24", StartIP: "192.0.2.100", EndIP: "192.0.2.110", NodeIDs: []string{"legacy"}}
+	if err = SavePool(ctx, first, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err = config.Migrate(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if err = DeletePool(ctx, first, legacy.ID); err != nil {
+		t.Fatal(err)
+	}
+	legacy.ID, legacy.Name, legacy.NodeIDs = "", "reuse", []string{"replacement"}
+	if err = SaveNodePool(ctx, second, &legacy, "replacement"); err == nil {
+		t.Fatal("migration did not retain a legacy pool's range after deletion")
+	}
+}
 
 func TestValidatePool(t *testing.T) {
 	valid := Pool{Name: "apps", CIDR: "192.0.2.0/24", StartIP: "192.0.2.10", EndIP: "192.0.2.20"}

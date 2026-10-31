@@ -50,6 +50,23 @@ components:
           type: string
           description: Node ID of the primary host.
           example: "node-alpha"
+        owner_node:
+          type: string
+          description: Authoritative node for workload mutations; replicas never grant execution authority.
+        replica:
+          type: boolean
+          description: True when this record comes from a read-only peer database.
+        stale:
+          type: boolean
+          description: Remote views are eventually consistent and may omit recent commits.
+        observed_generation:
+          type: string
+        observed_revision:
+          type: integer
+          format: int64
+        observed_at:
+          type: string
+          format: date-time
         secondary_node:
           type: string
           nullable: true

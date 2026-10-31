@@ -63,6 +63,10 @@ func (s *Server) handleCreatePrefixPool(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, 201, map[string]interface{}{"id": id, "name": body.Name, "prefix": prefix.Masked().String(), "stack_id": body.StackID, "created_at": now, "allocated_addresses": 0})
 }
 func (s *Server) handleCreateAllocation(w http.ResponseWriter, r *http.Request) {
+	if s.peerWorkloads != nil {
+		writeErrorCode(w, http.StatusConflict, "node_scoped_prefix_required", "legacy IPv6 prefix allocation has no node-owned ranges; use a node-assigned service pool")
+		return
+	}
 	var body struct {
 		StackID string `json:"stack_id"`
 		Service string `json:"service"`
