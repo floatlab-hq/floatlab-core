@@ -2,10 +2,10 @@
   "architecture": "amd64",
   "repository": "floatlab-hq/floatlab-core",
   "host": {
-    "tag": "host-v0.1.2",
+    "tag": "host-v0.1.4",
     "manifest": {
-      "version": "0.1.2",
-      "git_commit": "624680bdcdf29c0f4930eadfd144ffe67751e607",
+      "version": "0.1.4",
+      "git_commit": "c52bd3cf4204c0a7e2d53872d4fa387e6fe3129f",
       "recovery_protocol": 1,
       "bootloader": "zfsbootmenu-3.1.0",
       "pool_compatibility": "openzfs-2.3-linux",
@@ -17,15 +17,15 @@
       },
       "qualified_sources": [],
       "architecture": "amd64",
-      "init": "/nix/store/2n3qykmw7ni6ki9li0r4dj6przcrjpyw-nixos-system-unnamed-26.05.20260719.fd14620/init",
+      "init": "/nix/store/05bsb95y7zsvd5yv62qiq1lac5qnxia7-nixos-system-unnamed-26.05.20260719.fd14620/init",
       "kernel": "/nix/store/1fzwajz2v8bxwl86bb16db9gb8zxgjy5-linux-6.18.39",
       "nixpkgs_rev": "fd1462031fdee08f65fd0b4c6b64e22239a77870",
-      "root_bytes": 1806009427,
+      "root_bytes": 1812266996,
       "files": {
-        "floatlab-root.tar.gz": "a47ae976ed8120b4f2a31ecfc65785869f198a410d246fd619b13632a779ae9b",
+        "floatlab-root.tar.gz": "b10f579d2bf5081a33eb757ac646a8601fbebc9709e52fb0d78deb18c38510a5",
         "zfsbootmenu.EFI": "131d55c7b385df8cd319d267b6aa15d97f8c32c94f5149bd906556715fadf4e7"
       },
-      "bytes": 819691594
+      "bytes": 822570741
     }
   },
   "manage": {
