@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -62,11 +63,96 @@ func TestApplianceManagementRecoverRetained(t *testing.T) {
 }
 
 func (b *applianceFixture) Preflight(ctx context.Context, s *Status) error {
-	if err := b.Linux.Preflight(ctx, s); err != nil {
+	measured := *b.Linux
+	measured.Run = func(ctx context.Context, name string, args ...string) (string, error) {
+		var measuredErr error
+		if name == "docker" && len(args) > 0 && args[0] == "compose" {
+			for _, arg := range args {
+				if arg == "stop" || arg == "down" {
+					measuredErr = b.measureSandboxMemory(ctx, s)
+					break
+				}
+			}
+		}
+		out, err := b.Linux.run(ctx, name, args...)
+		return out, errors.Join(err, measuredErr)
+	}
+	if err := measured.Preflight(ctx, s); err != nil {
 		return err
 	}
 	if b.failure == "preflight" {
 		return errors.New("injected failed internal self-test after real sandbox validation")
+	}
+	return nil
+}
+
+// Capture both recovery passes before Compose removes their cgroups.
+func (b *applianceFixture) measureSandboxMemory(ctx context.Context, s *Status) error {
+	ids, err := b.Linux.run(ctx, "docker", "ps", "-aq", "--filter", "label=com.docker.compose.project=floatlab-test-"+strings.ToLower(s.OperationID))
+	if err != nil {
+		return err
+	}
+	if len(strings.Fields(ids)) != 4 {
+		return fmt.Errorf("expected four bounded sandbox services, got %q", ids)
+	}
+	for _, id := range strings.Fields(ids) {
+		out, err := b.Linux.run(ctx, "docker", "inspect", "--format", "{{.Name}} {{.State.Pid}} {{.State.OOMKilled}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}", id)
+		if err != nil {
+			return err
+		}
+		fields := strings.Fields(out)
+		limit := strconv.FormatInt(sandboxServiceMemory, 10)
+		if len(fields) != 5 || fields[1] == "0" || fields[2] != "false" || fields[3] != limit || fields[4] != limit {
+			return fmt.Errorf("sandbox memory limits or OOM state invalid: %s", out)
+		}
+		membership, err := os.ReadFile("/proc/" + fields[1] + "/cgroup")
+		if err != nil {
+			return err
+		}
+		unified := ""
+		for _, line := range strings.Split(string(membership), "\n") {
+			if path, ok := strings.CutPrefix(line, "0::"); ok {
+				unified = path
+				break
+			}
+		}
+		if unified == "" {
+			return fmt.Errorf("sandbox cgroup v2 unavailable: %s", membership)
+		}
+		path := filepath.Join("/sys/fs/cgroup", unified)
+		for name, want := range map[string]string{"memory.max": limit, "memory.swap.max": "0"} {
+			value, err := os.ReadFile(filepath.Join(path, name))
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(string(value)) != want {
+				return fmt.Errorf("sandbox %s %s=%s, want %s", fields[0], name, value, want)
+			}
+		}
+		peak, err := os.ReadFile(filepath.Join(path, "memory.peak"))
+		if err != nil {
+			return err
+		}
+		events, err := os.ReadFile(filepath.Join(path, "memory.events"))
+		if err != nil {
+			return err
+		}
+		fmt.Printf("sandbox-memory %s peak_bytes=%s limit_bytes=%s events=%q\n", fields[0], strings.TrimSpace(string(peak)), limit, strings.TrimSpace(string(events)))
+		for _, line := range strings.Split(string(events), "\n") {
+			event := strings.Fields(line)
+			if len(event) == 2 && (event[0] == "oom" || event[0] == "oom_kill" || event[0] == "oom_group_kill") && event[1] != "0" {
+				return fmt.Errorf("sandbox %s memory pressure: %s", fields[0], line)
+			}
+		}
+	}
+	meminfo, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return err
+	}
+	for _, line := range strings.Split(string(meminfo), "\n") {
+		if strings.HasPrefix(line, "MemAvailable:") {
+			fmt.Printf("sandbox-memory host %s\n", line)
+		}
 	}
 	return nil
 }

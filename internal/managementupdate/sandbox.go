@@ -198,6 +198,8 @@ func sandboxFirewallRules(table, bridge string) string {
 `, table, bridge, bridge, bridge)
 }
 
+const sandboxServiceMemory int64 = 384 << 20
+
 func checkSandboxMemory(meminfo string) error {
 	for _, line := range strings.Split(meminfo, "\n") {
 		fields := strings.Fields(line)
@@ -206,8 +208,8 @@ func checkSandboxMemory(meminfo string) error {
 			if e != nil {
 				return e
 			}
-			if available < ((4<<30)+(512<<20))/1024 {
-				return fmt.Errorf("preflight needs 4 GiB sandbox memory plus 512 MiB host headroom")
+			if available < uint64(4*sandboxServiceMemory+(512<<20))/1024 {
+				return fmt.Errorf("preflight needs 1536 MiB sandbox memory plus 512 MiB host headroom")
 			}
 			return nil
 		}
@@ -220,7 +222,7 @@ func sandboxCompose(s *Status, root, identityPath, nodeID, network string) map[s
 		return []any{map[string]any{"type": "bind", "source": "/" + root + "/" + name, "target": target}}
 	}
 	service := func(image string) map[string]any {
-		return map[string]any{"image": image, "restart": "no", "networks": []string{"sandbox"}, "dns": []string{"127.0.0.1"}, "cap_drop": []string{"ALL"}, "security_opt": []string{"no-new-privileges:true"}, "pids_limit": 256, "mem_limit": "1g", "cpus": 1, "sysctls": map[string]string{"net.ipv6.conf.all.disable_ipv6": "1"}}
+		return map[string]any{"image": image, "restart": "no", "networks": []string{"sandbox"}, "dns": []string{"127.0.0.1"}, "cap_drop": []string{"ALL"}, "security_opt": []string{"no-new-privileges:true"}, "pids_limit": 256, "mem_limit": sandboxServiceMemory, "memswap_limit": sandboxServiceMemory, "environment": map[string]string{"GOMEMLIMIT": "288MiB"}, "cpus": 1, "sysctls": map[string]string{"net.ipv6.conf.all.disable_ipv6": "1"}}
 	}
 	ss := map[string]any{}
 	rq := service(s.Manifest.Images["rqlite"])
@@ -229,18 +231,18 @@ func sandboxCompose(s *Status, root, identityPath, nodeID, network string) map[s
 	rq["healthcheck"] = map[string]any{"test": []string{"CMD-SHELL", "wget -qO- http://localhost:4001/readyz"}, "interval": "2s", "timeout": "5s", "retries": 60}
 	ss["rqlite"] = rq
 	vm := service(s.Manifest.Images["victoria-metrics"])
-	vm["command"] = []string{"-storageDataPath=/victoria-metrics-data", "-retentionPeriod=90d"}
+	vm["command"] = []string{"-storageDataPath=/victoria-metrics-data", "-retentionPeriod=90d", "-memory.allowedBytes=96MiB"}
 	vm["volumes"] = volumes("victoria-metrics", "/victoria-metrics-data")
 	ss["victoria-metrics"] = vm
 	vl := service(s.Manifest.Images["victoria-logs"])
-	vl["command"] = []string{"-storageDataPath=/victoria-logs-data", "-retentionPeriod=30d"}
+	vl["command"] = []string{"-storageDataPath=/victoria-logs-data", "-retentionPeriod=30d", "-memory.allowedBytes=96MiB"}
 	vl["volumes"] = volumes("victoria-logs", "/victoria-logs-data")
 	ss["victoria-logs"] = vl
 	control := service(s.Manifest.Images["floatlab-control"])
 	control["user"] = "0:0"
 	control["depends_on"] = map[string]any{"rqlite": map[string]string{"condition": "service_healthy"}, "victoria-metrics": map[string]string{"condition": "service_started"}, "victoria-logs": map[string]string{"condition": "service_started"}}
 	control["command"] = []string{"--preflight", "--workload-db=/var/lib/floatlab/workloads/local.sqlite", "--listen=:8080", "--rqlite-url=http://rqlite:4001", "--raft-id=" + nodeID, "--raft-bind=0.0.0.0:7000", "--raft-advertise=floatlab-control:7000", "--raft-data=/var/lib/floatlab/raft", "--vlogs-url=http://victoria-logs:9428", "--vmetrics-url=http://victoria-metrics:8428", "--host-node-id=" + nodeID, "--host-socket=/run/preflight/hostd.sock"}
-	control["environment"] = map[string]string{"FLOATLAB_APPLIANCE_CONFIG": "/config/appliance.json", "FLOATLAB_UPDATE_RELEASE": s.TargetRelease}
+	control["environment"] = map[string]string{"GOMEMLIMIT": "288MiB", "FLOATLAB_APPLIANCE_CONFIG": "/config/appliance.json", "FLOATLAB_UPDATE_RELEASE": s.TargetRelease}
 	control["volumes"] = append(volumes("raft", "/var/lib/floatlab/raft"), map[string]any{"type": "bind", "source": identityPath, "target": "/config/appliance.json", "read_only": true}, map[string]any{"type": "bind", "source": "/run/floatlab/preflight", "target": "/run/preflight", "read_only": true})
 	control["volumes"] = append(control["volumes"].([]any), map[string]any{"type": "bind", "source": filepath.Join(filepath.Dir(identityPath), "workloads"), "target": "/var/lib/floatlab/workloads"})
 	ss["floatlab-control"] = control

@@ -66,12 +66,12 @@ func TestFreezeDefinitionsUsesRunningImageAndActualRestartPolicy(t *testing.T) {
 }
 
 func TestSandboxMemoryPreservesHostHeadroom(t *testing.T) {
-	for _, input := range []string{"", "MemAvailable: nope kB", "MemAvailable: 4718591 kB\n", "MemAvailable: 123 MB\n"} {
+	for _, input := range []string{"", "MemAvailable: nope kB", "MemAvailable: 2097151 kB\n", "MemAvailable: 123 MB\n"} {
 		if e := checkSandboxMemory(input); e == nil {
 			t.Fatalf("accepted unsafe memory %q", input)
 		}
 	}
-	if e := checkSandboxMemory("MemAvailable: 4718592 kB\n"); e != nil {
+	if e := checkSandboxMemory("MemAvailable: 2097152 kB\n"); e != nil {
 		t.Fatal(e)
 	}
 }
@@ -102,7 +102,18 @@ func TestSandboxWaitsForRecoveredDatabaseWithoutWeakeningIsolation(t *testing.T)
 	if !reflect.DeepEqual(health["test"], []string{"CMD-SHELL", "wget -qO- http://localhost:4001/readyz"}) || health["retries"] != 60 {
 		t.Fatalf("database recovery not health gated %v", health)
 	}
+	for _, name := range []string{"victoria-metrics", "victoria-logs"} {
+		if !strings.Contains(strings.Join(ss[name]["command"].([]string), " "), "-memory.allowedBytes=96MiB") {
+			t.Fatalf("%s caches can consume the container memory budget", name)
+		}
+	}
 	for name, service := range ss {
+		if service["mem_limit"] != int64(384<<20) || service["memswap_limit"] != int64(384<<20) {
+			t.Fatalf("%s is not bounded to 384 MiB without swap: %v", name, service)
+		}
+		if service["environment"].(map[string]string)["GOMEMLIMIT"] != "288MiB" {
+			t.Fatalf("%s Go heap is not bounded below the container cap", name)
+		}
 		if service["restart"] != "no" {
 			t.Fatalf("%s can restart independently", name)
 		}

@@ -64,7 +64,6 @@ with open(sys.argv[1], "w") as output:
     output.write(f"<network><name>{name}</name><forward mode='nat'/><bridge name='{bridge}'/><ip address='{subnet[1]}' netmask='255.255.255.0'><dhcp><range start='{subnet[2]}' end='{subnet[99]}'/></dhcp></ip></network>")
 PY
 virsh -c "$LIBVIRT_URI" net-create "$volume_dir/network.xml"
-export MEMORY_MB="${MEMORY_MB:-4096}"
 report_dir="${FLOATLAB_REPORT_DIR:-/tmp/floatlab-multi-node-reports}"
 mkdir -p "$report_dir"
 FLOATLAB_MULTI_NODE_INTEGRATION=1 go test -count=1 -timeout 150m \

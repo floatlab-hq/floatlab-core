@@ -91,6 +91,9 @@ func newAPIClient(t *testing.T, baseURL string) *apiClient {
 	return &apiClient{t: t, baseURL: strings.TrimRight(baseURL, "/"), client: &http.Client{Timeout: 20 * time.Second}}
 }
 
+// All appliance acceptance tests qualify the minimum supported 4 GiB node.
+const applianceMemoryMiB = "4096"
+
 func startAppliance(t *testing.T) string {
 	t.Helper()
 	if baseURL := os.Getenv("API_URL"); baseURL != "" {
@@ -158,7 +161,7 @@ func startAppliance(t *testing.T) string {
 	if os.Getenv("FLOATLAB_MULTI_NODE_INTEGRATION") == "1" {
 		t.Setenv("FLOATLAB_APPLIANCE_ISO", image)
 	}
-	run(t, root, []string{"VM_NAME=" + name, "LIBVIRT_URI=" + uri, "LIBVIRT_POOL=" + pool, "MEMORY_MB=" + env("MEMORY_MB", "8192"), "ZFS_DISK_SIZE=" + env("ZFS_DISK_SIZE", "32G")}, filepath.Join(appliance, "scripts/run-libvirt.sh"), image)
+	run(t, root, []string{"VM_NAME=" + name, "LIBVIRT_URI=" + uri, "LIBVIRT_POOL=" + pool, "MEMORY_MB=" + applianceMemoryMiB, "ZFS_DISK_SIZE=" + env("ZFS_DISK_SIZE", "32G")}, filepath.Join(appliance, "scripts/run-libvirt.sh"), image)
 	return "http://" + waitForIP(t, root, uri, name) + ":8080"
 }
 

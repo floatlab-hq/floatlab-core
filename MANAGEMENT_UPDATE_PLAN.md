@@ -85,7 +85,8 @@ A replicated rqlite deployment cannot use local snapshot rollback as cluster rol
 Acceptance requires real ZFS/Docker appliance tests, not only mocked commands:
 
 - Preflight passes without changing production data or affecting workloads; failed tests leave production running.
-- The initial sandbox caps each of its four services at 1 GiB and checks for at least 4.5 GiB `MemAvailable` before cloning, preserving 512 MiB of additional host headroom. Lower-memory appliances reject preflight rather than risk production OOM; reducing this requirement needs measured sidecar recovery memory tests.
+- The sandbox caps each of its four services at 384 MiB, disables additional swap, sets Go soft limits to 288 MiB, and caps Victoria caches at 96 MiB. It requires at least 2 GiB `MemAvailable` before cloning: 1.5 GiB total container limits plus 512 MiB of additional host headroom. Acceptance runs on a 4 GiB VM and records actual cgroup memory peaks and OOM counters through cloned-state recovery and restart. Appliances below the available-memory threshold reject preflight; candidates exceeding a cap fail without stopping production. Larger cloned databases still need representative recovery measurements.
+- Set the default ZFS ARC budget early in boot so OS archive extraction cannot consume the memory needed by bounded preflight on a 4 GiB host. Honor an explicit administrator ARC limit. Admission uses actual available memory after this policy; it does not assume all cached ARC bytes can be reclaimed immediately.
 - Network probes cannot reach host services, production containers, other nodes, internet endpoints, or external DNS over either address family. Approved sandbox service traffic succeeds.
 - Every mutation IPC command is rejected on the restricted socket, including newly registered production commands; audited reads succeed.
 - Writes made during preflight are present after the real update because the final snapshot is taken later.

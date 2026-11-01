@@ -94,6 +94,34 @@ func TestAlertEvaluator(t *testing.T) {
 		t.Fatal("expected two incidents and exactly one firing notification each")
 	}
 
+	t.Log("muting one incident without resolving it, then checking automatic expiry")
+	until := time.Now().UTC().Add(15 * time.Second).Format(time.RFC3339)
+	muted := c.object("POST", "/api/v1/alerts/"+first["a"]+"/silence", map[string]string{"until": until}, 200)
+	if muted["state"] != "silenced" || muted["resolved_at"] != nil {
+		t.Fatalf("mute resolved the incident or did not silence it: %+v", muted)
+	}
+	if current := active(); len(current) != 1 || current["b"] != first["b"] {
+		t.Fatalf("mute affected the wrong incidents: %+v", current)
+	}
+	mutedNotification := false
+	for _, value := range c.expect("GET", "/api/v1/notifications", nil, 200).([]interface{}) {
+		row := value.(map[string]interface{})
+		if row["alert_id"] == first["a"] {
+			mutedNotification = row["state"] == "silenced"
+		}
+	}
+	if !mutedNotification {
+		t.Fatal("incident notification did not inherit the mute")
+	}
+	waitFor(t, 30*time.Second, func() error {
+		push(95, 95)
+		current := active()
+		if len(current) != 2 || current["a"] != first["a"] || current["b"] != first["b"] {
+			return fmt.Errorf("waiting for original incidents after mute expiry: %+v", current)
+		}
+		return nil
+	})
+
 	t.Log("restarting management and checking persistent identity and deduplication")
 	out, err := guestCommand(root, `docker restart $(docker ps -q --filter label=com.docker.compose.service=floatlab-control --filter label=com.docker.compose.project=floatlab-system)`)
 	if err != nil {

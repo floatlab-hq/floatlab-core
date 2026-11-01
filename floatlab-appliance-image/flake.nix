@@ -141,6 +141,10 @@
       };
 
       checks.${system} = {
+        zfs-memory = pkgs.runCommand "floatlab-zfs-memory-check" { nativeBuildInputs = [ pkgs.python3 pkgs.bash pkgs.gawk ]; } ''
+          python3 ${./tests/zfs-memory.py} ${./nixos/modules/zfs-memory.sh}
+          touch "$out"
+        '';
         zfsbootmenu-efi = pkgs.runCommand "floatlab-zfsbootmenu-efi-check" {} ''
           mkdir -p "$out"
           export PATH=${pkgs.lib.makeBinPath [ pkgs.floatlab-zbm-kcl ]}
@@ -210,6 +214,7 @@
            assert !cfg.system.installer.channel.enable;
            assert cfg.nix.enable;
            assert installed.virtualisation.docker.enable;
+           assert builtins.elem floatlab-binaries installed.environment.systemPackages;
            assert !installed.systemd.paths.floatlab-hostd-dev.unitConfig.DefaultDependencies;
            assert cfg.systemd.services.docker.serviceConfig.RootDirectory == "/run/floatlab-installer/root";
            assert cfg.systemd.services.docker.serviceConfig.PrivateMounts;

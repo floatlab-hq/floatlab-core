@@ -71,7 +71,9 @@ func (s SQLiteRsync) Transfer(ctx context.Context, p ReplicaPeer, path string) (
 		return id, err
 	}
 	// Bidirectional pipes avoid shell quoting or caller-selected remote paths.
-	origin := exec.CommandContext(ctx, s.Executable, "--origin", path, "replica")
+	// shortcut: use protocol 1 until the pinned binary includes the protocol 2
+	// corruption fix: https://sqlite.org/forum/info/46753431d4.
+	origin := exec.CommandContext(ctx, s.Executable, "--origin", "--protocol", "1", path, "replica")
 	remote := exec.CommandContext(ctx, "ssh", append(args, "replicate")...)
 	a, err := origin.StdoutPipe()
 	if err != nil {

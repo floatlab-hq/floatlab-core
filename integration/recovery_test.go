@@ -22,6 +22,29 @@ func (c *apiClient) assertRecoveryWorkload() {
 	stackPath := "/api/v1/stacks/" + id
 	t.Cleanup(func() { c.cleanupStack(id) })
 	c.waitStackState(id, "Idle")
+	t.Log("verify saved recovery configuration and backup-target metadata")
+	response, saved, err := c.request("GET", "/api/v1/storage/backups/config?stack_id="+id, c.token, "", "", nil)
+	if err != nil || response.StatusCode != 200 || !strings.Contains(string(saved), name) || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/yaml") {
+		t.Fatalf("saved backup configuration: %s %v", saved, err)
+	}
+	backup := c.object("POST", "/api/v1/nodes", map[string]string{"name": name + "-backup", "hostname": "unreachable.invalid", "zfs_pool": "floatlab"}, 201)
+	backupID := backup["id"].(string)
+	t.Cleanup(func() { c.expect("DELETE", "/api/v1/nodes/"+backupID, nil, 204) })
+	targetsPath := "/api/v1/storage/replication/" + id + "/targets"
+	target := map[string]string{"dataset": "floatlab/" + name + "/data", "node_id": backupID, "schedule": "h/24 d/28"}
+	c.object("PUT", targetsPath, target, 200)
+	targetEnabled := true
+	t.Cleanup(func() {
+		if targetEnabled {
+			c.expect("DELETE", targetsPath, target, 202)
+		}
+	})
+	targets := c.expect("GET", targetsPath, nil, 200).([]interface{})
+	if len(targets) != 1 || targets[0].(map[string]interface{})["node_id"] != backupID {
+		t.Fatalf("backup target was not saved: %+v", targets)
+	}
+	c.expect("DELETE", targetsPath, target, 202)
+	targetEnabled = false
 	started := c.mutate(http.MethodPost, stackPath+"/start", nil, "application/json")
 	c.waitOperation(started.OperationID)
 	c.waitStackState(id, "RunningPrimary")

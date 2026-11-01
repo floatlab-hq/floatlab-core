@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Bound update sandboxes to four 384 MiB services with no additional swap, explicit Go/cache budgets, and 512 MiB of extra host headroom; validate cloned-state recovery on 4 GiB appliances with measured cgroup peaks and OOM counters.
+- Reserve memory for management and updates when setting the default ZFS ARC budget at boot; preserve explicitly configured ARC limits.
+- Install the host daemon in the appliance command path so restricted SSH backup receivers can launch it outside systemd's service environment.
+- Run appliance workload, management-update, installed host-upgrade, and multi-node acceptance with fixed 4 GiB VMs.
 - Accept rqlite's leading v in reported versions when checking explicitly tested management update sources; continue rejecting unlisted versions.
 
 ## 0.1.5

@@ -306,6 +306,8 @@ nix develop
 just run
 ```
 
+The minimum supported appliance has 4 GiB RAM; end-to-end acceptance uses 4096 MiB per VM.
+
 This explicitly builds the `dev-iso` variant, replaces any existing `floatlab-dev` VM, creates a thin 16 GiB qcow2 volume in libvirt's `default` pool, and starts the VM with KVM. The appliance recognizes that test disk, creates the `floatlab` ZFS pool, and uses the same bridged DHCP default as production on its first boot.
 
 Open its serial console with:
@@ -317,7 +319,7 @@ virsh -c qemu:///system console floatlab-dev
 Override defaults when needed:
 
 ```bash
-VM_NAME=test2 ZFS_DISK_SIZE=32G MEMORY_MB=8192 ./scripts/run-libvirt.sh
+VM_NAME=test2 ZFS_DISK_SIZE=32G MEMORY_MB=4096 ./scripts/run-libvirt.sh
 ```
 
 Run the container API integration test against a freshly built appliance VM:

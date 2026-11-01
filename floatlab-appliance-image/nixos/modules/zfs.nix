@@ -1,5 +1,10 @@
 { pkgs, ... }:
 let
+  memoryScript = pkgs.writeShellApplication {
+    name = "floatlab-zfs-memory";
+    runtimeInputs = [ pkgs.gawk ];
+    text = builtins.readFile ./zfs-memory.sh;
+  };
   importScript = pkgs.writeShellApplication {
     name = "floatlab-import-pool";
     runtimeInputs = [ pkgs.zfs pkgs.util-linux pkgs.coreutils pkgs.gnugrep ];
@@ -34,6 +39,20 @@ in {
   # Live-media default required by NixOS/OpenZFS. ZFSBootMenu supplies the
   # installed SPL host ID before the root pool is imported.
   networking.hostId = "f10a7ab0";
+
+  systemd.services.floatlab-zfs-memory = {
+    description = "Budget ZFS ARC for appliance services and update tests";
+    wantedBy = [ "sysinit.target" ];
+    before = [ "sysinit.target" ];
+    after = [ "systemd-modules-load.service" ];
+    requires = [ "systemd-modules-load.service" ];
+    unitConfig.DefaultDependencies = false;
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = "${memoryScript}/bin/floatlab-zfs-memory";
+    };
+  };
 
   systemd.services.floatlab-zfs-import = {
     description = "Discover and import the FloatLab ZFS pool";

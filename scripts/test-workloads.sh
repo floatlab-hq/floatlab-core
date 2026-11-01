@@ -21,11 +21,6 @@ if [[ -n "${API_URL:-}" ]]; then
     exit 1
   fi
 else
-  single_memory_mb="${MEMORY_MB:-8192}"
-  if ! [[ "$single_memory_mb" =~ ^[0-9]+$ ]] || (( single_memory_mb < 8192 )); then
-    echo "The full workload suite needs MEMORY_MB >= 8192 for the management-update sandbox and host headroom." >&2
-    exit 1
-  fi
   [[ -e /dev/kvm ]] || { echo "Missing /dev/kvm; use a KVM host or API_URL and VM_SSH." >&2; exit 1; }
   for tool in nix virsh virt-install; do
     command -v "$tool" >/dev/null || { echo "Missing $tool." >&2; exit 1; }
@@ -52,7 +47,7 @@ fi
 report_dir="${FLOATLAB_REPORT_DIR:-/tmp/floatlab-workload-reports}"
 mkdir -p "$report_dir"
 for pass in 1 2; do
-  MEMORY_MB="${single_memory_mb:-${MEMORY_MB:-8192}}" FLOATLAB_WORKLOAD_INTEGRATION=1 FLOATLAB_COVERAGE_REPORT="$report_dir/pass-$pass.json" \
+  FLOATLAB_WORKLOAD_INTEGRATION=1 FLOATLAB_COVERAGE_REPORT="$report_dir/pass-$pass.json" \
     go test -count=1 -timeout 90m -run '^TestWorkloadConfidence$' -v ./integration 2>&1 | tee "$report_dir/pass-$pass.log"
 done
 if [[ -z "${API_URL:-}" ]]; then

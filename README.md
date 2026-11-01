@@ -205,8 +205,13 @@ The root `floatlab-hostd update` commands accept the same flags.
 
 Management updates first test an isolated clone, then stop production, take a
 fresh rollback snapshot, and upgrade its existing datasets. Failure restores
-the snapshot and previous services. Preflight currently requires 4.5 GiB of
-available memory for four capped test services and host headroom. The API can disconnect during maintenance;
+the snapshot and previous services. Preflight requires 2 GiB of
+available memory: four services capped at 384 MiB each, plus 512 MiB of host
+headroom. Test containers cannot swap beyond those caps; a candidate that exceeds
+its budget fails preflight while production remains running. The default ZFS ARC
+budget reserves memory for management and updates at boot; explicitly configured
+ARC limits are preserved and still need to leave sufficient available memory.
+The API can disconnect during maintenance;
 hostd continues the transaction. Host activation reboots the appliance. An OS
 trial requires explicit commitment; rebooting an uncommitted trial returns to
 the previous OS and restores its management checkpoint.
@@ -367,6 +372,8 @@ Hostd forwards metrics and logs for FloatLab containers every five seconds to th
 
 ### Complete single-node workload suite
 
+The minimum supported node has **4 GiB RAM**. All appliance end-to-end tests use fixed 4096 MiB VMs, including management updates, installed host upgrades, and each multi-node guest. `MEMORY_MB` does not override acceptance-test memory. Existing appliances selected with `API_URL` must also be provisioned with 4096 MiB to count as acceptance evidence; larger systems can be used for additional testing only.
+
 Enter the development shell, install workspace dependencies, and run:
 
 ```bash
@@ -379,7 +386,7 @@ An existing **dedicated test appliance** can be selected with `API_URL` and `VM_
 
 Coverage is measured by management HTTP method/path, using executed scenarios that pass their assertions, documented response statuses, and JSON contracts. The full suite fails if a required scenario skips or an endpoint lacks qualifying evidence. Real multi-node replication, failover, failback, abort and step-history success are reported as deferred; their single-node safety rejections are exercised. Ordinary `go test` skips VM tests and does **not** establish complete endpoint coverage.
 
-The suite exercises actual workload networking, data persistence, snapshot recovery of data and Compose, failed health-check upgrade rollback, dataset rollback with newer snapshots, independent SSE subscribers, alert ingestion, notification state changes, and service restart recovery. It also tests management clone preflight, production activation, snapshot rollback, and hostd recovery after interrupted updates on an 8 GiB VM. Fast SQL integration and migration tests use Python 3's SQLite behind the rqlite HTTP protocol; appliance tests use real rqlite.
+The suite exercises actual workload networking, data persistence, snapshot recovery of data and Compose, failed health-check upgrade rollback, dataset rollback with newer snapshots, independent SSE subscribers, alert ingestion, notification state changes, and service restart recovery. It also tests management clone preflight, production activation, snapshot rollback, and hostd recovery after interrupted updates on a 4 GiB VM. Update acceptance checks the sandbox's actual cgroup memory peaks and OOM counters against its enforced limits; do not increase test RAM to bypass failures. Fast SQL integration and migration tests use Python 3's SQLite behind the rqlite HTTP protocol; appliance tests use real rqlite.
 
 Run installed OS upgrade acceptance separately:
 

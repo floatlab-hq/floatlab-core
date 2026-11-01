@@ -76,14 +76,15 @@ func TestHostUpdateAppliance(t *testing.T) {
 		t.Fatal("refusing to replace an existing VM")
 	}
 	run(t, root, nil, "virsh", "-c", uri, "vol-create-as", pool, volume, "64G", "--format", "qcow2", "--allocation", "0")
-	run(t, root, nil, "virt-install", "--connect", uri, "--name", name, "--memory", "16384", "--vcpus", "4", "--cpu", "host-passthrough", "--import", "--wait", "0", "--osinfo", "detect=on,require=off", "--boot", "uefi", "--disk", "path="+iso+",device=cdrom,readonly=on,boot_order=1", "--disk", "vol="+pool+"/"+volume+",bus=virtio,serial=floatlab-upgrade,boot_order=2", "--network", "network=default,model=virtio", "--channel", "unix,target_type=virtio,name=org.qemu.guest_agent.0", "--graphics", "none", "--console", "pty,target_type=serial", "--noautoconsole")
+	run(t, root, nil, "virt-install", "--connect", uri, "--name", name, "--memory", applianceMemoryMiB, "--vcpus", "4", "--cpu", "host-passthrough", "--import", "--wait", "0", "--osinfo", "detect=on,require=off", "--boot", "uefi", "--disk", "path="+iso+",device=cdrom,readonly=on,boot_order=1", "--disk", "vol="+pool+"/"+volume+",bus=virtio,serial=floatlab-upgrade,boot_order=2", "--network", "network=default,model=virtio", "--channel", "unix,target_type=virtio,name=org.qemu.guest_agent.0", "--graphics", "none", "--console", "pty,target_type=serial", "--noautoconsole")
 	t.Cleanup(func() {
 		if t.Failed() {
-			out, e := guestCommand(root, `cat /floatlab/system/updates/host.json /run/floatlab-installer/status.json /floatlab/system/etc/install-status.json /run/floatlab-upgrade-acceptance/acceptance-install-TestApplianceInstall.log 2>/dev/null || true; journalctl -u floatlab-installer-console@ttyS0 -u floatlab-installer-root -u floatlab-hostd -u floatlab-boot-recovery -u floatlab-core-stack -u docker --no-pager -n 200 || true; zfs list -t all || true; efibootmgr -v || true`)
+			out, e := guestCommand(root, `cat /proc/meminfo /proc/spl/kstat/zfs/arcstats; ps -eo pid,rss,comm --sort=-rss | head -25; cat /floatlab/system/updates/host.json /run/floatlab-installer/status.json /floatlab/system/etc/install-status.json /run/floatlab-upgrade-acceptance/acceptance-install-TestApplianceInstall.log 2>/dev/null || true; journalctl -u floatlab-installer-console@ttyS0 -u floatlab-installer-root -u floatlab-hostd -u floatlab-boot-recovery -u floatlab-core-stack -u docker --no-pager -n 200 || true; zfs list -t all || true; efibootmgr -v || true`)
 			t.Logf("installed upgrade diagnostics: %s %v", out, e)
 		}
 	})
 	waitFor(t, 10*time.Minute, func() error { _, e := guestCommand(root, "true"); return e })
+	assertHostARCBudget(t, root)
 	installerBinary := filepath.Join(work, "installer-tests")
 	hostBinary := filepath.Join(work, "host-tests")
 	for _, entry := range []struct{ pkg, binary string }{{"./internal/installer", installerBinary}, {"./internal/hostupgrade", hostBinary}} {
@@ -141,6 +142,7 @@ func TestHostUpdateAppliance(t *testing.T) {
 		}
 		return nil
 	})
+	assertHostARCBudget(t, root)
 	uploadUpgradeGuestFile(t, root, hostBinary, "/floatlab/system/updates/appliance-host-tests")
 	hostDownloadCandidate(t, root, uri, candidate)
 	// Keep real workload data outside the management rollback tree throughout every host trial.
@@ -215,6 +217,15 @@ func TestHostUpdateAppliance(t *testing.T) {
 		}
 	}
 	t.Log("passed real installed-UEFI trial, pre-kernel/normal/power/heartbeat fallback, shared-engine workload persistence, and explicit permanent commitment; no published qualification was modified")
+}
+
+func assertHostARCBudget(t *testing.T, root string) {
+	t.Helper()
+	out, err := guestCommand(root, `set -eu; systemctl is-active floatlab-zfs-memory.service; limit=$(cat /sys/module/zfs/parameters/zfs_arc_max); test "$limit" -gt 0; test "$limit" -le 1073741824; printf 'ZFS ARC budget bytes=%s\n' "$limit"`)
+	if err != nil {
+		t.Fatalf("4 GiB host ARC budget: %s %v", out, err)
+	}
+	t.Log(out)
 }
 
 func hostGuestPhase(t *testing.T, root, binary, phase, operation string, variables []string, wait bool) {

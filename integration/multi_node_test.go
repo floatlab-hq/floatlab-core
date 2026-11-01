@@ -330,7 +330,7 @@ func newLabGuest(t *testing.T, index int) *labGuest {
 	n.client.client = &http.Client{Transport: n, Timeout: 65 * time.Second}
 	t.Cleanup(func() {
 		if t.Failed() {
-			out, err := n.guest("docker ps -a; journalctl -u floatlab-hostd --no-pager -n 100; docker compose -f /floatlab/system/docker-compose.yml logs --tail=100 floatlab-control rqlite")
+			out, err := n.guest("docker ps -a; ps -eo pid,ppid,comm,wchan | awk 'NR==1 || /ssh|rsync|floatlab/'; for status in /floatlab/system/workloads/replication/*.json; do test ! -f \"$status\" || { echo \"$status\"; cat \"$status\"; }; done; journalctl -u floatlab-hostd --no-pager -n 100; docker compose -f /floatlab/system/docker-compose.yml logs --tail=100 floatlab-control rqlite")
 			t.Logf("%s diagnostics:\n%s\n%v", name, out, err)
 		}
 	})

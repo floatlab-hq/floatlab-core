@@ -5,7 +5,8 @@
     RuntimeWatchdogSec = "30s";
     RebootWatchdogSec = "2min";
   };
-  environment.systemPackages = [ (pkgs.writeShellApplication {
+  # SSH's restricted sudo receiver also needs hostd outside the service PATH.
+  environment.systemPackages = [ floatlab-binaries (pkgs.writeShellApplication {
     name = "floatlab-installer-hostd";
     runtimeInputs = config.systemd.services.floatlab-hostd.path;
     text = ''exec ${floatlab-binaries}/bin/floatlab-hostd "$@"'';

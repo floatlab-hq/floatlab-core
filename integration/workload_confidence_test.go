@@ -21,10 +21,6 @@ func TestWorkloadConfidence(t *testing.T) {
 		t.Skip("run scripts/test-workloads.sh for the complete single-node suite")
 	}
 	preflightWorkloads(t)
-	if os.Getenv("API_URL") == "" && os.Getenv("MEMORY_MB") == "" {
-		// Management preflight needs 4 GiB for its sandbox plus host headroom.
-		t.Setenv("MEMORY_MB", "8192")
-	}
 	// Never recreate an existing user-selected domain; this suite owns a unique VM.
 	if os.Getenv("API_URL") == "" {
 		t.Setenv("VM_NAME", fmt.Sprintf("floatlab-confidence-%d", time.Now().UnixNano()))
@@ -242,6 +238,9 @@ func (c *apiClient) assertManagementContracts() {
 	})
 	c.assertNotificationContract(name)
 	c.expect("GET", "/api/v1/storage/replication", nil, 200)
+	// Successful received-backup reads/restores require the separate multi-node suite.
+	c.expect("GET", "/api/v1/storage/backups?node_id=node1&source_node_id=invalid/source&dataset=invalid", nil, 400)
+	c.expect("POST", "/api/v1/storage/backups/restore", map[string]any{}, 400)
 	c.expect("GET", "/api/v1/storage/faults", nil, 200)
 	c.expect("GET", "/api/v1/failover/status", nil, 200)
 }

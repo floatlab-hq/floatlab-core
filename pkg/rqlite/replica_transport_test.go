@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -89,6 +90,48 @@ func TestNativeSQLiteRsyncRoundTrip(t *testing.T) {
 	}
 	if len(rows.Values) != 1 || rows.Values[0][0] != "new" || rows.Values[0][1] != "after" {
 		t.Fatalf("replica content %#v", rows)
+	}
+	// Protocol 2 in SQLite 3.50.4 corrupts incremental copies that grow past
+	// the receiver's first 100-page hash range.
+	if err = db.Execute(ctx, []Statement{{SQL: `CREATE TABLE growth_payload(id INTEGER PRIMARY KEY,value BLOB)`}}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		pages, err := db.Query(ctx, Statement{SQL: `PRAGMA page_count`})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pages.Values[0][0].(float64) >= 101 {
+			break
+		}
+		if err = db.Execute(ctx, []Statement{{SQL: `INSERT INTO growth_payload(value) VALUES(zeroblob(4000))`}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = transport.Transfer(ctx, peer, db.LocalPath()); err != nil {
+		t.Fatalf("seed multi-range replica: %v", err)
+	}
+	for range 3 {
+		if err = db.Execute(ctx, []Statement{{SQL: `INSERT INTO growth_payload(value) VALUES(zeroblob(4000))`}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = transport.Transfer(ctx, peer, db.LocalPath()); err != nil {
+		t.Fatalf("incremental page growth corrupted replica: %v", err)
+	}
+	grown, err := OpenReplica(filepath.Join(root, "node-a.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer grown.Close()
+	const growth = `SELECT count(*),sum(length(value)) FROM growth_payload`
+	expected, err := db.Query(ctx, Statement{SQL: growth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, err := grown.Query(ctx, Statement{SQL: growth})
+	if err != nil || !reflect.DeepEqual(actual.Values, expected.Values) {
+		t.Fatalf("page-growth replica content %v, want %v: %v", actual, expected, err)
 	}
 }
 

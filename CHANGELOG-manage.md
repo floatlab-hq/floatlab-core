@@ -2,8 +2,11 @@
 
 ## Unreleased
 
+- Use SQLite sync protocol 1 with the pinned 3.50.4 tool to avoid its upstream protocol 2 corruption bug during incremental database growth; retain integrity checks and the last verified replica.
+- Exercise alert mute expiry, backup-target metadata, and offline-source recovery configuration in appliance acceptance; send restore tests to the destination node that owns the operation.
 - Add alert and alert-rule CLI/palette commands for listing, inspection, timed muting, enabling/disabling, and validated partial JSON edits, with action and resource completion.
 - Add an alert silence API and preserve mute deadlines across incident notifications while evaluation and recovery continue.
+
 - Advance update command completions through component, action, and node choices in both the web palette and interactive CLI.
 
 - Use the uuid library for idempotency keys so command, update, backup, and restore actions work over HTTP when crypto.randomUUID is unavailable.

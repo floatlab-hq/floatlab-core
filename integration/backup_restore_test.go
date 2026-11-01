@@ -38,9 +38,28 @@ func TestMultiNodeBackupRestore(t *testing.T) {
 	assertSnapshotGUID(t, source, backup, dataset, backupDataset, snapshot)
 	fingerprint := backup.restoreBackupFingerprint(backupDataset, snapshot)
 	t.Logf("backed up %s@%s with matching source GUID", dataset, snapshot)
+	configPath := "/api/v1/storage/backups/config?" + url.Values{"stack_id": {started.StackID}}.Encode()
+	response, savedCompose, err := source.client.request("GET", configPath, source.client.token, "", "", nil)
+	if err != nil || response.StatusCode != 200 {
+		t.Fatalf("read original backup configuration: %v %s", err, savedCompose)
+	}
+	checkSavedConfig := func() error {
+		response, recovered, err := backup.client.request("GET", configPath, backup.client.token, "", "", nil)
+		if err != nil {
+			return err
+		}
+		if response.StatusCode != 200 || string(recovered) != string(savedCompose) {
+			return fmt.Errorf("saved backup configuration differs: status=%d body=%s", response.StatusCode, recovered)
+		}
+		return nil
+	}
+	waitFor(t, time.Minute, checkSavedConfig)
 
 	// The original owner cannot participate in either recovery path.
 	source.link(false)
+	if err := checkSavedConfig(); err != nil {
+		t.Fatalf("read backup configuration with original source offline: %v", err)
+	}
 	listingPath := "/api/v1/storage/backups?" + url.Values{"node_id": {backupID}, "source_node_id": {sourceID}, "dataset": {dataset}}.Encode()
 	var snapshots []ipc.SnapshotInfoResult
 	if err := backup.json("GET", listingPath, nil, &snapshots); err != nil {
@@ -62,7 +81,7 @@ func TestMultiNodeBackupRestore(t *testing.T) {
 		request := map[string]any{
 			"name": target.name, "source_node_id": sourceID, "backup_node_id": backupID,
 			"destination_node_id": target.id,
-			"compose_file":        strings.Replace(compose, "x-fl-network-pool: "+source.pool, "x-fl-network-pool: "+target.node.pool, 1),
+			"compose_file":        strings.Replace(string(savedCompose), "x-fl-network-pool: "+source.pool, "x-fl-network-pool: "+target.node.pool, 1),
 			"snapshots":           []map[string]string{{"dataset": dataset, "snapshot": snapshot}},
 		}
 		var restored struct {
@@ -72,7 +91,7 @@ func TestMultiNodeBackupRestore(t *testing.T) {
 		}
 		key := "restore-" + target.name + "-" + fmt.Sprint(time.Now().UnixNano())
 		encoded := string(mustJSON(t, request))
-		if err := backup.client.doJSON("POST", "/api/v1/storage/backups/restore", backup.client.token, "application/json", strings.NewReader(encoded), &restored, key); err != nil {
+		if err := target.node.client.doJSON("POST", "/api/v1/storage/backups/restore", target.node.client.token, "application/json", strings.NewReader(encoded), &restored, key); err != nil {
 			t.Fatalf("restore %s: %v", target.name, err)
 		}
 		if restored.OperationID == "" || restored.StackID == "" || restored.StackID == started.StackID {
@@ -82,14 +101,14 @@ func TestMultiNodeBackupRestore(t *testing.T) {
 			OperationID string `json:"operation_id"`
 			StackID     string `json:"stack_id"`
 		}
-		if err := backup.client.doJSON("POST", "/api/v1/storage/backups/restore", backup.client.token, "application/json", strings.NewReader(encoded), &repeated, key); err != nil || repeated.OperationID != restored.OperationID || repeated.StackID != restored.StackID {
+		if err := target.node.client.doJSON("POST", "/api/v1/storage/backups/restore", target.node.client.token, "application/json", strings.NewReader(encoded), &repeated, key); err != nil || repeated.OperationID != restored.OperationID || repeated.StackID != restored.StackID {
 			t.Fatalf("restore idempotency failed: original=%+v repeated=%+v error=%v", restored, repeated, err)
 		}
-		backup.client.waitOperation(restored.OperationID)
+		target.node.client.waitOperation(restored.OperationID)
 		target.node.client.waitStackState(restored.StackID, "RunningPrimary")
 		target.node.assertWeb(restored.StackID, original)
 		assertRestoredWritable(t, target.node, restored.StackID, payload)
-		if err := backup.json("POST", "/api/v1/storage/backups/restore", request, nil); err == nil {
+		if err := target.node.json("POST", "/api/v1/storage/backups/restore", request, nil); err == nil {
 			t.Fatalf("repeat restore with a new request key accepted occupied stack name %s", target.name)
 		}
 		if got := backup.restoreBackupFingerprint(backupDataset, snapshot); got != fingerprint {
@@ -109,7 +128,7 @@ func TestMultiNodeBackupRestore(t *testing.T) {
 		"compose_file":        strings.Replace(compose, "x-fl-network-pool: "+source.pool, "x-fl-network-pool: "+remote.pool, 1),
 		"snapshots":           []map[string]string{{"dataset": dataset, "snapshot": snapshot}},
 	}
-	if err := backup.json("POST", "/api/v1/storage/backups/restore", collisionRequest, nil); err == nil {
+	if err := remote.json("POST", "/api/v1/storage/backups/restore", collisionRequest, nil); err == nil {
 		t.Fatal("restore accepted occupied destination dataset")
 	}
 	if out, err := remote.guest("zfs get -H -o value floatlab:acceptance-marker " + shellQuote(collision)); err != nil || strings.TrimSpace(out) != "untouched" {
