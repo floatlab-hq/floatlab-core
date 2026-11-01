@@ -280,7 +280,11 @@ func startLab(ctx context.Context, srv *control.Server, labDB, local *rqlite.Cli
 			http.Error(w, "peer is not an authorized lab member", http.StatusForbidden)
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/api/v1/stacks") || strings.HasPrefix(r.URL.Path, "/api/v1/operations/") || (r.Method == http.MethodGet && r.URL.Path == "/api/v1/nodes/"+hostNodeID+"/health") {
+		if strings.HasPrefix(r.URL.Path, "/internal/backups/") {
+			srv.ServeBackupPeer(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/v1/storage/backups") || strings.HasPrefix(r.URL.Path, "/api/v1/storage/replication") || strings.HasPrefix(r.URL.Path, "/api/v1/stacks") || strings.HasPrefix(r.URL.Path, "/api/v1/operations/") || (r.Method == http.MethodGet && r.URL.Path == "/api/v1/nodes/"+hostNodeID+"/health") {
 			srv.Handler().ServeHTTP(w, r)
 			return
 		}

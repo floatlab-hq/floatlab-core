@@ -52,6 +52,10 @@ func (s *Server) eachReplica(ctx context.Context, visit func(*rqlite.Client, rql
 		return err
 	}
 	for _, path := range files {
+		// Receives stage hidden files before atomically publishing a node-named replica.
+		if strings.HasPrefix(filepath.Base(path), ".") {
+			continue
+		}
 		replica, err := rqlite.OpenReplica(path)
 		if err != nil {
 			return fmt.Errorf("open workload replica: %w", err)
@@ -117,7 +121,32 @@ func (s *Server) routeWorkloadOwner(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/storage/backups/restore" {
+			body, err := io.ReadAll(io.LimitReader(r.Body, 8*1024*1024+1))
+			var request backupRestoreRequest
+			if err != nil || len(body) > 8*1024*1024 || json.Unmarshal(body, &request) != nil || request.DestinationNodeID == "" {
+				writeError(w, 400, "valid restore request and destination_node_id required")
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			if request.DestinationNodeID != s.cfg.LocalNodeID {
+				if r.Header.Get("X-FloatLab-Workload-Hop") != "" {
+					writeError(w, 503, "restore destination is unavailable")
+					return
+				}
+				s.forwardWorkloadOwner(w, r, request.DestinationNodeID)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
 		stackID, operationID := chi.URLParam(r, "id"), chi.URLParam(r, "operationId")
+		if stackID == "" {
+			stackID = chi.URLParam(r, "stack_id")
+		}
+		if stackID == "" && r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/storage/replication") {
+			stackID = r.URL.Query().Get("stack_id")
+		}
 		validation := r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/stacks/validate")
 		if stackID == "" && operationID == "" && !validation && !(r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/stacks")) {
 			next.ServeHTTP(w, r)

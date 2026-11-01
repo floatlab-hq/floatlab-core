@@ -17,6 +17,7 @@ import (
 
 	"github.com/floatlab/floatlab-core/internal/hostd"
 	"github.com/floatlab/floatlab-core/internal/hostnetwork"
+	"github.com/floatlab/floatlab-core/pkg/store"
 )
 
 func main() {
@@ -38,6 +39,9 @@ func main() {
 	network.AddCommand(rollback)
 	root.AddCommand(network)
 	addLabCommands(root)
+	root.AddCommand(&cobra.Command{Use: "backup-receive SOURCE", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return store.ServeBackupReceiver(cmd.Context(), args[0], os.Getenv("SSH_ORIGINAL_COMMAND"), os.Stdin, os.Stdout, os.Stderr)
+	}})
 	root.AddCommand(&cobra.Command{Use: "update-reconcile", Short: "Recover updates before management startup", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		management := managementupdate.NewDefault()
 		host := hostd.NewHostUpdateCoordinator(management)

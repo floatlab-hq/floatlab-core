@@ -85,6 +85,7 @@ func ApplySSHTrust(members []Member, authorizedPath, knownHostsPath, receiverPat
 				return errors.New("invalid member SSH host")
 			}
 			fmt.Fprintf(&known, "%s %s\n", u.Hostname(), m.SSHHostKey)
+			fmt.Fprintf(&known, "%s %s\n", m.NodeID, m.SSHHostKey)
 		}
 	}
 	if err := update.WriteFile(authorizedPath, []byte(authorized.String()), 0600); err != nil {

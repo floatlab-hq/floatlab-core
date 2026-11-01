@@ -4,6 +4,7 @@ import "encoding/json"
 
 // Task type constants match the tasks.type column in rqlite.
 const (
+	TaskBackupRestore   = "backup.restore"
 	TaskSnapshotCreate  = "snapshot.create"
 	TaskSnapshotDelete  = "snapshot.delete"
 	TaskReplTrigger     = "repl.trigger"
@@ -13,6 +14,30 @@ const (
 	TaskDatasetRollback = "dataset.rollback"
 	TaskStackRestore    = "stack.restore"
 )
+
+type BackupRestoreSnapshot struct {
+	Dataset  string `json:"dataset"`
+	Snapshot string `json:"snapshot"`
+}
+
+type BackupRestoreMount struct {
+	Dataset   string `json:"dataset"`
+	Snapshot  string `json:"snapshot"`
+	GUID      string `json:"guid"`
+	Activated bool   `json:"activated"`
+}
+
+type BackupRestorePayload struct {
+	OperationID       string                        `json:"operation_id"`
+	StackID           string                        `json:"stack_id"`
+	SourceNodeID      string                        `json:"source_node_id"`
+	BackupNodeID      string                        `json:"backup_node_id"`
+	DestinationNodeID string                        `json:"destination_node_id"`
+	DatasetPath       string                        `json:"dataset_path"`
+	Snapshots         []BackupRestoreSnapshot       `json:"snapshots"`
+	Prepared          map[string]BackupRestoreMount `json:"prepared,omitempty"`
+	Actor             string                        `json:"actor"`
+}
 
 // SnapshotCreatePayload is stored in tasks.payload for snapshot.create tasks.
 type SnapshotCreatePayload struct {
@@ -26,6 +51,7 @@ type SnapshotCreatePayload struct {
 	StackID     string `json:"stack_id,omitempty"`
 	Name        string `json:"name,omitempty"`
 	Actor       string `json:"actor,omitempty"`
+	Policy      string `json:"policy,omitempty"`
 }
 
 // SnapshotDeletePayload is stored in tasks.payload for snapshot.delete tasks.
@@ -41,11 +67,18 @@ type SnapshotDeletePayload struct {
 
 // ReplTriggerPayload is stored in tasks.payload for repl.trigger tasks.
 type ReplTriggerPayload struct {
-	StackID  string `json:"stack_id"`
-	Dataset  string `json:"dataset"`
-	NodeID   string `json:"node_id"` // primary node that runs zfs send
-	DestHost string `json:"dest_host"`
-	DestPort int    `json:"dest_port"`
+	SnapshotTaskID string `json:"snapshot_task_id,omitempty"`
+	Generation     int64  `json:"generation,omitempty"`
+	TargetRevision string `json:"target_revision,omitempty"`
+	DestNodeID     string `json:"dest_node_id,omitempty"`
+	DestDataset    string `json:"dest_dataset,omitempty"`
+	Snapshot       string `json:"snapshot,omitempty"`
+	Policy         string `json:"policy,omitempty"`
+	StackID        string `json:"stack_id"`
+	Dataset        string `json:"dataset"`
+	NodeID         string `json:"node_id"` // primary node that runs zfs send
+	DestHost       string `json:"dest_host"`
+	DestPort       int    `json:"dest_port"`
 }
 
 type StackUpgradePayload struct {

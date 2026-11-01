@@ -26,6 +26,8 @@ func Migrate(ctx context.Context, db *rqlite.Client) error {
 			created_at   DATETIME NOT NULL,
 			updated_at   DATETIME NOT NULL
 		)`},
+		{SQL: `CREATE TABLE IF NOT EXISTS backup_targets (stack_id TEXT NOT NULL,dataset TEXT NOT NULL,node_id TEXT NOT NULL,source_node_id TEXT NOT NULL, schedule TEXT NOT NULL,local_policy TEXT NOT NULL DEFAULT '',enabled INTEGER NOT NULL DEFAULT 1,cleanup_pending INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL DEFAULT '',PRIMARY KEY(stack_id,dataset,node_id))`},
+		{SQL: `CREATE TABLE IF NOT EXISTS removed_backup_nodes(node_id TEXT PRIMARY KEY)`},
 		{SQL: `CREATE TABLE IF NOT EXISTS stacks (
 			id                   TEXT PRIMARY KEY,
 			name                 TEXT NOT NULL UNIQUE,
@@ -81,9 +83,10 @@ func Migrate(ctx context.Context, db *rqlite.Client) error {
 	}
 	// Preserve legacy columns and records while adding the management contract.
 	for table, columns := range map[string][]string{
-		"nodes":       {"hostname TEXT NOT NULL DEFAULT ''", "role TEXT NOT NULL DEFAULT 'secondary'", "zfs_pool TEXT NOT NULL DEFAULT 'floatlab'"},
-		"networks":    {"stack_id TEXT", "created_at TEXT NOT NULL DEFAULT ''"},
-		"alert_rules": {"severity TEXT NOT NULL DEFAULT 'warning'", "stack_id TEXT", "node_id TEXT", "for_duration TEXT NOT NULL DEFAULT ''", "annotations TEXT NOT NULL DEFAULT '{}'", "enabled INTEGER NOT NULL DEFAULT 1", "created_at TEXT NOT NULL DEFAULT ''", "updated_at TEXT NOT NULL DEFAULT ''"},
+		"backup_targets": {"origin TEXT NOT NULL DEFAULT 'api'", "generation INTEGER NOT NULL DEFAULT 1"},
+		"nodes":          {"hostname TEXT NOT NULL DEFAULT ''", "role TEXT NOT NULL DEFAULT 'secondary'", "zfs_pool TEXT NOT NULL DEFAULT 'floatlab'"},
+		"networks":       {"stack_id TEXT", "created_at TEXT NOT NULL DEFAULT ''"},
+		"alert_rules":    {"severity TEXT NOT NULL DEFAULT 'warning'", "stack_id TEXT", "node_id TEXT", "for_duration TEXT NOT NULL DEFAULT ''", "annotations TEXT NOT NULL DEFAULT '{}'", "enabled INTEGER NOT NULL DEFAULT 1", "created_at TEXT NOT NULL DEFAULT ''", "updated_at TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := rqlite.AddColumns(ctx, db, table, columns); err != nil {
 			return err

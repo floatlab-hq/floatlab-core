@@ -521,6 +521,12 @@ func TestSSHTrustIsRestrictedAndRemovalRevokes(t *testing.T) {
 	if !strings.Contains(string(data), `restrict,command="/fixed/receiver peer"`) {
 		t.Fatal(string(data))
 	}
+	data, _ = os.ReadFile(known)
+	for _, alias := range []string{"127.0.0.2", "peer"} {
+		if !strings.Contains(string(data), alias+" "+pub) {
+			t.Fatalf("missing pinned SSH alias %s: %s", alias, data)
+		}
+	}
 	member.Status = "removed"
 	if err = ApplySSHTrust([]Member{member}, authorized, known, "/fixed/receiver"); err != nil {
 		t.Fatal(err)
@@ -528,6 +534,10 @@ func TestSSHTrustIsRestrictedAndRemovalRevokes(t *testing.T) {
 	data, _ = os.ReadFile(authorized)
 	if len(data) != 0 {
 		t.Fatal("removed SSH key remained")
+	}
+	data, _ = os.ReadFile(known)
+	if len(data) != 0 {
+		t.Fatal("removed host key aliases remained")
 	}
 	member.Status = "active"
 	member.SSHReplicationKey = "command=\"shell\" " + pub

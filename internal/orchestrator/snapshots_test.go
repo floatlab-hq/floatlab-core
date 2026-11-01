@@ -6,7 +6,7 @@ import (
 )
 
 func TestSnapshotDueCalendarBoundaries(t *testing.T) {
-	mondayMonthStart := time.Date(2027, time.February, 1, 0, 0, 0, 0, time.Local)
+	mondayMonthStart := time.Date(2027, time.February, 1, 0, 0, 0, 0, time.UTC)
 	for _, interval := range []string{"1h", "1d", "1w", "1mo"} {
 		if !snapshotDue(mondayMonthStart, interval) {
 			t.Fatalf("%s not due at boundary", interval)

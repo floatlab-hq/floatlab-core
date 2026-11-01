@@ -8,11 +8,45 @@ info:
     the API returns immediately and the caller should poll for completion.
     Snapshot naming conventions (normative):
       - User snapshots:     user-YYYYMMDD-HHMMSS-<label>
-      - Scheduled:          flsnap-YYYYMMDD-HHMMSS-<hourly|daily|weekly|monthly>
-      - Replication:        fsrepl-<seq>-YYYYMMDD-HHMMSS
+      - Automated workload snapshots: fl-{six-character RFD-0008 timestamp}
+    Backup retention is independent on each destination and runs only after
+    verified replication. Configured backup datasets follow the source;
+    conflicting destination-only changes may be rolled back automatically.
 
 components:
   schemas:
+    BackupSnapshot:
+      type: object
+      required: [name, dataset, used, created_at]
+      properties:
+        name: {type: string}
+        dataset: {type: string}
+        used: {type: integer, format: int64}
+        created_at: {type: string}
+        create_txg: {type: integer, format: int64}
+        hold_targets: {type: array, items: {type: string}}
+        transfer_targets: {type: array, items: {type: string}}
+        holds: {type: array, items: {type: string}}
+        purpose: {type: string}
+        operation_id: {type: string}
+    BackupRestoreRequest:
+      type: object
+      required: [name, source_node_id, backup_node_id, destination_node_id, compose_file, snapshots]
+      properties:
+        name: {type: string, description: New stack name; existing datasets are never replaced.}
+        source_node_id: {type: string, description: Original source identity recorded in the backup namespace.}
+        backup_node_id: {type: string}
+        destination_node_id: {type: string}
+        compose_file: {type: string, description: Original Compose configuration with its original name; cached configuration may be edited before restoring.}
+        snapshots:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [dataset, snapshot]
+            properties:
+              dataset: {type: string, description: Original managed workload dataset.}
+              snapshot: {type: string}
     ZfsVdevType:
       type: string
       enum: [disk, mirror, raidz, raidz2, raidz3, spare, cache, log]
@@ -128,7 +162,7 @@ components:
         name:
           type: string
           description: Snapshot name component (without dataset prefix).
-          example: "flsnap-20240101-120000-hourly"
+          example: "fl-0J8F40"
         dataset:
           type: string
           description: Full dataset path this snapshot belongs to.
@@ -150,7 +184,28 @@ components:
         kind:
           type: string
           enum: [user, scheduled, replication]
-          description: Derived from snapshot name prefix.
+          description: Snapshot purpose; canonical automated names share the fl- prefix.
+        hold_targets:
+          type: array
+          description: Stable node IDs whose last verified recovery point requires this source snapshot.
+          items:
+            type: string
+        holds:
+          type: array
+          description: Actual ZFS hold tags, including holds owned by other subsystems.
+          items:
+            type: string
+        purpose:
+          type: string
+          description: Value of floatlab:purpose snapshot metadata.
+        operation_id:
+          type: string
+          description: Value of floatlab:operation-id snapshot metadata.
+        transfer_targets:
+          type: array
+          description: Stable node IDs requiring this source snapshot for an active or resumable stream.
+          items:
+            type: string
         created_at:
           type: string
           format: date-time
@@ -174,6 +229,47 @@ components:
       type: string
       enum: [idle, running, complete, failed]
 
+    BackupTarget:
+      type: object
+      required: [stack_id, dataset, node_id, source_node_id, schedule, local_policy, enabled, cleanup_pending, generation]
+      properties:
+        stack_id:
+          type: string
+        dataset:
+          type: string
+        node_id:
+          type: string
+        source_node_id:
+          type: string
+        schedule:
+          type: string
+          description: Destination retention and replication policy in UTC, for example h/24 d/28.
+        local_policy:
+          type: string
+          description: Source retention policy, independent from destination retention.
+        enabled:
+          type: boolean
+        cleanup_pending:
+          type: boolean
+        generation:
+          type: integer
+          format: int64
+          description: Monotonic revision fencing queued transfers and source hold cleanup.
+        error:
+          type: string
+
+    BackupTargetInput:
+      type: object
+      required: [dataset, node_id, schedule]
+      properties:
+        dataset:
+          type: string
+        node_id:
+          type: string
+        schedule:
+          type: string
+          example: h/24 d/28
+
     ReplicationJob:
       type: object
       required: [id, stack_id, source_node_id, dest_node_id, state, created_at]
@@ -190,6 +286,8 @@ components:
         dest_node_id:
           type: string
           format: uuid
+        dataset:
+          type: string
         state:
           $ref: '#/components/schemas/ReplicationState'
         base_snapshot:
@@ -444,7 +542,7 @@ paths:
       tags: [storage]
       description: |
         Queues an IPC task to destroy the snapshot on the host.
-        Replication snapshots (fsrepl-*) cannot be deleted while a replication job is running.
+        Snapshots protected by recovery-point or transfer holds cannot be deleted.
       responses:
         '202':
           description: Delete task queued.
@@ -553,13 +651,39 @@ paths:
       summary: Trigger an ad-hoc replication run for a stack
       operationId: triggerReplication
       tags: [storage]
+      parameters:
+        - name: dest_node_id
+          in: query
+          description: Restrict the run to this configured destination node.
+          schema:
+            type: string
+        - name: dataset
+          in: query
+          description: Restrict the run to this configured source dataset.
+          schema:
+            type: string
       responses:
         '202':
           description: Replication job queued.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ReplicationJob'
+                type: object
+                required: [state, task_ids]
+                properties:
+                  state:
+                    type: string
+                  task_id:
+                    type: string
+                  task_ids:
+                    type: array
+                    items:
+                      type: string
+                  stack_id:
+                    type: string
+                  started_at:
+                    type: string
+                    format: date-time
         '409':
           description: A replication job is already running for this stack.
           content:
@@ -567,6 +691,134 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /storage/replication/{stack_id}/targets:
+    parameters:
+      - name: stack_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: List backup targets and pending source cleanup
+      operationId: listBackupTargets
+      tags: [storage]
+      responses:
+        '200':
+          description: Configured and disabled targets with cleanup status.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BackupTarget'
+    put:
+      summary: Configure a backup destination for a managed workload mount
+      operationId: putBackupTarget
+      tags: [storage]
+      description: Configured destination datasets are dedicated replicas; conflicting destination-only changes can be rolled back.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BackupTargetInput'
+      responses:
+        '200':
+          description: Saved target.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupTarget'
+        '400':
+          description: Invalid dataset, destination node or policy.
+    delete:
+      summary: Disable a target, release its source holds and rerun source pruning
+      operationId: deleteBackupTarget
+      tags: [storage]
+      description: Retains received backup data; unreachable source cleanup remains pending until reconnection.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dataset, node_id]
+              properties:
+                dataset:
+                  type: string
+                node_id:
+                  type: string
+      responses:
+        '202':
+          description: Target disabled and durable cleanup queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [state]
+                properties:
+                  state:
+                    type: string
+                    enum: [cleanup_pending]
+
+  /storage/backups:
+    get:
+      summary: List received snapshots without contacting the original source
+      operationId: listBackupSnapshots
+      tags: [storage]
+      parameters:
+        - {name: node_id, in: query, required: true, schema: {type: string}}
+        - {name: source_node_id, in: query, required: true, schema: {type: string}}
+        - {name: dataset, in: query, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: Received snapshots for the original workload dataset.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/BackupSnapshot'}
+        '400': {description: Invalid source or unavailable backup.}
+  /storage/backups/config:
+    get:
+      summary: Read the latest locally cached stack configuration for recovery
+      operationId: getBackupConfig
+      tags: [storage]
+      parameters:
+        - {name: stack_id, in: query, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: Latest configuration replica; not necessarily the configuration at the selected snapshot time.
+          content:
+            application/yaml:
+              schema: {type: string}
+        '404': {description: No configuration replica; supply Compose configuration explicitly.}
+  /storage/backups/restore:
+    post:
+      summary: Restore received backups into a new stack and start it
+      operationId: restoreBackup
+      tags: [storage]
+      description: Requires every writable mount. Clones locally or resumes a verified transfer to operation-owned remote staging. Retains backups and never overwrites an existing destination. File-backed project assets not included in backups are rejected. Old failover and backup assignments are removed from the restored stack.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/BackupRestoreRequest'}
+      responses:
+        '202':
+          description: Restore queued on the destination; poll the operation until startup completes.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [operation_id, stack_id, status]
+                properties:
+                  operation_id: {type: string}
+                  stack_id: {type: string}
+                  status: {type: string, enum: [pending]}
+        '400': {description: Invalid Compose or incomplete snapshot selection.}
+        '409': {description: Destination name or datasets already exist.}
+        '502': {description: Backup or destination host is unavailable.}
   /storage/faults:
     get:
       summary: Get active ZFS fault conditions across all nodes

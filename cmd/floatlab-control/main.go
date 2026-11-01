@@ -234,6 +234,7 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 	broker := notify.NewBroker()
 	seq := failover.NewSequence(db, store, raftNode, hosts, broker, log)
+	var srv *control.Server
 	startControllers := func(controllerCtx context.Context) {
 		ctx := controllerCtx
 		var controllers sync.WaitGroup
@@ -297,6 +298,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 		// Task worker: polls rqlite tasks table and dispatches IPC to hostd.
 		w := worker.New(db, store, hosts, raftNode, log)
+		w.SetBackupRestorePreparer(srv.PrepareBackupRestore)
 		launch(func() {
 			if err := w.Run(ctx); err != nil && err != context.Canceled {
 				log.Error("worker exited", zap.Error(err))
@@ -304,12 +306,8 @@ func run(cmd *cobra.Command, args []string) error {
 		})
 		controllers.Wait()
 	}
-	if !preflight {
-		go superviseControllers(ctx, startControllers, log)
-	}
-
 	// HTTP control server.
-	srv := control.NewServer(&control.Config{
+	srv = control.NewServer(&control.Config{
 		DevMode:       devMode,
 		ListenAddr:    listenAddr,
 		UIDir:         uiDir,
@@ -329,6 +327,7 @@ func run(cmd *cobra.Command, args []string) error {
 		if err := startLab(ctx, srv, labDB, db, hosts, log); err != nil {
 			return err
 		}
+		go superviseControllers(ctx, startControllers, log)
 	}
 
 	log.Info("floatlab-control starting",

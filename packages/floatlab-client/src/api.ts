@@ -1,6 +1,6 @@
 import type { Container, ExecResult, FloatLabApi, HostNetworkApi, HostNetworkStatus, HostNetworkChange, NetworkPool, LogLine, Node, Stack, StackMetricSeries, UpdateApi, UpdateRelease, UpdateStatus } from "./types";
 import type { DashboardApi, TokenResponse, RaftHealth, Notification, NodeStats, StorageStats } from "./types";
-import type { LabApi } from "./types";
+import type { LabApi, BackupApi, BackupRestoreApi } from "./types";
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) { super(message); }
@@ -17,7 +17,7 @@ export function normalizeApiUrl(url: string): string {
   return parsed.toString().replace(/\/$/, "");
 }
 
-export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNetworkApi & DashboardApi & UpdateApi & LabApi {
+export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNetworkApi & DashboardApi & UpdateApi & LabApi & BackupApi & BackupRestoreApi {
   const baseUrl = normalizeApiUrl(options.baseUrl);
   const send = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
     const headers = new Headers(init.headers);
@@ -47,7 +47,21 @@ export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNe
   const changePath = (node: string, change: string) => `${hostNetworkPath(node)}/changes/${encodeURIComponent(change)}`;
   const updatePath = (node: string, component: string) => `/nodes/${encodeURIComponent(node)}/updates/${component}`;
   return {
-    getLabStatus: () => send("/lab/status"),
+    listBackups: values => send(`/storage/backups${query(values)}`),
+    getBackupConfig: async stack => {
+      let response: Response;
+      try { response = await (options.fetch ?? fetch)(`${baseUrl}/storage/backups/config${query({stack_id: stack})}`, {headers: {accept: "application/yaml", ...(options.token ? {authorization: `Bearer ${options.token}`} : {})}, signal: options.signal}); }
+      catch (error) { throw new ApiError(error instanceof Error ? error.message : "Network request failed", 0); }
+      if (!response.ok) throw new ApiError(await response.text() || `${response.status} ${response.statusText}`, response.status);
+      return response.text();
+    },
+    restoreBackup: (request, key) => mutation("/storage/backups/restore", "POST", key, request),
+    listBackupTargets: stack => send(`/storage/replication/${encodeURIComponent(stack)}/targets`),
+ putBackupTarget: (stack, target, key) => mutation(`/storage/replication/${encodeURIComponent(stack)}/targets`, "PUT", key, target),
+ removeBackupTarget: (stack, target, key) => mutation(`/storage/replication/${encodeURIComponent(stack)}/targets`, "DELETE", key, target),
+ triggerReplication: (stack, node, dataset, key) => mutation(`/storage/replication/${encodeURIComponent(stack)}/trigger${query({dest_node_id:node,dataset})}`, "POST", key),
+ listReplication: stack => send(`/storage/replication${query({stack_id:stack})}`),
+ getLabStatus: () => send("/lab/status"),
     listLabMembers: () => send("/lab/members"),
     createLabInvitation: () => send("/lab/invitations", { method: "POST" }),
     joinLab: request => send("/lab/join", { method: "POST", body: JSON.stringify(request) }),

@@ -251,8 +251,16 @@ paths:
     $ref: './store.yaml#/paths/~1storage~1datasets~1{stack_id}~1snapshots~1{name}~1restore'
   /storage/replication:
     $ref: './store.yaml#/paths/~1storage~1replication'
+  /storage/backups:
+    $ref: './store.yaml#/paths/~1storage~1backups'
+  /storage/backups/config:
+    $ref: './store.yaml#/paths/~1storage~1backups~1config'
+  /storage/backups/restore:
+    $ref: './store.yaml#/paths/~1storage~1backups~1restore'
   /storage/replication/{stack_id}/trigger:
     $ref: './store.yaml#/paths/~1storage~1replication~1{stack_id}~1trigger'
+  /storage/replication/{stack_id}/targets:
+    $ref: './store.yaml#/paths/~1storage~1replication~1{stack_id}~1targets'
   /storage/faults:
     $ref: './store.yaml#/paths/~1storage~1faults'
 

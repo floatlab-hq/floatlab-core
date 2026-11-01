@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.3
+
+- Add partition-tolerant lab management with node-owned workload databases and authenticated, read-only workload replicas on peers.
+- Configure multiple backup destinations per managed mount through Compose, the API, CLI and dashboard; share canonical snapshots across local and backup schedules while retaining each destination independently.
+- Track replication failures and recovery, expose per-node snapshot protection, and durably clean source holds when a destination or node is removed.
+- Restore received backups as separately named stacks on the backup node or another lab node, without requiring the original source to be online. Verify every writable mount before provisioning and starting the new stack; retain existing workloads and backups.
+- Offer received-snapshot selection and editable cached Compose configuration. File-backed project assets absent from backups are rejected; local restored clones retain their origin snapshot. Backup source migration during failover remains unsupported.
+- Verify real three-node replication and local/remote restore acceptance, plus Go, race, client, CLI and UI checks.
+
 ## 0.1.2
 
 - Add administrator update controls in the API, client, CLI, and UI, with hostd-backed progress, rollback, cleanup, and reconnect polling during management downtime.

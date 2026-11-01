@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/floatlab/floatlab-core/internal/update"
+	"github.com/floatlab/floatlab-core/pkg/config"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
 	"github.com/google/uuid"
 )
@@ -277,6 +278,11 @@ func (s *Service) refreshTrust(ctx context.Context, duringJoin bool) error {
 		}
 		if m.AppliedTrustRevision, err = strconv.ParseInt(fmt.Sprint(row[2]), 10, 64); err != nil {
 			return err
+		}
+		if (m.Status == "removing" || m.Status == "removed") && s.cfg.LocalDB != nil {
+			if err := config.NewStore(s.cfg.LocalDB).DisableBackupNode(ctx, m.NodeID); err != nil {
+				return fmt.Errorf("persist backup cleanup: %w", err)
+			}
 		}
 		members = append(members, m)
 	}

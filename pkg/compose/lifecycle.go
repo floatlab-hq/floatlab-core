@@ -6,20 +6,19 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/floatlab/floatlab-core/pkg/store"
 	"gopkg.in/yaml.v3"
 )
 
 const DefaultHealthTimeout = 2 * time.Minute
 
 var (
-	slugPattern     = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
-	snapshotPattern = regexp.MustCompile(`^([1-9][0-9]*)(m|h|d|w|mo|y)/([1-9][0-9]*)$`)
-	zfsSizePattern  = regexp.MustCompile(`^[1-9][0-9]*([KMGTPE]i?B?|[kmgtpe])?$`)
+	slugPattern    = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+	zfsSizePattern = regexp.MustCompile(`^[1-9][0-9]*([KMGTPE]i?B?|[kmgtpe])?$`)
 )
 
 type LifecycleSpec struct {
@@ -40,6 +39,12 @@ type LifecycleAlert struct {
 type Mount struct {
 	Dataset, Source, Target, Type, RecordSize, Compression, Quota string
 	Snapshots                                                     []SnapshotTier
+	Backups                                                       []BackupTarget
+}
+
+type BackupTarget struct {
+	NodeID   string `json:"node_id" yaml:"node_id"`
+	Schedule string `json:"schedule" yaml:"schedule"`
 }
 
 type SnapshotTier struct {
@@ -212,16 +217,29 @@ func lifecycleMount(stack, workingDir string, volume types.ServiceVolumeConfig) 
 		return Mount{}, fmt.Errorf("invalid ZFS properties")
 	}
 	var schedule string
-	_ = decodeString(volume.Extensions, "x-fl-snapshots", &schedule)
+	if err := decodeString(volume.Extensions, "x-fl-snapshots", &schedule); err != nil {
+		return Mount{}, err
+	}
+	tiers, err := store.ParseSnapshotPolicy(schedule)
+	if err != nil {
+		return Mount{}, err
+	}
+	for _, tier := range tiers {
+		m.Snapshots = append(m.Snapshots, SnapshotTier{Interval: tier.Interval, Retain: tier.Retain})
+	}
+	if err := decodeExtension(volume.Extensions["x-fl-backups"], &m.Backups); err != nil {
+		return Mount{}, fmt.Errorf("invalid x-fl-backups: %w", err)
+	}
 	seen := map[string]bool{}
-	for _, token := range strings.Fields(schedule) {
-		match := snapshotPattern.FindStringSubmatch(token)
-		if match == nil || seen[match[2]] {
-			return Mount{}, fmt.Errorf("invalid or duplicate snapshot tier %q", token)
+	for _, backup := range m.Backups {
+		if backup.NodeID == "" || seen[backup.NodeID] {
+			return Mount{}, fmt.Errorf("invalid or duplicate backup node %q", backup.NodeID)
 		}
-		seen[match[2]] = true
-		retain, _ := strconv.Atoi(match[3])
-		m.Snapshots = append(m.Snapshots, SnapshotTier{Interval: match[1] + match[2], Retain: retain})
+		seen[backup.NodeID] = true
+		tiers, err := store.ParseSnapshotPolicy(backup.Schedule)
+		if err != nil || len(tiers) == 0 {
+			return Mount{}, fmt.Errorf("invalid backup schedule %q", backup.Schedule)
+		}
 	}
 	return m, nil
 }

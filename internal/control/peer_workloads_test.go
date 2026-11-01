@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -98,6 +99,78 @@ func peerRequest(t *testing.T, server *Server, method, path, body string) *httpt
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	return response
+}
+
+func TestRemoteBackupManagementRoutesToWorkloadOwner(t *testing.T) {
+	ctx := context.Background()
+	owner, ownerDB := peerWorkloadServer(t, "node-b")
+	for _, id := range []string{"node-b", "node-c"} {
+		if err := owner.store.CreateNode(ctx, &config.Node{ID: id, Name: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st := &config.Stack{ID: "remote-app", Name: "remote", PrimaryNodeID: "node-b", ZFSDataset: "floatlab/remote", ComposeYAML: "name: remote\nservices:\n  app:\n    image: nginx\n    volumes:\n      - type: bind\n        source: ./data\n        target: /data\n        x-fl-snapshots: h/24\n"}
+	if err := owner.store.CreateStack(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	endpoint := httptest.NewTLSServer(owner.Handler())
+	defer endpoint.Close()
+	front, frontDB := peerWorkloadServer(t, "node-a")
+	replicas := t.TempDir()
+	createReplicaStack(t, replicas, "node-b", st.ID, st.Name)
+	if err := front.SetWorkloadPeers(replicas, endpoint.Client(), func(node string) (string, bool) { return endpoint.URL, node == "node-b" }); err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/v1/storage/replication/remote-app/targets"
+	response := peerRequest(t, front, http.MethodPut, path, `{"dataset":"floatlab/remote/data","node_id":"node-c","schedule":"h/24 d/28"}`)
+	if response.Code != 200 {
+		t.Fatalf("forwarded target update: %d %s", response.Code, response.Body.String())
+	}
+	response = peerRequest(t, front, http.MethodGet, path, "")
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"node_id":"node-c"`) {
+		t.Fatalf("forwarded target list: %d %s", response.Code, response.Body.String())
+	}
+	if err := ownerDB.Execute(ctx, []rqlite.Statement{{SQL: `INSERT INTO tasks(id,type,stack_id,payload,state,attempts,created_at,updated_at) VALUES('foreign-job','repl.trigger','remote-app','{"dataset":"floatlab/remote/data","dest_node_id":"node-c"}','done',0,datetime('now'),datetime('now'))`}}); err != nil {
+		t.Fatal(err)
+	}
+	response = peerRequest(t, front, http.MethodGet, "/api/v1/storage/replication?stack_id=remote-app", "")
+	if response.Code != 200 || !strings.Contains(response.Body.String(), "foreign-job") {
+		t.Fatalf("forwarded history: %d %s", response.Code, response.Body.String())
+	}
+	local, err := frontDB.Query(ctx, rqlite.Statement{SQL: `SELECT count(*) FROM idempotency_keys`})
+	if err != nil || local.Values[0][0] != float64(0) {
+		t.Fatalf("front consumed owner idempotency: %+v %v", local, err)
+	}
+	local, err = frontDB.Query(ctx, rqlite.Statement{SQL: `SELECT count(*) FROM backup_targets`})
+	if err != nil || local.Values[0][0] != float64(0) {
+		t.Fatalf("front wrote foreign target: %+v %v", local, err)
+	}
+}
+
+func TestWorkloadOwnerIgnoresUnpublishedReplicaStagingFiles(t *testing.T) {
+	server, _ := peerWorkloadServer(t, "node-a")
+	directory := t.TempDir()
+	createReplicaStack(t, directory, "node-b", "remote-app", "remote")
+	createReplicaStack(t, directory, "node-c", "staged-app", "staged")
+	if err := os.Rename(filepath.Join(directory, "node-c.sqlite"), filepath.Join(directory, ".node-c.staging.sqlite")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, ".node-d.staging.sqlite"), []byte("incomplete receive"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.SetWorkloadPeers(directory, &http.Client{}, func(string) (string, bool) { return "", false }); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := server.workloadOwner(context.Background(), "remote-app", "")
+	if err != nil || owner != "node-b" {
+		t.Fatalf("published owner unavailable while replica receive is in progress: owner=%q err=%v", owner, err)
+	}
+	if err := os.Rename(filepath.Join(directory, "node-b.sqlite"), filepath.Join(directory, "wrong.sqlite")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.workloadOwner(context.Background(), "remote-app", ""); err == nil || !strings.Contains(err.Error(), "filename/source mismatch") {
+		t.Fatalf("published replica identity mismatch was accepted: %v", err)
+	}
 }
 
 func TestPeerCreationAndOperationPollRouteBeforeLocalIdempotency(t *testing.T) {

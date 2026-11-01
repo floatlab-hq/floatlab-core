@@ -14,6 +14,7 @@ import (
 
 	"github.com/floatlab/floatlab-core/internal/hostnetwork"
 	"github.com/floatlab/floatlab-core/internal/ipam"
+	"github.com/floatlab/floatlab-core/internal/worker"
 	"github.com/floatlab/floatlab-core/pkg/compose"
 	"github.com/floatlab/floatlab-core/pkg/config"
 	"github.com/floatlab/floatlab-core/pkg/hostclient"
@@ -223,7 +224,13 @@ func (o *Orchestrator) doProvision(ctx context.Context, stackID string) {
 		}
 		datasets = append(datasets, buildDatasetCreate(stack.Name, parsed.Extension))
 	}
-	if lifecycleErr == nil {
+	restoreTasks, restoreErr := o.db.Query(ctx, rqlite.Statement{SQL: `SELECT id FROM tasks WHERE stack_id=? AND type=? LIMIT 1`, Params: []interface{}{stackID, worker.TaskBackupRestore}})
+	if restoreErr != nil {
+		o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack)
+		return
+	}
+	importProjectData := len(restoreTasks.Values) == 0
+	if lifecycleErr == nil && importProjectData {
 		if err := stageBindData(stack.Name, spec.Mounts); err != nil {
 			o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack)
 			_ = o.ops.FinishForStack(context.Background(), stackID, "start", "failed", err.Error())
@@ -238,7 +245,7 @@ func (o *Orchestrator) doProvision(ctx context.Context, stackID string) {
 			return
 		}
 	}
-	if lifecycleErr == nil {
+	if lifecycleErr == nil && importProjectData {
 		if err := restoreBindData(stack.Name, spec.Mounts); err != nil {
 			o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack)
 			_ = o.ops.FinishForStack(context.Background(), stackID, "start", "failed", err.Error())

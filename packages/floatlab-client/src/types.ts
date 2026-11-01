@@ -110,3 +110,27 @@ export interface LabApi {
   rotateLabIdentity(operationId: string): Promise<Record<string, unknown>>;
   releaseLabPeerAddress(nodeId: string, operationId: string): Promise<Record<string, unknown>>;
 }
+
+export type BackupTarget = { stack_id: string; dataset: string; node_id: string; source_node_id: string; schedule: string; local_policy: string; enabled: boolean; cleanup_pending: boolean; error?: string };
+export interface BackupApi {
+ listBackupTargets(stackId: string): Promise<BackupTarget[]>;
+ putBackupTarget(stackId: string, target: {dataset: string; node_id: string; schedule: string}, key: string): Promise<BackupTarget>;
+ removeBackupTarget(stackId: string, target: {dataset: string; node_id: string}, key: string): Promise<unknown>;
+ triggerReplication(stackId: string, nodeId: string | undefined, dataset: string | undefined, key: string): Promise<unknown>;
+ listReplication(stackId: string): Promise<Record<string, unknown>[]>;
+}
+
+export type BackupSnapshot = components["schemas"]["Snapshot"];
+export type BackupRestoreRequest = {
+ name: string;
+ source_node_id: string;
+ backup_node_id: string;
+ destination_node_id: string;
+ compose_file: string;
+ snapshots: {dataset: string; snapshot: string}[];
+};
+export interface BackupRestoreApi {
+ listBackups(query: {node_id: string; source_node_id: string; dataset: string}): Promise<BackupSnapshot[]>;
+ getBackupConfig(stackId: string): Promise<string>;
+ restoreBackup(request: BackupRestoreRequest, key: string): Promise<{operation_id?: string; stack_id?: string; state?: string}>;
+}

@@ -374,6 +374,13 @@ func (s *Server) handleUpdateStackCompose(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleStartStack(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if tasks, err := s.db.Query(r.Context(), rqlite.Statement{SQL: `SELECT id FROM tasks WHERE stack_id=? AND type=? AND state!='done' LIMIT 1`, Params: []interface{}{id, worker.TaskBackupRestore}}); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	} else if len(tasks.Values) > 0 {
+		writeError(w, 409, "backup restore data is incomplete; wait for recovery or remove the failed restored stack")
+		return
+	}
 	st, err := s.store.GetStack(r.Context(), id)
 	if err != nil {
 		s.handleCreateAndStartStack(w, r, id)

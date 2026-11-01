@@ -8,9 +8,11 @@ import (
 
 	"github.com/floatlab/floatlab-core/internal/worker"
 	"github.com/floatlab/floatlab-core/pkg/compose"
+	"github.com/floatlab/floatlab-core/pkg/config"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
 	"github.com/floatlab/floatlab-core/pkg/run"
-	"github.com/google/uuid"
+	"github.com/floatlab/floatlab-core/pkg/store"
+
 	"go.uber.org/zap"
 )
 
@@ -26,6 +28,7 @@ func RunScheduler(ctx context.Context, orch *Orchestrator, db *rqlite.Client, lo
 	case <-time.After(wait):
 	}
 
+	scheduleTick(ctx, orch, db, time.Now().UTC().Truncate(time.Minute), log)
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
@@ -62,23 +65,78 @@ func scheduleTick(ctx context.Context, orch *Orchestrator, db *rqlite.Client, no
 		if !ok {
 			continue
 		}
-		if inst.State != run.StateRunningPrimary && inst.State != run.StateRunningBackup {
+		if inst.State == run.StateRunningBackup {
+			// shortcut: policies retain primary ownership, migrate recovery points before enabling failover-source backups.
+			log.Warn("backup scheduling suspended: workload active on failover node", zap.String("stack", stack.ID))
+			continue
+		}
+		if inst.State != run.StateRunningPrimary {
 			continue
 		}
 
 		lifecycle, lifecycleErr := compose.ParseLifecycle(stack.ComposeYAML, stack.Name)
 		if lifecycleErr == nil {
+			targets, err := orch.store.BackupTargets(ctx, stack.ID)
+			if err != nil {
+				log.Error("backup targets", zap.Error(err))
+				continue
+			}
 			for _, mount := range lifecycle.Mounts {
+				localPolicy := config.MountPolicy(mount)
+				due := false
 				for _, tier := range mount.Snapshots {
-					if !snapshotDue(now, tier.Interval) {
+					due = due || store.SnapshotDue(now, tier.Interval)
+				}
+				var selected []config.BackupTarget
+				for _, target := range targets {
+					if !target.Enabled || target.Dataset != mount.Dataset {
 						continue
 					}
-					taskID := fmt.Sprintf("snapshot-%s-%s-%s-%s", stack.ID, strings.ReplaceAll(mount.Dataset, "/", "-"), tier.Interval, now.Format("200601021504"))
-					payload := worker.SnapshotCreatePayload{Dataset: mount.Dataset, NodeID: stack.PrimaryNodeID, SnapType: tier.Interval, Keep: tier.Retain, Name: "flsnap-" + taskID + "-" + tier.Interval}
-					if err := worker.EnqueueTask(ctx, db, taskID, worker.TaskSnapshotCreate, stack.ID, payload); err != nil {
-						log.Error("snapshot scheduler: enqueue", zap.String("stack", stack.ID), zap.Error(err))
-					} else {
-						_ = db.Execute(ctx, []rqlite.Statement{{SQL: `INSERT INTO scheduler_state(stack_id,mount,interval,last_boundary,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(stack_id,mount,interval) DO UPDATE SET last_boundary=excluded.last_boundary,updated_at=excluded.updated_at`, Params: []interface{}{stack.ID, mount.Dataset, tier.Interval, now, time.Now().UTC()}}})
+					tiers, err := store.ParseSnapshotPolicy(target.Schedule)
+					if err != nil {
+						continue
+					}
+					targetDue := false
+					for _, tier := range tiers {
+						targetDue = targetDue || store.SnapshotDue(now, tier.Interval)
+					}
+					if targetDue {
+						due = true
+						selected = append(selected, target)
+					}
+				}
+				if !due {
+					continue
+				}
+				name, err := store.AutomatedSnapshotName(now)
+				if err != nil {
+					log.Error("snapshot timestamp", zap.Error(err))
+					continue
+				}
+				taskID := fmt.Sprintf("snapshot-%s-%s-%s", stack.ID, strings.ReplaceAll(mount.Dataset, "/", "-"), name)
+				payload := worker.SnapshotCreatePayload{Dataset: mount.Dataset, NodeID: stack.PrimaryNodeID, StackID: stack.ID, SnapType: "scheduled", Name: name, Policy: localPolicy, OperationID: taskID}
+				if err := worker.EnqueueTask(ctx, db, taskID, worker.TaskSnapshotCreate, stack.ID, payload); err != nil {
+					log.Error("snapshot scheduler", zap.Error(err))
+					continue
+				}
+				for _, target := range selected {
+					dest, err := orch.store.GetNode(ctx, target.NodeID)
+					if err != nil {
+						continue
+					}
+					host := ""
+					for _, address := range dest.Addresses {
+						if address.Type == "LAN-6" {
+							host = address.Address
+							break
+						}
+					}
+					if host == "" {
+						continue
+					}
+					payload := worker.ReplTriggerPayload{SnapshotTaskID: taskID, Generation: target.Generation, TargetRevision: target.Revision, StackID: stack.ID, Dataset: mount.Dataset, NodeID: stack.PrimaryNodeID, DestNodeID: target.NodeID, DestHost: host, DestPort: 22, Snapshot: name, Policy: target.Schedule}
+					if err := worker.EnqueueTask(ctx, db, taskID+"-"+target.NodeID, worker.TaskReplTrigger, stack.ID, payload); err != nil {
+						log.Error("backup scheduler", zap.Error(err))
 					}
 				}
 			}
@@ -92,73 +150,34 @@ func scheduleTick(ctx context.Context, orch *Orchestrator, db *rqlite.Client, no
 		}
 
 		sched := parsed.Extension.Snapshots.Schedule
-		type slot struct {
-			name string
-			keep int
-			due  bool
+		slots := []struct {
+			interval string
+			keep     int
+		}{{"1h", sched.Hourly.Keep}, {"1d", sched.Daily.Keep}, {"1w", sched.Weekly.Keep}, {"1mo", sched.Monthly.Keep}}
+		due := false
+		policy := []string{}
+		for _, slot := range slots {
+			if slot.keep > 0 {
+				policy = append(policy, fmt.Sprintf("%s/%d", slot.interval, slot.keep))
+				due = due || store.SnapshotDue(now, slot.interval)
+			}
 		}
-		slots := []slot{
-			{"hourly", sched.Hourly.Keep, now.Minute() == 0},
-			{"daily", sched.Daily.Keep, now.Hour() == 0 && now.Minute() == 0},
-			{"weekly", sched.Weekly.Keep, now.Weekday() == time.Sunday && now.Hour() == 0 && now.Minute() == 0},
-			{"monthly", sched.Monthly.Keep, now.Day() == 1 && now.Hour() == 0 && now.Minute() == 0},
+		if !due {
+			continue
 		}
-
-		for _, s := range slots {
-			if s.keep == 0 || !s.due {
-				continue
-			}
-			taskID := uuid.New().String()
-			payload := worker.SnapshotCreatePayload{
-				Dataset:  stack.ZFSDataset,
-				NodeID:   stack.PrimaryNodeID,
-				SnapType: s.name,
-				Keep:     s.keep,
-			}
-			if err := worker.EnqueueTask(ctx, db, taskID, worker.TaskSnapshotCreate, stack.ID, payload); err != nil {
-				log.Error("snapshot scheduler: enqueue",
-					zap.String("stack", stack.ID),
-					zap.String("type", s.name),
-					zap.Error(err),
-				)
-			} else {
-				log.Info("snapshot scheduler: enqueued",
-					zap.String("stack", stack.ID),
-					zap.String("type", s.name),
-				)
-			}
+		name, err := store.AutomatedSnapshotName(now)
+		if err != nil {
+			log.Error("snapshot timestamp", zap.Error(err))
+			continue
+		}
+		taskID := fmt.Sprintf("snapshot-%s-%s", stack.ID, name)
+		payload := worker.SnapshotCreatePayload{StackID: stack.ID, Dataset: stack.ZFSDataset, NodeID: stack.PrimaryNodeID, SnapType: "scheduled", Name: name, Policy: strings.Join(policy, " "), OperationID: taskID}
+		if err := worker.EnqueueTask(ctx, db, taskID, worker.TaskSnapshotCreate, stack.ID, payload); err != nil {
+			log.Error("snapshot scheduler", zap.Error(err))
 		}
 	}
 }
 
 func snapshotDue(now time.Time, interval string) bool {
-	if interval == "" {
-		return false
-	}
-	unit := interval[len(interval)-1:]
-	countText := interval[:len(interval)-1]
-	if len(interval) > 2 && interval[len(interval)-2:] == "mo" {
-		unit, countText = "mo", interval[:len(interval)-2]
-	}
-	count := 0
-	_, _ = fmt.Sscanf(countText, "%d", &count)
-	if count < 1 {
-		return false
-	}
-	switch unit {
-	case "m":
-		return now.Minute()%count == 0
-	case "h":
-		return now.Minute() == 0 && now.Hour()%count == 0
-	case "d":
-		return now.Hour() == 0 && now.Minute() == 0 && (now.YearDay()-1)%count == 0
-	case "w":
-		_, week := now.ISOWeek()
-		return now.Weekday() == time.Monday && now.Hour() == 0 && now.Minute() == 0 && (week-1)%count == 0
-	case "mo":
-		return now.Day() == 1 && now.Hour() == 0 && now.Minute() == 0 && (int(now.Month())-1)%count == 0
-	case "y":
-		return now.Month() == time.January && now.Day() == 1 && now.Hour() == 0 && now.Minute() == 0 && now.Year()%count == 0
-	}
-	return false
+	return store.SnapshotDue(now, interval)
 }

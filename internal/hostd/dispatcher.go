@@ -68,6 +68,12 @@ func (d *Dispatcher) register() {
 	d.handle("fs.repl.send", d.replSend)
 	d.handle("fs.repl.recv", d.replRecv)
 	d.handle("fs.repl.status", d.replStatus)
+	d.handle("fs.repl.cleanup", d.replCleanup)
+	d.handle("fs.repl.release", d.replCleanup)
+	d.handle("fs.backup.restore.prepare", d.backupRestorePrepare)
+	d.handle("fs.backup.restore.reserve", d.backupRestoreReserve)
+	d.handle("fs.backup.restore.activate", d.backupRestoreActivate)
+	d.handle("fs.snapshot.prune", d.snapshotPrune)
 	d.handle("net.addr.add", d.netAddrAdd)
 	d.handle("net.addr.del", d.netAddrDel)
 	d.handle("net.route.add", d.netRouteAdd)
@@ -401,16 +407,86 @@ func (d *Dispatcher) snapshotCreate(ctx context.Context, raw json.RawMessage) (a
 	if !validSnapshot(target) {
 		return nil, fmt.Errorf("invalid snapshot")
 	}
+	for property, value := range p.Properties {
+		if (property != "floatlab:operation-id" && property != "floatlab:purpose" && property != store.TransferTargetsProperty && property != "floatlab:transfer-generations") || value == "" || strings.ContainsAny(value, "\x00\r\n") {
+			return nil, fmt.Errorf("invalid snapshot metadata")
+		}
+		if property == store.TransferTargetsProperty {
+			var nodes []string
+			if err := json.Unmarshal([]byte(value), &nodes); err != nil {
+				return nil, fmt.Errorf("invalid snapshot transfer targets")
+			}
+			for _, node := range nodes {
+				if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`).MatchString(node) {
+					return nil, fmt.Errorf("invalid snapshot transfer target")
+				}
+			}
+		}
+	}
+	unlock, err := store.LockSnapshotMutation(p.Dataset)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if err = store.FilterSnapshotTargets(ctx, p.Dataset, p.Properties); err != nil {
+		return nil, err
+	}
 	if _, err := runShell(ctx, "zfs", "list", "-H", "-o", "name", "-t", "snapshot", target); err == nil {
-		return map[string]string{"snapshot": target}, nil
+		if operation := p.Properties["floatlab:operation-id"]; operation != "" {
+			owner, e := runShell(ctx, "zfs", "get", "-H", "-o", "value", "floatlab:operation-id", target)
+			if e != nil || strings.TrimSpace(owner) != operation {
+				return nil, fmt.Errorf("snapshot name collision: %s", target)
+			}
+		}
+		return map[string]string{"snapshot": target}, snapshotTransferHolds(ctx, target, p)
 	}
 	args := []string{"snapshot"}
 	if p.Recursive {
 		args = append(args, "-r")
 	}
+	for property, value := range p.Properties {
+		args = append(args, "-o", property+"="+value)
+	}
 	args = append(args, target)
-	_, err := runShell(ctx, "zfs", args...)
+	_, err = runShell(ctx, "zfs", args...)
+	if err == nil {
+		err = snapshotTransferHolds(ctx, target, p)
+	}
 	return map[string]string{"snapshot": target}, err
+}
+
+func snapshotTransferHolds(ctx context.Context, target string, p ipc.SnapshotCreatePayload) error {
+	var nodes []string
+	if raw := p.Properties[store.TransferTargetsProperty]; raw != "" {
+		if err := json.Unmarshal([]byte(raw), &nodes); err != nil {
+			return err
+		}
+	}
+	if len(nodes) == 0 {
+		return nil
+	}
+	targets := []string{target}
+	if p.Recursive {
+		out, err := runShell(ctx, "zfs", "list", "-H", "-t", "snapshot", "-o", "name", "-r", p.Dataset)
+		if err != nil {
+			return err
+		}
+		targets = nil
+		for _, s := range strings.Fields(out) {
+			if strings.HasSuffix(s, "@"+p.Name) {
+				targets = append(targets, s)
+			}
+		}
+	}
+	for _, snapshot := range targets {
+		parts := strings.SplitN(snapshot, "@", 2)
+		for _, node := range nodes {
+			if err := store.UpdateSnapshotProtection(ctx, parts[0], parts[1], node, "transfer", true); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (d *Dispatcher) snapshotDestroy(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -422,6 +498,11 @@ func (d *Dispatcher) snapshotDestroy(ctx context.Context, raw json.RawMessage) (
 	if !validSnapshot(target) {
 		return nil, fmt.Errorf("invalid snapshot")
 	}
+	unlock, lockErr := store.LockSnapshotMutation(p.Dataset)
+	if lockErr != nil {
+		return nil, lockErr
+	}
+	defer unlock()
 	if _, err := runShell(ctx, "zfs", "list", "-H", "-o", "name", "-t", "snapshot", target); err != nil {
 		return map[string]string{"snapshot": target}, nil
 	}
@@ -434,9 +515,10 @@ func (d *Dispatcher) replSend(ctx context.Context, raw json.RawMessage) (any, er
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, err
 	}
-	// Sprint 2: full implementation with zfs send | ssh zfs recv pipeline.
-	d.log.Info("repl.send stub", zap.String("job", p.JobID))
-	return map[string]string{"job_id": p.JobID, "status": "queued"}, nil
+	if p.Snapshot == "" {
+		return nil, fmt.Errorf("replication requires an existing scheduled snapshot")
+	}
+	return store.Replicate(ctx, store.ReplicationRequest{Generation: p.Generation, Dataset: p.Dataset, Snapshot: p.Snapshot, SourceNodeID: p.SourceNodeID, DestNodeID: p.DestNodeID, DestDataset: p.DestDataset, DestHost: p.DestHost, DestPort: p.DestPort, Policy: p.Policy, JobID: p.JobID})
 }
 
 func (d *Dispatcher) replRecv(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -444,8 +526,7 @@ func (d *Dispatcher) replRecv(ctx context.Context, raw json.RawMessage) (any, er
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, err
 	}
-	d.log.Info("repl.recv stub", zap.String("job", p.JobID))
-	return map[string]string{"job_id": p.JobID, "status": "receiving"}, nil
+	return nil, fmt.Errorf("replication receive requires the restricted SSH stream receiver")
 }
 
 func (d *Dispatcher) replStatus(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -453,7 +534,27 @@ func (d *Dispatcher) replStatus(ctx context.Context, raw json.RawMessage) (any, 
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, err
 	}
-	return map[string]string{"job_id": p.JobID, "status": "idle"}, nil
+	return nil, fmt.Errorf("replication status is recorded by the durable task worker")
+}
+
+func (d *Dispatcher) replCleanup(ctx context.Context, raw json.RawMessage) (any, error) {
+	var p ipc.ReplCleanupPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, err
+	}
+	if p.TargetNodeID == "" {
+		p.TargetNodeID = p.DestNodeID
+	}
+	err := store.CleanupBackupGeneration(ctx, p.Dataset, p.TargetNodeID, p.LocalPolicy, p.Generation)
+	return map[string]bool{"cleaned": err == nil}, err
+}
+func (d *Dispatcher) snapshotPrune(ctx context.Context, raw json.RawMessage) (any, error) {
+	var p ipc.SnapshotPrunePayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, err
+	}
+	err := store.PruneSnapshots(ctx, p.Dataset, p.Policy)
+	return map[string]bool{"pruned": err == nil}, err
 }
 
 func (d *Dispatcher) netAddrAdd(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -727,11 +828,16 @@ func (d *Dispatcher) snapshotList(ctx context.Context, raw json.RawMessage) (any
 	result := ipc.SnapshotListResult{Snapshots: make([]ipc.SnapshotInfoResult, 0, len(snaps))}
 	for _, s := range snaps {
 		result.Snapshots = append(result.Snapshots, ipc.SnapshotInfoResult{
-			CreateTXG: s.CreateTXG,
-			Name:      s.Name,
-			Dataset:   s.Dataset,
-			Used:      s.Used,
-			CreatedAt: s.CreatedAt,
+			HoldTargets:     s.HoldTargets,
+			TransferTargets: s.TransferTargets,
+			Holds:           s.Holds,
+			Purpose:         s.Purpose,
+			OperationID:     s.OperationID,
+			CreateTXG:       s.CreateTXG,
+			Name:            s.Name,
+			Dataset:         s.Dataset,
+			Used:            s.Used,
+			CreatedAt:       s.CreatedAt,
 		})
 	}
 	return result, nil

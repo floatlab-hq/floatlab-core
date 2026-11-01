@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -41,14 +42,24 @@ type DatasetInfo struct {
 }
 
 type SnapshotInfo struct {
-	CreateTXG int64
-	Name      string
-	Dataset   string
-	Used      int64
-	CreatedAt string
+	Purpose         string   `json:"purpose,omitempty"`
+	OperationID     string   `json:"operation_id,omitempty"`
+	HoldTargets     []string `json:"hold_targets,omitempty"`
+	TransferTargets []string `json:"transfer_targets,omitempty"`
+	Holds           []string `json:"holds,omitempty"`
+	CreateTXG       int64
+	Name            string
+	Dataset         string
+	Used            int64
+	CreatedAt       string
 }
 
 type SendParams struct {
+	Generation   int64
+	SourceNodeID string
+	DestNodeID   string
+	DestDataset  string
+	Policy       string
 	Dataset      string
 	Snapshot     string
 	BaseSnapshot string // empty = full send
@@ -187,17 +198,46 @@ func (s *zfsStore) SnapshotList(ctx context.Context, dataset string) ([]Snapshot
 		if len(nameparts) == 2 {
 			snap.Name = nameparts[1]
 		}
+		if IsAutomatedSnapshot(snap.Name) {
+			for property, dest := range map[string]*string{"floatlab:purpose": &snap.Purpose, "floatlab:operation-id": &snap.OperationID} {
+				value, e := run(ctx, "zfs", "get", "-H", "-o", "value", property, parts[0])
+				if e != nil {
+					return nil, e
+				}
+				if value != "-" {
+					*dest = value
+				}
+			}
+			for property, dest := range map[string]*[]string{HoldTargetsProperty: &snap.HoldTargets, TransferTargetsProperty: &snap.TransferTargets} {
+				value, e := run(ctx, "zfs", "get", "-H", "-o", "value", property, parts[0])
+				if e != nil {
+					return nil, e
+				}
+				if value != "-" && value != "" {
+					if e = json.Unmarshal([]byte(value), dest); e != nil {
+						return nil, fmt.Errorf("invalid snapshot protection metadata on %s: %w", parts[0], e)
+					}
+				}
+			}
+			holds, e := snapshotHolds(ctx, parts[0])
+			if e != nil {
+				return nil, e
+			}
+			for tag := range holds {
+				snap.Holds = append(snap.Holds, tag)
+			}
+		}
 		result = append(result, snap)
 	}
 	return result, nil
 }
 
-// SendIncremental initiates a zfs send | ssh zfs recv pipeline.
-// The actual send is handled by the hostd via IPC; this method is a stub
-// used by the control plane to construct the IPC payload.
+// SendIncremental verifies a resumable transfer through the restricted lab SSH receiver.
 func (s *zfsStore) SendIncremental(ctx context.Context, p SendParams) (*SendJob, error) {
-	// Real implementation: exec zfs send -i base@snap dataset@snap | ssh dest zfs recv dataset
-	// For Sprint 1: return job placeholder; full implementation in Sprint 2.
+	_, err := Replicate(ctx, ReplicationRequest{Generation: p.Generation, Dataset: p.Dataset, Snapshot: p.Snapshot, SourceNodeID: p.SourceNodeID, DestNodeID: p.DestNodeID, DestDataset: p.DestDataset, DestHost: p.DestHost, DestPort: p.DestPort, Policy: p.Policy, JobID: p.JobID})
+	if err != nil {
+		return nil, err
+	}
 	return &SendJob{JobID: p.JobID}, nil
 }
 

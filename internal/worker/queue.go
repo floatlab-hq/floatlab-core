@@ -34,14 +34,15 @@ type Handler func(ctx context.Context, payload json.RawMessage) error
 
 // Worker polls the rqlite tasks table and dispatches tasks via IPC to hostd.
 type Worker struct {
-	db       *rqlite.Client
-	store    *config.Store
-	pool     *hostclient.Pool
-	workerID string
-	handlers map[string]Handler
-	log      *zap.Logger
-	raft     *raftpkg.Node
-	ops      *operation.Store
+	db                   *rqlite.Client
+	store                *config.Store
+	pool                 *hostclient.Pool
+	workerID             string
+	handlers             map[string]Handler
+	log                  *zap.Logger
+	raft                 *raftpkg.Node
+	ops                  *operation.Store
+	prepareBackupRestore func(context.Context, ipc.BackupRestorePreparePayload) (ipc.BackupRestorePrepareResult, error)
 }
 
 func New(db *rqlite.Client, cfgStore *config.Store, pool *hostclient.Pool, raft *raftpkg.Node, log *zap.Logger) *Worker {
@@ -61,6 +62,7 @@ func New(db *rqlite.Client, cfgStore *config.Store, pool *hostclient.Pool, raft 
 }
 
 func (w *Worker) registerHandlers() {
+	w.handlers[TaskBackupRestore] = w.handleBackupRestore
 	w.handlers[TaskSnapshotCreate] = w.handleSnapshotCreate
 	w.handlers[TaskSnapshotDelete] = w.handleSnapshotDelete
 	w.handlers[TaskReplTrigger] = w.handleReplTrigger
@@ -76,6 +78,7 @@ func (w *Worker) Run(ctx context.Context) error {
 	if err := w.db.Execute(ctx, []rqlite.Statement{{SQL: `UPDATE tasks SET state='pending', locked_by=NULL WHERE state='running'`}}); err != nil {
 		return fmt.Errorf("worker: recover running tasks: %w", err)
 	}
+	go w.runBackupCleanup(ctx)
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	for {
@@ -114,7 +117,10 @@ func (w *Worker) handleStackUpgrade(ctx context.Context, raw json.RawMessage) er
 	if err != nil {
 		return err
 	}
-	snapshot := "pre-upgrade-" + p.OperationID
+	snapshot, err := store.AutomatedSnapshotName(op.CreatedAt)
+	if err != nil {
+		return err
+	}
 	snapshotCreated := false
 	fail := func(cause error) error {
 		_ = w.applyStackEvent(p.StackID, p.NodeID, run.EventUpdateFailed)
@@ -156,7 +162,7 @@ func (w *Worker) handleStackUpgrade(ctx context.Context, raw json.RawMessage) er
 		return fail(err)
 	}
 	_ = w.ops.Update(ctx, p.OperationID, "running", "snapshotting", "")
-	if _, err := w.pool.Execute(ctx, p.NodeID, "fs.snapshot.create", ipc.SnapshotCreatePayload{Dataset: p.DatasetPath, Name: snapshot, Recursive: true}); err != nil {
+	if _, err := w.pool.Execute(ctx, p.NodeID, "fs.snapshot.create", ipc.SnapshotCreatePayload{Dataset: p.DatasetPath, Name: snapshot, Recursive: true, Properties: map[string]string{"floatlab:operation-id": p.OperationID, "floatlab:purpose": "upgrade"}}); err != nil {
 		return fail(err)
 	}
 	snapshotCreated = true
@@ -266,8 +272,16 @@ func (w *Worker) handleStackRestore(ctx context.Context, raw json.RawMessage) er
 			return err
 		}
 	}
+	op, err := w.ops.Get(ctx, p.OperationID)
+	if err != nil {
+		return err
+	}
+	restoreSnapshot, err := store.AutomatedSnapshotName(op.CreatedAt)
+	if err != nil {
+		return err
+	}
 	_ = w.ops.Update(ctx, p.OperationID, "running", "preserving-current", "")
-	if _, err := w.pool.Execute(ctx, p.NodeID, "fs.snapshot.create", ipc.SnapshotCreatePayload{Dataset: p.DatasetPath, Name: "pre-restore-" + p.OperationID, Recursive: true}); err != nil {
+	if _, err := w.pool.Execute(ctx, p.NodeID, "fs.snapshot.create", ipc.SnapshotCreatePayload{Dataset: p.DatasetPath, Name: restoreSnapshot, Recursive: true, Properties: map[string]string{"floatlab:operation-id": p.OperationID, "floatlab:purpose": "restore"}}); err != nil {
 		return err
 	}
 	_ = w.ops.Update(ctx, p.OperationID, "running", "activating-snapshot", "")
@@ -277,7 +291,7 @@ func (w *Worker) handleStackRestore(ctx context.Context, raw json.RawMessage) er
 	if err := w.store.UpdateStackCompose(ctx, p.StackID, p.SourceCompose); err != nil {
 		return err
 	}
-	_ = w.db.Execute(ctx, []rqlite.Statement{{SQL: `INSERT OR IGNORE INTO recovery_points(id,stack_id,snapshot_id,dataset_path,compose_yaml,created_at) VALUES(?,?,?,?,?,?)`, Params: []interface{}{uuid.NewString(), p.StackID, "pre-restore-" + p.OperationID, p.DatasetPath + "-recovery-" + p.OperationID, currentCompose, time.Now().UTC()}}})
+	_ = w.db.Execute(ctx, []rqlite.Statement{{SQL: `INSERT OR IGNORE INTO recovery_points(id,stack_id,snapshot_id,dataset_path,compose_yaml,created_at) VALUES(?,?,?,?,?,?)`, Params: []interface{}{uuid.NewString(), p.StackID, restoreSnapshot, p.DatasetPath + "-recovery-" + p.OperationID, currentCompose, time.Now().UTC()}}})
 	if _, err := w.pool.Execute(ctx, p.NodeID, "compose.source.write", ipc.ComposeSourcePayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: p.SourceCompose}); err != nil {
 		return err
 	}
@@ -509,6 +523,12 @@ func (w *Worker) poll(ctx context.Context) error {
 		)
 		if int(attempts)+1 >= maxAttempts {
 			_ = w.db.Execute(ctx, []rqlite.Statement{{SQL: `UPDATE tasks SET state='failed',attempts=attempts+1,error=?,updated_at=datetime('now'),locked_by=NULL WHERE id=?`, Params: []interface{}{execErr.Error(), taskID}}})
+			if taskType == TaskBackupRestore {
+				var restore BackupRestorePayload
+				if json.Unmarshal([]byte(payloadStr), &restore) == nil && w.raft != nil {
+					_ = w.raft.Apply(run.StackStateChanged{StackID: restore.StackID, From: run.StateRestoring, To: run.StateFailed, Event: run.EventRestoreFailed, Timestamp: time.Now().UTC(), NodeID: restore.DestinationNodeID}, 10*time.Second)
+				}
+			}
 			var payload map[string]interface{}
 			if json.Unmarshal([]byte(payloadStr), &payload) == nil {
 				if operationID, ok := payload["operation_id"].(string); ok {
@@ -524,7 +544,7 @@ func (w *Worker) poll(ctx context.Context) error {
 	}
 
 	return w.db.Execute(ctx, []rqlite.Statement{{
-		SQL:    `UPDATE tasks SET state = 'done', updated_at = datetime('now'), locked_by = NULL WHERE id = ?`,
+		SQL:    `UPDATE tasks SET state = 'done', error='', updated_at = datetime('now'), locked_by = NULL WHERE id = ?`,
 		Params: []interface{}{taskID},
 	}})
 }
@@ -549,21 +569,31 @@ func (w *Worker) handleSnapshotCreate(ctx context.Context, raw json.RawMessage) 
 	} else if p.SnapType == "user" {
 		name = store.UserSnapshotName(p.Label)
 	} else {
-		name = store.ScheduledSnapshotName(p.SnapType)
+		var err error
+		name, err = store.AutomatedSnapshotName(time.Now().UTC())
+		if err != nil {
+			return err
+		}
 	}
+	properties := map[string]string{"floatlab:operation-id": p.OperationID, "floatlab:purpose": p.SnapType}
 	if _, err := w.pool.Execute(ctx, p.NodeID, "fs.snapshot.create", ipc.SnapshotCreatePayload{
-		Dataset:   p.Dataset,
-		Name:      name,
-		Recursive: p.Recursive,
+		Dataset:    p.Dataset,
+		Name:       name,
+		Recursive:  p.Recursive,
+		Properties: properties,
 	}); err != nil {
 		return fmt.Errorf("snapshot.create %s: %w", p.Dataset, err)
 	}
-	if p.Keep > 0 {
+	if p.Policy != "" || p.SnapType == "scheduled" || p.SnapType == "replication" {
+		if _, err := w.pool.Execute(ctx, p.NodeID, "fs.snapshot.prune", map[string]string{"dataset": p.Dataset, "policy": p.Policy}); err != nil {
+			return err
+		}
+	} else if p.Keep > 0 {
 		if err := w.applyRetentionViaIPC(ctx, p.NodeID, p.Dataset, p.SnapType, p.Keep); err != nil {
 			w.log.Warn("worker: retention cleanup failed", zap.String("dataset", p.Dataset), zap.Error(err))
 		}
 	}
-	if p.OperationID != "" {
+	if p.OperationID != "" && p.SnapType == "user" {
 		_ = operation.RecordEvent(ctx, w.db, operation.Event{StackID: p.StackID, Type: "Snapshot", Outcome: "succeeded", OperationID: p.OperationID, Actor: p.Actor})
 		return w.ops.Update(ctx, p.OperationID, "succeeded", "succeeded", "")
 	}
@@ -593,13 +623,70 @@ func (w *Worker) handleReplTrigger(ctx context.Context, raw json.RawMessage) err
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return fmt.Errorf("repl.trigger: parse: %w", err)
 	}
-	jobID := fmt.Sprintf("repl-%s-%d", p.StackID, time.Now().UnixMilli())
-	_, err := w.pool.Execute(ctx, p.NodeID, "fs.repl.send", ipc.ReplSendPayload{
-		Dataset:  p.Dataset,
-		DestHost: p.DestHost,
-		DestPort: p.DestPort,
-		JobID:    jobID,
+	if p.DestNodeID != "" {
+		active, err := w.backupActive(ctx, p)
+		if err != nil {
+			return err
+		}
+		if !active {
+			return nil
+		}
+	}
+	if p.SnapshotTaskID != "" {
+		rows, err := w.db.Query(ctx, rqlite.Statement{SQL: `SELECT state FROM tasks WHERE id=? AND type=?`, Params: []interface{}{p.SnapshotTaskID, TaskSnapshotCreate}})
+		if err != nil {
+			return err
+		}
+		if len(rows.Values) != 1 || rows.Values[0][0] != "done" {
+			return fmt.Errorf("repl.trigger: snapshot creation %s has not succeeded", p.SnapshotTaskID)
+		}
+	}
+	jobID := fmt.Sprintf("repl-%s-%s-%s", p.StackID, p.DestNodeID, p.Snapshot)
+	result, err := w.pool.Execute(ctx, p.NodeID, "fs.repl.send", ipc.ReplSendPayload{
+		Dataset: p.Dataset, DestHost: p.DestHost, DestPort: p.DestPort, JobID: jobID,
+		Generation: p.Generation, DestNodeID: p.DestNodeID, SourceNodeID: p.NodeID, DestDataset: p.DestDataset, Snapshot: p.Snapshot, Policy: p.Policy,
 	})
+	if p.DestNodeID != "" {
+		active, checkErr := w.backupActive(ctx, p)
+		if checkErr != nil {
+			return checkErr
+		}
+		if !active {
+			return w.cleanupBackups(ctx)
+		}
+	}
+	if err == nil {
+		targets, listErr := w.store.BackupTargets(ctx, p.StackID)
+		if listErr != nil {
+			return listErr
+		}
+		for _, target := range targets {
+			if target.Enabled && target.Dataset == p.Dataset && target.NodeID == p.DestNodeID {
+				_, pruneErr := w.pool.Execute(ctx, p.NodeID, "fs.snapshot.prune", map[string]string{"dataset": p.Dataset, "policy": target.LocalPolicy})
+				if alertErr := w.backupOutcome(ctx, p, "source_pruning", pruneErr); alertErr != nil {
+					return alertErr
+				}
+			}
+		}
+	}
+	if err == nil {
+		var resultBody struct {
+			PruneError string `json:"prune_error"`
+		}
+		if parseErr := json.Unmarshal(result, &resultBody); parseErr != nil {
+			return parseErr
+		}
+		var pruneErr error
+		if resultBody.PruneError != "" {
+			pruneErr = fmt.Errorf("%s", resultBody.PruneError)
+		}
+		if alertErr := w.backupOutcome(ctx, p, "backup_pruning", pruneErr); alertErr != nil {
+			return alertErr
+		}
+	}
+	if alertErr := w.replicationOutcome(ctx, p, err); alertErr != nil {
+		return alertErr
+	}
 	return err
 }
 
@@ -640,7 +727,7 @@ func (w *Worker) applyRetentionViaIPC(ctx context.Context, nodeID, dataset, snap
 func EnqueueTask(ctx context.Context, db *rqlite.Client, id, taskType, stackID string, payload interface{}) error {
 	p := marshalPayload(payload)
 	return db.Execute(ctx, []rqlite.Statement{{
-		SQL: `INSERT INTO tasks (id, type, stack_id, payload, state, attempts, created_at, updated_at)
+		SQL: `INSERT OR IGNORE INTO tasks (id, type, stack_id, payload, state, attempts, created_at, updated_at)
 		      VALUES (?, ?, ?, ?, 'pending', 0, datetime('now'), datetime('now'))`,
 		Params: []interface{}{id, taskType, stackID, p},
 	}})

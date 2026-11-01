@@ -68,4 +68,4 @@ export MEMORY_MB="${MEMORY_MB:-4096}"
 report_dir="${FLOATLAB_REPORT_DIR:-/tmp/floatlab-multi-node-reports}"
 mkdir -p "$report_dir"
 FLOATLAB_MULTI_NODE_INTEGRATION=1 go test -count=1 -timeout 150m \
-  -run '^TestMultiNodeLab$' -v ./integration 2>&1 | tee "$report_dir/multi-node.log"
+  -run "${FLOATLAB_MULTI_NODE_TEST_PATTERN:-^TestMultiNode(Lab|Replication|BackupRestore)$}" -v ./integration 2>&1 | tee "$report_dir/multi-node.log"

@@ -1604,7 +1604,7 @@ export interface paths {
         /**
          * Delete a snapshot
          * @description Queues an IPC task to destroy the snapshot on the host.
-         *     Replication snapshots (fsrepl-*) cannot be deleted while a replication job is running.
+         *     Snapshots protected by recovery-point or transfer holds cannot be deleted.
          */
         delete: operations["deleteSnapshot"];
         options?: never;
@@ -1654,6 +1654,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/storage/backups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List received snapshots without contacting the original source */
+        get: operations["listBackupSnapshots"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storage/backups/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the latest locally cached stack configuration for recovery */
+        get: operations["getBackupConfig"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storage/backups/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore received backups into a new stack and start it
+         * @description Requires every writable mount. Clones locally or resumes a verified transfer to operation-owned remote staging. Retains backups and never overwrites an existing destination. File-backed project assets not included in backups are rejected. Old failover and backup assignments are removed from the restored stack.
+         */
+        post: operations["restoreBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/storage/replication/{stack_id}/trigger": {
         parameters: {
             query?: never;
@@ -1668,6 +1722,33 @@ export interface paths {
         /** Trigger an ad-hoc replication run for a stack */
         post: operations["triggerReplication"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storage/replication/{stack_id}/targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                stack_id: string;
+            };
+            cookie?: never;
+        };
+        /** List backup targets and pending source cleanup */
+        get: operations["listBackupTargets"];
+        /**
+         * Configure a backup destination for a managed workload mount
+         * @description Configured destination datasets are dedicated replicas; conflicting destination-only changes can be rolled back.
+         */
+        put: operations["putBackupTarget"];
+        post?: never;
+        /**
+         * Disable a target, release its source holds and rerun source pruning
+         * @description Retains received backup data; unreachable source cleanup remains pending until reconnection.
+         */
+        delete: operations["deleteBackupTarget"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2747,7 +2828,7 @@ export interface components {
         Snapshot: {
             /**
              * @description Snapshot name component (without dataset prefix).
-             * @example flsnap-20240101-120000-hourly
+             * @example fl-0J8F40
              */
             name: string;
             /**
@@ -2767,10 +2848,20 @@ export interface components {
             /** Format: int64 */
             referenced_bytes?: number;
             /**
-             * @description Derived from snapshot name prefix.
+             * @description Snapshot purpose; canonical automated names share the fl- prefix.
              * @enum {string}
              */
             kind?: "user" | "scheduled" | "replication";
+            /** @description Stable node IDs whose last verified recovery point requires this source snapshot. */
+            hold_targets?: string[];
+            /** @description Actual ZFS hold tags, including holds owned by other subsystems. */
+            holds?: string[];
+            /** @description Value of floatlab:purpose snapshot metadata. */
+            purpose?: string;
+            /** @description Value of floatlab:operation-id snapshot metadata. */
+            operation_id?: string;
+            /** @description Stable node IDs requiring this source snapshot for an active or resumable stream. */
+            transfer_targets?: string[];
             /** Format: date-time */
             created_at: string;
         };
@@ -2798,6 +2889,7 @@ export interface components {
             source_node_id: string;
             /** Format: uuid */
             dest_node_id: string;
+            dataset?: string;
             state: components["schemas"]["ReplicationState"];
             /** @description Snapshot used as the incremental base. Null for initial seed. */
             base_snapshot?: string | null;
@@ -2812,6 +2904,59 @@ export interface components {
             completed_at?: string | null;
             /** Format: date-time */
             created_at: string;
+        };
+        BackupSnapshot: {
+            name: string;
+            dataset: string;
+            /** Format: int64 */
+            used: number;
+            created_at: string;
+            /** Format: int64 */
+            create_txg?: number;
+            hold_targets?: string[];
+            transfer_targets?: string[];
+            holds?: string[];
+            purpose?: string;
+            operation_id?: string;
+        };
+        BackupRestoreRequest: {
+            /** @description New stack name; existing datasets are never replaced. */
+            name: string;
+            /** @description Original source identity recorded in the backup namespace. */
+            source_node_id: string;
+            backup_node_id: string;
+            destination_node_id: string;
+            /** @description Original Compose configuration with its original name; cached configuration may be edited before restoring. */
+            compose_file: string;
+            snapshots: {
+                /** @description Original managed workload dataset. */
+                dataset: string;
+                snapshot: string;
+            }[];
+        };
+        BackupTarget: {
+            stack_id: string;
+            dataset: string;
+            node_id: string;
+            source_node_id: string;
+            /** @description Destination retention and replication policy in UTC, for example h/24 d/28. */
+            schedule: string;
+            /** @description Source retention policy, independent from destination retention. */
+            local_policy: string;
+            enabled: boolean;
+            cleanup_pending: boolean;
+            /**
+             * Format: int64
+             * @description Monotonic revision fencing queued transfers and source hold cleanup.
+             */
+            generation: number;
+            error?: string;
+        };
+        BackupTargetInput: {
+            dataset: string;
+            node_id: string;
+            /** @example h/24 d/28 */
+            schedule: string;
         };
         ZfsFault: {
             /** Format: uuid */
@@ -6191,9 +6336,124 @@ export interface operations {
             };
         };
     };
-    triggerReplication: {
+    listBackupSnapshots: {
+        parameters: {
+            query: {
+                node_id: string;
+                source_node_id: string;
+                dataset: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Received snapshots for the original workload dataset. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupSnapshot"][];
+                };
+            };
+            /** @description Invalid source or unavailable backup. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getBackupConfig: {
+        parameters: {
+            query: {
+                stack_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Latest configuration replica; not necessarily the configuration at the selected snapshot time. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/yaml": string;
+                };
+            };
+            /** @description No configuration replica; supply Compose configuration explicitly. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    restoreBackup: {
         parameters: {
             query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackupRestoreRequest"];
+            };
+        };
+        responses: {
+            /** @description Restore queued on the destination; poll the operation until startup completes. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        operation_id: string;
+                        stack_id: string;
+                        /** @enum {string} */
+                        status: "pending";
+                    };
+                };
+            };
+            /** @description Invalid Compose or incomplete snapshot selection. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Destination name or datasets already exist. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Backup or destination host is unavailable. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    triggerReplication: {
+        parameters: {
+            query?: {
+                /** @description Restrict the run to this configured destination node. */
+                dest_node_id?: string;
+                /** @description Restrict the run to this configured source dataset. */
+                dataset?: string;
+            };
             header?: never;
             path: {
                 stack_id: string;
@@ -6208,7 +6468,14 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ReplicationJob"];
+                    "application/json": {
+                        state: string;
+                        task_id?: string;
+                        task_ids: string[];
+                        stack_id?: string;
+                        /** Format: date-time */
+                        started_at?: string;
+                    };
                 };
             };
             /** @description A replication job is already running for this stack. */
@@ -6218,6 +6485,93 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listBackupTargets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                stack_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Configured and disabled targets with cleanup status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupTarget"][];
+                };
+            };
+        };
+    };
+    putBackupTarget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                stack_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackupTargetInput"];
+            };
+        };
+        responses: {
+            /** @description Saved target. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupTarget"];
+                };
+            };
+            /** @description Invalid dataset, destination node or policy. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    deleteBackupTarget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                stack_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    dataset: string;
+                    node_id: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Target disabled and durable cleanup queued. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        state: "cleanup_pending";
+                    };
                 };
             };
         };

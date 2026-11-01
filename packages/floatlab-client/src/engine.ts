@@ -1,5 +1,6 @@
 import { ApiError } from "./api";
-import type { CommandResult, CommandRuntime, Completion, Container, FloatLabApi, Node, Stack, UpdateApi, UpdateAction, UpdateComponent, LabApi, LabJoinRequest } from "./types";
+import { backupRestoreDatasets } from "./backups";
+import type { CommandResult, CommandRuntime, Completion, Container, FloatLabApi, Node, Stack, UpdateApi, UpdateAction, UpdateComponent, LabApi, LabJoinRequest, BackupApi, BackupRestoreApi } from "./types";
 
 export class CommandError extends Error { constructor(message: string, readonly code = 2) { super(message); } }
 
@@ -21,6 +22,7 @@ export function tokenize(input: string): string[] {
 
 type Parsed = { name: string; positionals: string[]; flags: Record<string, string | boolean> };
 const commands = [
+  ["backup", [], "backup list|history <stack> | backup set <stack> <dataset> <node> <policy> | backup remove|run <stack> <dataset> <node> | backup restore <stack> <new-name> <backup-node> <destination-node> <snapshot> [--source node] [--file compose.yml]"],
   ["lab", [], "lab status|members|invite|join <request-json>|preview <node>|remove <node> <operation>|rotate <operation>|release-peer-address <node> <operation> --confirm-fenced --confirm-reset"],
   ["create", ["new", "add", "mk", "make"], "create <name> [--file path | --primary node] [--secondary node] [--start]"],
   ["config", [], "config <stack>"],
@@ -35,7 +37,7 @@ const commands = [
   ["update", [], "update management|host releases|status|start|prepare|activate|commit|rollback|cleanup <node> [release|operation]"],
 ] as const;
 const aliases = new Map<string, string>(commands.flatMap(([name, names]) => [name, ...names].map((alias) => [alias, name])));
-const flagValues = new Set(["primary", "secondary", "search", "since", "limit", "file", "range"]);
+const flagValues = new Set(["primary", "secondary", "search", "since", "limit", "file", "range", "source"]);
 
 function parse(input: string | string[]): Parsed {
   const words = typeof input === "string" ? tokenize(input) : input;
@@ -54,7 +56,7 @@ function parse(input: string | string[]): Parsed {
     const equal = word.indexOf("=");
     const key = word.slice(2, equal < 0 ? undefined : equal);
     const inline = equal < 0 ? undefined : word.slice(equal + 1);
-    if (!key || !["primary", "secondary", "start", "purge", "search", "since", "limit", "containers", "file", "range", "confirm-fenced", "confirm-reset"].includes(key)) throw new CommandError(`Unknown flag: ${word}`);
+    if (!key || !["primary", "secondary", "start", "purge", "search", "since", "limit", "containers", "file", "range", "source", "confirm-fenced", "confirm-reset"].includes(key)) throw new CommandError(`Unknown flag: ${word}`);
     if (flagValues.has(key)) {
       const value = inline ?? words[++index]; if (!value || value.startsWith("--")) throw new CommandError(`--${key} needs a value`);
       flags[key] = value;
@@ -75,7 +77,7 @@ const text = (value: unknown) => typeof value === "string" ? value : JSON.string
 export class CommandEngine {
   private stacks?: { at: number; value: Stack[] };
   private nodes?: { at: number; value: Node[] };
-  constructor(readonly api: FloatLabApi & Partial<UpdateApi & LabApi>, readonly runtime: CommandRuntime, private readonly ttlMs = 10_000) {}
+  constructor(readonly api: FloatLabApi & Partial<UpdateApi & LabApi & BackupApi & BackupRestoreApi>, readonly runtime: CommandRuntime, private readonly ttlMs = 10_000) {}
 
   async dispatch(input: string | string[]): Promise<{ code: number; result: CommandResult }> {
     try {
@@ -147,6 +149,7 @@ export class CommandEngine {
     if (parsed.name === "help") return { kind: "text", text: commands.map(([, aliases, help]) => `${help}${aliases.length ? ` (${aliases.join(", ")})` : ""}`).join("\n") + "\nhelp, exit, quit" };
     const { name, positionals: args, flags } = parsed;
     if (name === "lab") return this.lab(args, flags);
+ if(name === "backup") return args[0] === "restore" ? this.restoreBackup(args.slice(1), flags) : this.backup(args);
     if (name === "config") {
       if (args.length !== 1) throw new CommandError("Usage: config <stack>");
       return { kind: "text", text: await this.api.getStackConfig((await this.stack(args[0]!)).id) };
@@ -168,6 +171,45 @@ export class CommandEngine {
     if (name === "update") return this.update(args);
     return this.snapshot(args);
   }
+
+  private async restoreBackup(args: string[], flags: Record<string, string | boolean>): Promise<CommandResult> {
+    if (args.length !== 5) throw new CommandError("Usage: backup restore <stack> <new-name> <backup-node> <destination-node> <snapshot> [--source node] [--file compose.yml]");
+    const api = this.api;
+    if (!api.listBackups || !api.restoreBackup || !api.getBackupConfig) throw new CommandError("Backup restore API unavailable");
+    const stack = await this.stack(args[0]!);
+    const backup = await this.node(args[2]!);
+    const destination = await this.node(args[3]!);
+    const source = typeof flags.source === "string" ? (await this.node(flags.source)).id : stack.primary_node;
+    let compose: string;
+    if (typeof flags.file === "string") {
+      if (!this.runtime.readCompose) throw new CommandError("--file is only available in the CLI");
+      compose = await this.runtime.readCompose(flags.file);
+    } else compose = await api.getBackupConfig(stack.id);
+    const datasets = backupRestoreDatasets(compose);
+    for (const dataset of datasets) {
+      const snapshots = await api.listBackups({node_id: backup.id, source_node_id: source, dataset});
+      if (!snapshots.some(snapshot => snapshot.name === args[4])) throw new CommandError(`Backup ${dataset}@${args[4]} is unavailable`);
+    }
+    if (!await this.confirm(`Restore and start ${args[1]} on ${destination.name} from ${backup.name}?`)) return {kind: "text", text: "Restore cancelled."};
+    const result = await api.restoreBackup({name: args[1]!, source_node_id: source, backup_node_id: backup.id, destination_node_id: destination.id, compose_file: compose, snapshots: datasets.map(dataset => ({dataset, snapshot: args[4]!}))}, idempotencyKey());
+    this.changed();
+    return {kind: "operation", action: "backup restore", state: result.state ?? "accepted", operationId: result.operation_id, text: text(result)};
+  }
+
+  private async backup(args: string[]): Promise<CommandResult> {
+ const [action, stackName, dataset, nodeName, policy] = args;
+ const api=this.api;
+ if(!api.listBackupTargets || !api.putBackupTarget || !api.removeBackupTarget || !api.triggerReplication || !api.listReplication) throw new CommandError("Backup API unavailable");
+ if(!stackName || !["list","history","set","remove","run"].includes(action ?? "")) throw new CommandError("Usage: backup list|history|set|remove|run <stack> [dataset node policy]");
+ const stack=await this.stack(stackName);
+ if(action === "list" || action === "history") return {kind:"text", text: text(action === "list" ? await api.listBackupTargets(stack.id) : await api.listReplication(stack.id))};
+ if(!dataset || !nodeName || (action === "set" && !policy)) throw new CommandError("Dataset, node and policy (for set) required");
+ const node=await this.node(nodeName);
+ if(action === "set") await api.putBackupTarget(stack.id,{dataset,node_id:node.id,schedule:policy!},idempotencyKey());
+ else if(action === "remove") await api.removeBackupTarget(stack.id,{dataset,node_id:node.id},idempotencyKey());
+ else await api.triggerReplication(stack.id,node.id,dataset,idempotencyKey());
+ return {kind:"text",text: action === "remove" ? "Backup target disabled; source hold cleanup and pruning queued." : "Backup request accepted."};
+ }
 
   private async lab(args: string[], flags: Record<string, string | boolean>): Promise<CommandResult> {
     const [action, target, operation] = args;
@@ -341,8 +383,11 @@ export class CommandEngine {
     if (args.length !== 2 || !["create", "list"].includes(args[0]!)) throw new CommandError("Usage: snapshot create|list <stack>"); const stack = await this.stack(args[1]!);
     if (args[0] === "create") { await this.api.createSnapshot(stack.id, idempotencyKey()); return { kind: "operation", action: "snapshot", state: "accepted", text: `Snapshot requested for ${stack.name}.` }; }
     const snapshots = await this.api.listSnapshots(stack.id); const hasType = snapshots.some((snapshot) => snapshot.type);
-    const columns = ["name", "created_at", ...(hasType ? ["type"] : []), "space"];
-    return { kind: "table", columns, rows: snapshots.map((snapshot) => [text(snapshot.name ?? ""), text(snapshot.created_at ?? ""), ...(hasType ? [text(snapshot.type ?? "")] : []), text(snapshot.used ?? snapshot.space ?? "")]) };
+ const protectedSnapshots=snapshots.some(snapshot => Array.isArray(snapshot.hold_targets) && snapshot.hold_targets.length || Array.isArray(snapshot.transfer_targets) && snapshot.transfer_targets.length);
+ const nodes=protectedSnapshots ? await this.getNodes() : [];
+ const names=(value:unknown) => Array.isArray(value) ? value.map(id => nodes.find(node => node.id === id)?.name ?? String(id)).join(", ") : "";
+    const columns = ["name", "created_at", ...(hasType ? ["type"] : []), "space", ...(protectedSnapshots ? ["held for", "transferring to"] : [])];
+    return { kind: "table", columns, rows: snapshots.map((snapshot) => [text(snapshot.name ?? ""), text(snapshot.created_at ?? ""), ...(hasType ? [text(snapshot.type ?? "")] : []), text(snapshot.used ?? snapshot.space ?? ""), ...(protectedSnapshots ? [names(snapshot.hold_targets), names(snapshot.transfer_targets)] : [])]) };
   }
 
   private async update(args: string[]): Promise<CommandResult> {

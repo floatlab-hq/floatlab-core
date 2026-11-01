@@ -368,36 +368,40 @@ func waitLabRQLitePath(ctx context.Context, b lab.JoinBundle, path string) error
 	}
 }
 
+// SSH supplies commands as values; neither wrapper evaluates them as shell code.
+const labSSHWrapperScript = `#!/bin/sh
+set -eu
+case "$1" in *[!A-Za-z0-9_-]*|'') exit 126;; esac
+case "$SSH_ORIGINAL_COMMAND" in replicate|status|"zfs-backup "*|"zfs-restore "*) ;; *) exit 126;; esac
+exec sudo -n /floatlab/system/etc/lab/replica-receive-root.sh "$1" "$SSH_ORIGINAL_COMMAND"
+`
+const labSSHRootScript = `#!/bin/sh
+set -eu
+[ "$#" -eq 2 ] || exit 126
+case "$1" in *[!A-Za-z0-9_-]*|'') exit 126;; esac
+case "$2" in
+"zfs-backup "*|"zfs-restore "*) export SSH_ORIGINAL_COMMAND="$2"; exec floatlab-hostd backup-receive "$1";;
+replicate|status) ;;
+*) exit 126;;
+esac
+container="$(docker ps -q --filter label=com.docker.compose.project=floatlab-system --filter label=com.docker.compose.service=floatlab-control)"
+[ -n "$container" ] || exit 126
+exec docker exec -i -e "SSH_ORIGINAL_COMMAND=$2" "$container" floatlab-control replica-receive --source "$1"
+`
+
 func configureLabSSH(ctx context.Context, req LabSSHRequest) error {
+	const wrapper = labHostDirectory + "/replica-receive.sh"
 	if req.LabDir != labDirectory {
 		return errors.New("invalid lab identity directory")
 	}
-	const wrapper = labHostDirectory + "/replica-receive.sh"
-	// SSH supplies the command as an environment value; it is never evaluated
-	// by a shell. The container receiver permits only replicate and status.
-	script := `#!/bin/sh
-set -eu
-case "$1" in *[!A-Za-z0-9_-]*|'') exit 126;; esac
-case "$SSH_ORIGINAL_COMMAND" in replicate|status) ;; *) exit 126;; esac
-exec sudo -n /floatlab/system/etc/lab/replica-receive-root.sh "$1" "$SSH_ORIGINAL_COMMAND"
-`
-	if err := update.WriteFile(wrapper, []byte(script), 0755); err != nil {
+	if err := update.WriteFile(wrapper, []byte(labSSHWrapperScript), 0755); err != nil {
 		return err
 	}
 	// The unprivileged SSH receiver must traverse this directory; keys stay 0600.
 	if err := os.Chmod(labHostDirectory, 0711); err != nil {
 		return err
 	}
-	rootScript := `#!/bin/sh
-set -eu
-[ "$#" -eq 2 ] || exit 126
-case "$1" in *[!A-Za-z0-9_-]*|'') exit 126;; esac
-case "$2" in replicate|status) ;; *) exit 126;; esac
-container="$(docker ps -q --filter label=com.docker.compose.project=floatlab-system --filter label=com.docker.compose.service=floatlab-control)"
-[ -n "$container" ] || exit 126
-exec docker exec -i -e "SSH_ORIGINAL_COMMAND=$2" "$container" floatlab-control replica-receive --source "$1"
-`
-	if err := update.WriteFile(labHostDirectory+"/replica-receive-root.sh", []byte(rootScript), 0755); err != nil {
+	if err := update.WriteFile(labHostDirectory+"/replica-receive-root.sh", []byte(labSSHRootScript), 0755); err != nil {
 		return err
 	}
 	// Nix declares this dedicated account and its sudo allowlist; do not grant

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.4
+
+- Add verified full and incremental ZFS backups over restricted, host-key-pinned lab SSH, preserving intermediate snapshots and resuming interrupted receives.
+- Protect each destination's last verified recovery point with ZFS holds and `floatlab:` metadata; fence stale transfers and removal cleanup by configuration generation.
+- Use RFD-0008 `fl-{short_timestamp}` automated snapshot names and overlapping time-based retention; clean removed destinations' holds and rerun source pruning.
+- Restore backups through operation-owned staging, either by local clone or resumable remote transfer, with ownership and GUID checks before writable activation. Preserve backup history and reject existing destination datasets.
+- Validate replication and both restore paths on three real ZFS appliances, including interrupted receive recovery, offline-source restoration, writable recovered data, and hold cleanup.
+
 ## 0.1.3
 
 - Load the local root recovery password through native NixOS account activation from `/floatlab/system/etc/root-password.hash`, outside the immutable distro image.

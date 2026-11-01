@@ -18,6 +18,7 @@ import (
 	floatraft "github.com/floatlab/floatlab-core/pkg/raft"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
 	"github.com/floatlab/floatlab-core/pkg/run"
+	"github.com/floatlab/floatlab-core/pkg/store"
 )
 
 // Sequence executes the 6-step failover and the reverse failback.
@@ -209,12 +210,20 @@ func (s *Sequence) attemptFinalSync(ctx context.Context, stack *config.Stack) er
 		return fmt.Errorf("secondary node required")
 	}
 	dataset := stack.ZFSDataset
-	snapshot := fmt.Sprintf("fsrepl-final-%s", time.Now().UTC().Format("20060102-150405"))
+	now := time.Now().UTC()
+	snapshot, err := store.AutomatedSnapshotName(now)
+	if err != nil {
+		return err
+	}
 
 	// Create snapshot on primary.
 	if _, err := s.hosts.Execute(ctx, stack.PrimaryNodeID, "fs.snapshot.create", ipc.SnapshotCreatePayload{
 		Dataset: dataset,
 		Name:    snapshot,
+		Properties: map[string]string{
+			"floatlab:purpose":      "replication",
+			"floatlab:operation-id": fmt.Sprintf("final-sync-%s-%d", stack.ID, now.UnixNano()),
+		},
 	}); err != nil {
 		return fmt.Errorf("create final snapshot: %w", err)
 	}

@@ -14,17 +14,23 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/floatlab/floatlab-core/internal/worker"
+	"github.com/floatlab/floatlab-core/pkg/config"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
+	"github.com/floatlab/floatlab-core/pkg/run"
 	"github.com/floatlab/floatlab-core/pkg/store"
 )
 
 func registerStorageRoutes(r chi.Router, s *Server) {
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireAdminJWT)
+		r.Use(s.routeWorkloadOwner)
 		r.Use(s.idempotency)
 		r.Get("/storage/pools", s.handleListPools)
 		r.Get("/storage/pools/{node_id}/{pool}", s.handleGetPool)
 		r.Get("/storage/datasets", s.handleListDatasets)
+		r.Get("/storage/backups", s.handleListBackupSnapshots)
+		r.Get("/storage/backups/config", s.handleBackupConfig)
+		r.Post("/storage/backups/restore", s.handleRestoreBackup)
 		r.Post("/storage/datasets/{stack_id}/snapshots/{name}/restore", s.handleRollbackDataset)
 		r.Get("/storage/datasets/{stack_id}", s.handleGetStackDataset)
 		r.Get("/storage/datasets/{stack_id}/snapshots", s.handleListSnapshots)
@@ -32,6 +38,9 @@ func registerStorageRoutes(r chi.Router, s *Server) {
 		r.Delete("/storage/datasets/{stack_id}/snapshots/{name}", s.handleDeleteSnapshot)
 		r.Post("/storage/replication/{stack_id}/trigger", s.handleTriggerReplication)
 		r.Get("/storage/replication", s.handleListReplication)
+		r.Get("/storage/replication/{stack_id}/targets", s.handleBackupTargets)
+		r.Put("/storage/replication/{stack_id}/targets", s.handlePutBackupTarget)
+		r.Delete("/storage/replication/{stack_id}/targets", s.handleRemoveBackupTarget)
 		r.Get("/storage/faults", s.handleListFaults)
 	})
 }
@@ -215,16 +224,21 @@ func (s *Server) handleGetStackDataset(w http.ResponseWriter, r *http.Request) {
 
 // snapshotResponse maps to the frontend Snapshot type.
 type snapshotResponse struct {
-	NodeID          string `json:"node_id"`
-	UsedBytes       int64  `json:"used_bytes"`
-	Kind            string `json:"kind"`
-	StackID         string `json:"stack_id"`
-	Dataset         string `json:"dataset"`
-	Name            string `json:"name"`
-	Type            string `json:"type"`
-	CreatedAt       string `json:"created_at"`
-	SizeBytes       int64  `json:"size_bytes"`
-	ReferencedBytes int64  `json:"referenced_bytes"`
+	HoldTargets     []string `json:"hold_targets,omitempty"`
+	TransferTargets []string `json:"transfer_targets,omitempty"`
+	Holds           []string `json:"holds,omitempty"`
+	Purpose         string   `json:"purpose,omitempty"`
+	OperationID     string   `json:"operation_id,omitempty"`
+	NodeID          string   `json:"node_id"`
+	UsedBytes       int64    `json:"used_bytes"`
+	Kind            string   `json:"kind"`
+	StackID         string   `json:"stack_id"`
+	Dataset         string   `json:"dataset"`
+	Name            string   `json:"name"`
+	Type            string   `json:"type"`
+	CreatedAt       string   `json:"created_at"`
+	SizeBytes       int64    `json:"size_bytes"`
+	ReferencedBytes int64    `json:"referenced_bytes"`
 }
 
 func (s *Server) handleListSnapshots(w http.ResponseWriter, r *http.Request) {
@@ -259,15 +273,24 @@ func (s *Server) handleListSnapshots(w http.ResponseWriter, r *http.Request) {
 	}
 	snaps := make([]snapshotResponse, 0, len(result.Snapshots))
 	for _, sn := range result.Snapshots {
-		if kind != "" && string(store.ClassifySnapshot(sn.Name)) != kind {
+		snapshotKind := string(store.ClassifySnapshot(sn.Name))
+		if sn.Purpose == "replication" {
+			snapshotKind = "replication"
+		}
+		if kind != "" && snapshotKind != kind {
 			continue
 		}
 		snaps = append(snaps, snapshotResponse{
-			StackID: stackID,
-			NodeID:  nodeID, UsedBytes: sn.Used, Kind: string(store.ClassifySnapshot(sn.Name)),
+			HoldTargets:     sn.HoldTargets,
+			TransferTargets: sn.TransferTargets,
+			Holds:           sn.Holds,
+			Purpose:         sn.Purpose,
+			OperationID:     sn.OperationID,
+			StackID:         stackID,
+			NodeID:          nodeID, UsedBytes: sn.Used, Kind: snapshotKind,
 			Dataset:   sn.Dataset,
 			Name:      sn.Name,
-			Type:      string(store.ClassifySnapshot(sn.Name)),
+			Type:      snapshotKind,
 			CreatedAt: sn.CreatedAt,
 			SizeBytes: sn.Used,
 		})
@@ -400,47 +423,91 @@ func (s *Server) handleTriggerReplication(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	if st.BackupNodeID == "" || st.BackupNodeID == st.PrimaryNodeID {
-		writeError(w, http.StatusBadRequest, "stack has no secondary node configured")
-		return
-	}
-
-	// Resolve secondary node's LAN address for ZFS recv destination.
-	destNode, err := s.store.GetNode(r.Context(), st.BackupNodeID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "secondary node not found: "+err.Error())
-		return
-	}
-	var destHost string
-	for _, addr := range destNode.Addresses {
-		if addr.Type == "LAN-6" {
-			destHost = addr.Address
-			break
+	if s.raft != nil {
+		if instance, ok := s.raft.FSM().State(stackID); ok && instance.State == run.StateRunningBackup {
+			writeError(w, 409, "backup replication is suspended while the workload runs on its failover node")
+			return
 		}
 	}
-	if destHost == "" {
-		writeError(w, http.StatusInternalServerError, "secondary node has no LAN-6 address")
+	targets, err := s.store.BackupTargets(r.Context(), stackID)
+	if err != nil {
+		writeError(w, 500, err.Error())
 		return
 	}
-
-	taskID := uuid.New().String()
-	payload := worker.ReplTriggerPayload{
-		StackID:  stackID,
-		Dataset:  st.ZFSDataset,
-		NodeID:   st.PrimaryNodeID,
-		DestHost: destHost,
-		DestPort: 22,
+	selected := []config.BackupTarget{}
+	for _, target := range targets {
+		if target.Enabled && (r.URL.Query().Get("dest_node_id") == "" || target.NodeID == r.URL.Query().Get("dest_node_id")) && (r.URL.Query().Get("dataset") == "" || target.Dataset == r.URL.Query().Get("dataset")) {
+			selected = append(selected, target)
+		}
 	}
-	if err := worker.EnqueueTask(r.Context(), s.db, taskID, worker.TaskReplTrigger, stackID, payload); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if len(selected) == 0 && r.URL.Query().Get("dest_node_id") == "" && st.BackupNodeID != "" && st.BackupNodeID != st.PrimaryNodeID {
+		selected = append(selected, config.BackupTarget{Dataset: st.ZFSDataset, NodeID: st.BackupNodeID, SourceNodeID: st.PrimaryNodeID})
+	}
+	if len(selected) == 0 {
+		writeError(w, 400, "no matching backup destination configured")
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{
-		"task_id":    taskID,
-		"stack_id":   stackID,
-		"state":      "pending",
-		"started_at": time.Now().UTC().Format(time.RFC3339),
-	})
+	taskIDs := []string{}
+	snapshotName, nameErr := store.AutomatedSnapshotName(time.Now().UTC())
+	if nameErr != nil {
+		writeError(w, 500, nameErr.Error())
+		return
+	}
+	createdDatasets := map[string]string{}
+	for _, target := range selected {
+		node, err := s.store.GetNode(r.Context(), target.NodeID)
+		if err != nil {
+			writeError(w, 400, "destination node not found")
+			return
+		}
+		host := ""
+		for _, address := range node.Addresses {
+			if address.Type == "LAN-6" {
+				host = address.Address
+				break
+			}
+		}
+		if host == "" {
+			writeError(w, 400, "destination has no LAN-6 address")
+			return
+		}
+		taskID := uuid.NewString()
+		// Legacy failover triggers are not governed by backup-target configuration.
+		destID := target.NodeID
+		if target.Schedule == "" {
+			target.StackID = stackID
+			if err := s.store.PutBackupTarget(r.Context(), target); err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+		}
+		if createdDatasets[target.Dataset] == "" {
+			create := worker.SnapshotCreatePayload{Dataset: target.Dataset, NodeID: st.PrimaryNodeID, StackID: stackID, SnapType: "replication", Policy: target.LocalPolicy, Name: snapshotName, OperationID: taskID}
+			if err := worker.EnqueueTask(r.Context(), s.db, taskID+"-snapshot", worker.TaskSnapshotCreate, stackID, create); err != nil {
+				writeError(w, 500, err.Error())
+				return
+			}
+			createdDatasets[target.Dataset] = taskID + "-snapshot"
+		}
+		configured, err := s.store.BackupTargets(r.Context(), stackID)
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		for _, saved := range configured {
+			if saved.Dataset == target.Dataset && saved.NodeID == target.NodeID {
+				target = saved
+				break
+			}
+		}
+		payload := worker.ReplTriggerPayload{SnapshotTaskID: createdDatasets[target.Dataset], Generation: target.Generation, TargetRevision: target.Revision, Snapshot: snapshotName, StackID: stackID, Dataset: target.Dataset, NodeID: st.PrimaryNodeID, DestNodeID: destID, DestHost: host, DestPort: 22, Policy: target.Schedule}
+		if err := worker.EnqueueTask(r.Context(), s.db, taskID, worker.TaskReplTrigger, stackID, payload); err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		taskIDs = append(taskIDs, taskID)
+	}
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{"task_id": taskIDs[0], "task_ids": taskIDs, "stack_id": stackID, "state": "pending", "started_at": time.Now().UTC().Format(time.RFC3339)})
 }
 
 func (s *Server) handleListReplication(w http.ResponseWriter, r *http.Request) {
@@ -449,7 +516,7 @@ func (s *Server) handleListReplication(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
-	query := `SELECT t.id,t.stack_id,coalesce(s.primary_node_id,'') AS source_node_id,coalesce(s.backup_node_id,'') AS dest_node_id,CASE t.state WHEN 'pending' THEN 'idle' WHEN 'done' THEN 'complete' ELSE t.state END AS state,t.created_at,t.created_at AS started_at,CASE WHEN t.state IN ('done','failed') THEN t.updated_at END AS completed_at,nullif(t.error,'') AS error FROM tasks t LEFT JOIN stacks s ON s.id=t.stack_id WHERE t.type='repl.trigger'`
+	query := `SELECT t.id,t.stack_id,coalesce(s.primary_node_id,'') AS source_node_id,coalesce(nullif(json_extract(t.payload,'$.dest_node_id'),''),s.backup_node_id,'') AS dest_node_id,json_extract(t.payload,'$.dataset') AS dataset,CASE t.state WHEN 'pending' THEN 'idle' WHEN 'done' THEN 'complete' ELSE t.state END AS state,t.created_at,t.created_at AS started_at,CASE WHEN t.state IN ('done','failed') THEN t.updated_at END AS completed_at,nullif(t.error,'') AS error FROM tasks t LEFT JOIN stacks s ON s.id=t.stack_id WHERE t.type='repl.trigger'`
 	args := []interface{}{}
 	if id := r.URL.Query().Get("stack_id"); id != "" {
 		query += " AND t.stack_id=?"

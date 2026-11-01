@@ -134,6 +134,9 @@ func (s *Store) UpdateNode(ctx context.Context, n *Node) error {
 }
 
 func (s *Store) DeleteNode(ctx context.Context, id string) error {
+	if err := s.DisableBackupNode(ctx, id); err != nil {
+		return fmt.Errorf("config: disable node backups: %w", err)
+	}
 	err := s.labWriter().Execute(ctx, []rqlite.Statement{{
 		SQL:    `DELETE FROM nodes WHERE id=?`,
 		Params: []interface{}{id},
@@ -168,6 +171,9 @@ func (s *Store) CreateStack(ctx context.Context, stack *Stack) error {
 	}})
 	if err != nil {
 		return fmt.Errorf("config: create stack: %w", err)
+	}
+	if err := s.SyncBackupTargets(ctx, stack); err != nil {
+		return err
 	}
 	s.notify(ChangeEvent{Entity: "stack", Action: "create", ID: stack.ID})
 	return nil
@@ -216,6 +222,11 @@ func (s *Store) UpdateStackCompose(ctx context.Context, id, composeYAML string) 
 	}})
 	if err != nil {
 		return fmt.Errorf("config: update stack compose: %w", err)
+	}
+	if st, err := s.GetStack(ctx, id); err != nil {
+		return err
+	} else if err = s.SyncBackupTargets(ctx, st); err != nil {
+		return err
 	}
 	s.notify(ChangeEvent{Entity: "stack", Action: "update", ID: id})
 	return nil

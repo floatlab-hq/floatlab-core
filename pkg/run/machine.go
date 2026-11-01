@@ -8,7 +8,7 @@ import (
 )
 
 var (
-	ErrInvalidTransition   = errors.New("run: invalid state transition")
+	ErrInvalidTransition    = errors.New("run: invalid state transition")
 	ErrTransitionInProgress = errors.New("run: transition already in progress")
 )
 
@@ -41,26 +41,28 @@ var transitionalStates = map[State]bool{
 }
 
 const (
-	EventCreateStack    Event = "CreateStack"
-	EventProvisionDone  Event = "ProvisionDone"
-	EventStartStack     Event = "StartStack"
-	EventStartDone      Event = "StartDone"
-	EventStartFailed    Event = "StartFailed"
-	EventFailStack      Event = "FailStack"
-	EventFailoverStart  Event = "FailoverStart"
-	EventFailoverDone   Event = "FailoverDone"
-	EventFailoverFailed Event = "FailoverFailed"
-	EventRestoreStart   Event = "RestoreStart"
-	EventRestoreDone    Event = "RestoreDone"
-	EventRestoreFailed  Event = "RestoreFailed"
-	EventStopStack      Event = "StopStack"
-	EventStopDone       Event = "StopDone"
-	EventUpdateStack    Event = "UpdateStack"
-	EventUpdateDone     Event = "UpdateDone"
-	EventUpdateFailed   Event = "UpdateFailed"
-	EventRollbackDone   Event = "RollbackDone"
-	EventRollbackFailed Event = "RollbackFailed"
-	EventPurgeStack     Event = "PurgeStack"
+	EventCreateStack           Event = "CreateStack"
+	EventBackupRestoreStart    Event = "BackupRestoreStart"
+	EventBackupRestorePrepared Event = "BackupRestorePrepared"
+	EventProvisionDone         Event = "ProvisionDone"
+	EventStartStack            Event = "StartStack"
+	EventStartDone             Event = "StartDone"
+	EventStartFailed           Event = "StartFailed"
+	EventFailStack             Event = "FailStack"
+	EventFailoverStart         Event = "FailoverStart"
+	EventFailoverDone          Event = "FailoverDone"
+	EventFailoverFailed        Event = "FailoverFailed"
+	EventRestoreStart          Event = "RestoreStart"
+	EventRestoreDone           Event = "RestoreDone"
+	EventRestoreFailed         Event = "RestoreFailed"
+	EventStopStack             Event = "StopStack"
+	EventStopDone              Event = "StopDone"
+	EventUpdateStack           Event = "UpdateStack"
+	EventUpdateDone            Event = "UpdateDone"
+	EventUpdateFailed          Event = "UpdateFailed"
+	EventRollbackDone          Event = "RollbackDone"
+	EventRollbackFailed        Event = "RollbackFailed"
+	EventPurgeStack            Event = "PurgeStack"
 )
 
 type Transition struct {
@@ -70,6 +72,8 @@ type Transition struct {
 }
 
 var transitions = []Transition{
+	{StateIdle, EventBackupRestoreStart, StateRestoring},
+	{StateRestoring, EventBackupRestorePrepared, StateProvisioning},
 	{StateIdle, EventCreateStack, StateProvisioning},
 	{StateProvisioning, EventProvisionDone, StateIdle},
 	{StateProvisioning, EventFailStack, StateFailed},

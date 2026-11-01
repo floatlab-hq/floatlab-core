@@ -100,9 +100,10 @@ type DatasetPromotePayload struct {
 }
 
 type SnapshotCreatePayload struct {
-	Dataset   string `json:"dataset"`
-	Name      string `json:"name"`
-	Recursive bool   `json:"recursive,omitempty"`
+	Properties map[string]string `json:"properties,omitempty"`
+	Dataset    string            `json:"dataset"`
+	Name       string            `json:"name"`
+	Recursive  bool              `json:"recursive,omitempty"`
 }
 
 type SnapshotDestroyPayload struct {
@@ -111,6 +112,11 @@ type SnapshotDestroyPayload struct {
 }
 
 type ReplSendPayload struct {
+	Generation   int64  `json:"generation,omitempty"`
+	SourceNodeID string `json:"source_node_id,omitempty"`
+	DestNodeID   string `json:"dest_node_id,omitempty"`
+	DestDataset  string `json:"dest_dataset,omitempty"`
+	Policy       string `json:"policy,omitempty"`
 	Dataset      string `json:"dataset"`
 	Snapshot     string `json:"snapshot"`
 	BaseSnapshot string `json:"base_snapshot,omitempty"`
@@ -128,6 +134,52 @@ type ReplRecvPayload struct {
 
 type ReplStatusPayload struct {
 	JobID string `json:"job_id"`
+}
+
+type ReplCleanupPayload struct {
+	Generation   int64  `json:"generation,omitempty"`
+	Dataset      string `json:"dataset"`
+	TargetNodeID string `json:"target_node_id"`
+	DestNodeID   string `json:"dest_node_id,omitempty"`
+	LocalPolicy  string `json:"local_policy,omitempty"`
+}
+
+type SnapshotPrunePayload struct {
+	Dataset string `json:"dataset"`
+	Policy  string `json:"policy"`
+}
+
+type BackupRestorePreparePayload struct {
+	SourceNodeID string `json:"source_node_id"`
+	BackupNodeID string `json:"backup_node_id"`
+	Dataset      string `json:"dataset"`
+	Snapshot     string `json:"snapshot"`
+	OperationID  string `json:"operation_id"`
+	MountID      string `json:"mount_id"`
+	DestNodeID   string `json:"dest_node_id,omitempty"`
+	DestHost     string `json:"dest_host,omitempty"`
+	DestPort     int    `json:"dest_port,omitempty"`
+}
+
+type BackupRestoreReservePayload struct {
+	OperationID   string `json:"operation_id"`
+	TargetDataset string `json:"target_dataset"`
+}
+
+type BackupRestorePrepareResult struct {
+	Dataset  string `json:"dataset"`
+	Snapshot string `json:"snapshot"`
+	GUID     string `json:"guid"`
+}
+
+type BackupRestoreActivatePayload struct {
+	Dataset       string `json:"dataset"`
+	SourceNodeID  string `json:"source_node_id"`
+	OperationID   string `json:"operation_id"`
+	MountID       string `json:"mount_id"`
+	TargetDataset string `json:"target_dataset"`
+	Mountpoint    string `json:"mountpoint"`
+	ExpectedGUID  string `json:"expected_guid"`
 }
 
 type NetAddrPayload struct {
@@ -291,11 +343,16 @@ type SnapshotListPayload struct {
 }
 
 type SnapshotInfoResult struct {
-	CreateTXG int64  `json:"create_txg,omitempty"`
-	Name      string `json:"name"`
-	Dataset   string `json:"dataset"`
-	Used      int64  `json:"used"`
-	CreatedAt string `json:"created_at"`
+	HoldTargets     []string `json:"hold_targets,omitempty"`
+	TransferTargets []string `json:"transfer_targets,omitempty"`
+	Holds           []string `json:"holds,omitempty"`
+	Purpose         string   `json:"purpose,omitempty"`
+	OperationID     string   `json:"operation_id,omitempty"`
+	CreateTXG       int64    `json:"create_txg,omitempty"`
+	Name            string   `json:"name"`
+	Dataset         string   `json:"dataset"`
+	Used            int64    `json:"used"`
+	CreatedAt       string   `json:"created_at"`
 }
 
 type SnapshotListResult struct {
