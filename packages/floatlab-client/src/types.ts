@@ -93,9 +93,9 @@ export type UpdateAction = "start" | "prepare" | "activate" | "commit" | "rollba
 export type UpdateRelease = components["schemas"]["UpdateRelease"];
 export type UpdateStatus = NonNullable<components["schemas"]["UpdateStatus"]>;
 export interface UpdateApi {
-  listUpdateReleases(nodeId: string, component: UpdateComponent): Promise<UpdateRelease[]>;
+  listUpdateReleases(nodeId: string, component: UpdateComponent, upstream?: string): Promise<UpdateRelease[]>;
   getUpdateStatus(nodeId: string, component: UpdateComponent, operationId?: string): Promise<UpdateStatus | null>;
-  runUpdateAction(nodeId: string, component: UpdateComponent, action: UpdateAction, request: { release?: string; operation_id?: string }, idempotencyKey: string): Promise<UpdateStatus>;
+  runUpdateAction(nodeId: string, component: UpdateComponent, action: UpdateAction, request: { release?: string; operation_id?: string; upstream?: string; skip_dry_run?: boolean }, idempotencyKey: string): Promise<UpdateStatus>;
 }
 
 export type LabInvitation = { lab_id: string; bootstrap_url: string; token: string; fingerprint: string; expires_at: string };

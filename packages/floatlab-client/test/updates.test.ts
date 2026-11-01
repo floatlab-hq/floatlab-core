@@ -45,3 +45,25 @@ test("appliance command resolves nodes, requires targets and keeps workload upgr
   expect(await engine.complete("update host ac")).toEqual([{ value: "activate" }]);
   expect(await engine.complete("update management start l")).toEqual([{ value: "lab", description: undefined }]);
 });
+
+test("update overrides reach release discovery and both update paths", async () => {
+ const requests: {url: string; body: unknown}[] = [];
+ const api = createApiClient({baseUrl: "http://host", fetch: (async (input, init) => {
+ const url = String(input); requests.push({url, body: init?.body ? JSON.parse(String(init.body)) : undefined});
+ return new Response(JSON.stringify(url.endsWith("/nodes") ? [{id: "local", name: "lab"}] : url.includes("/releases") ? [] : {operation_id: "op", state: "running", phase: "prepare"}), {status: 200});
+ }) as typeof fetch});
+ const runtime: CommandRuntime = {interactive: false, confirm: async () => true, editCompose: async () => undefined, present: async () => undefined};
+ const engine = new CommandEngine(api, runtime);
+ expect((await engine.dispatch("update management releases lab --upstream my-org/core")).code).toBe(0);
+ expect(requests.at(-1)?.url).toBe("http://host/api/v1/nodes/local/updates/management/releases?upstream=my-org%2Fcore");
+ for (const [component, action, release] of [["management", "start", "manage-v1.2.3"], ["host", "prepare", "host-v1.2.3"]]) {
+ expect((await engine.dispatch(`update ${component} ${action} lab ${release} --skip-dry-run --upstream=my-org/core`)).code).toBe(0);
+ expect(requests.at(-1)?.body).toEqual({release, upstream: "my-org/core", skip_dry_run: true});
+ }
+ const before = requests.length;
+ for (const command of ["update host status lab --skip-dry-run", "update host activate lab op --upstream org/repo", "update host releases lab --upstream ../repo", "update host prepare lab host-v1.2.3 --upstream", "update management start lab manage-v1.2.3 --skip-dry-run=false"]) {
+ expect((await engine.dispatch(command)).code).toBe(2);
+ }
+ expect(requests.length).toBe(before);
+ expect(await engine.complete("update host prepare lab host-v1.2.3 --skip")).toEqual([{value: "--skip-dry-run"}]);
+});

@@ -162,7 +162,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** List official immutable releases for a local appliance update */
+        /** List immutable releases for a local appliance update */
         get: operations["listUpdateReleases"];
         put?: never;
         post?: never;
@@ -1901,6 +1901,9 @@ export interface components {
             operation_id: string;
             state: string;
             phase: string;
+            /** @description Selected GitHub repository; omitted for the default upstream. */
+            upstream?: string;
+            skip_dry_run?: boolean;
             source_release?: string;
             target_release?: string;
             error?: string;
@@ -3252,7 +3255,10 @@ export interface operations {
     };
     listUpdateReleases: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description GitHub owner/repo; defaults to floatlab-hq/floatlab-core. */
+                upstream?: string;
+            };
             header?: never;
             path: {
                 id: string;
@@ -3271,6 +3277,13 @@ export interface operations {
                     "application/json": components["schemas"]["UpdateRelease"][];
                 };
             };
+            /** @description Invalid upstream repository. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Administrator authentication required. */
             401: {
                 headers: {
@@ -3278,7 +3291,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Host daemon or official release source unavailable. */
+            /** @description Host daemon or release source unavailable. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3349,8 +3362,15 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @description Official immutable release tag for start/prepare. */
+                    /** @description Immutable release tag for start/prepare. */
                     release?: string;
+                    /** @description GitHub owner/repo for start/prepare; defaults to floatlab-hq/floatlab-core. Images are pinned by its manifest. */
+                    upstream?: string;
+                    /**
+                     * @description Skip the isolated preflight trial on start/prepare. Validation and rollback protection remain enabled.
+                     * @default false
+                     */
+                    skip_dry_run?: boolean;
                     /** @description Existing transaction for subsequent actions; defaults to the idempotency key on start/prepare. */
                     operation_id?: string;
                 };

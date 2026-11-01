@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/floatlab/floatlab-core/internal/installer"
+	"github.com/floatlab/floatlab-core/internal/update"
 )
 
 type Linux struct {
@@ -72,9 +73,12 @@ func fetch(ctx context.Context, url string, w io.Writer, limit int64) error {
 	return nil
 }
 
-func Releases(ctx context.Context) (json.RawMessage, error) {
+func Releases(ctx context.Context, upstream string) (json.RawMessage, error) {
+	if err := update.ValidateUpstream(upstream); err != nil {
+		return nil, err
+	}
 	var b bytes.Buffer
-	if err := fetch(ctx, "https://api.github.com/repos/"+Repository+"/releases", &b, 4<<20); err != nil {
+	if err := fetch(ctx, "https://api.github.com/repos/"+update.Repository(upstream)+"/releases", &b, 4<<20); err != nil {
 		return nil, err
 	}
 	var all []struct {
@@ -95,6 +99,9 @@ func Releases(ctx context.Context) (json.RawMessage, error) {
 }
 
 func (l Linux) Stage(ctx context.Context, r Request) (target, source Manifest, err error) {
+	if err = update.ValidateUpstream(r.Upstream); err != nil {
+		return target, source, err
+	}
 	b, err := os.ReadFile("/floatlab-manifest.json")
 	if err != nil {
 		return target, source, err
@@ -111,7 +118,7 @@ func (l Linux) Stage(ctx context.Context, r Request) (target, source Manifest, e
 		return target, source, fmt.Errorf("invalid installed host identity")
 	}
 
-	baseURL := "https://github.com/" + Repository + "/releases/download/" + r.Release + "/"
+	baseURL := "https://github.com/" + update.Repository(r.Upstream) + "/releases/download/" + r.Release + "/"
 	var manifest bytes.Buffer
 	if err = fetch(ctx, baseURL+"host-manifest.json", &manifest, 1<<20); err != nil {
 		return target, source, err

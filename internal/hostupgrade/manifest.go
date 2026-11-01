@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/floatlab/floatlab-core/internal/installer"
+	"github.com/floatlab/floatlab-core/internal/update"
 	"github.com/floatlab/floatlab-core/pkg/release"
 )
 
@@ -80,6 +81,8 @@ func ValidateTransition(source, target Manifest, actual Engine) error {
 var operationID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 
 type Request struct {
+	Upstream       string `json:"upstream,omitempty"`
+	SkipDryRun     bool   `json:"skip_dry_run,omitempty"`
 	OperationID    string `json:"operation_id"`
 	Release        string `json:"release"`
 	Actor          string `json:"actor"`
@@ -87,6 +90,9 @@ type Request struct {
 }
 
 func (r Request) Validate() error {
+	if err := update.ValidateUpstream(r.Upstream); err != nil {
+		return err
+	}
 	if !operationID.MatchString(r.OperationID) || r.Actor == "" || len(r.Actor) > 256 {
 		return fmt.Errorf("operation_id and actor are required")
 	}

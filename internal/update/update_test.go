@@ -43,3 +43,19 @@ func TestDurablePrivateJournalReplacement(t *testing.T) {
 		t.Fatal(info.Mode())
 	}
 }
+
+func TestUpstreamRepository(t *testing.T) {
+	for _, value := range []string{"", "floatlab-hq/floatlab-core", "my-org/images.dev"} {
+		if err := ValidateUpstream(value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, value := range []string{"../repo", "owner/..", "https://github.com/owner/repo", "owner/repo/path", "owner/repo?x", "owner/repo#x", "owner/repo%2fother", "owner/ repo"} {
+		if ValidateUpstream(value) == nil {
+			t.Fatalf("accepted %q", value)
+		}
+	}
+	if Repository("") != DefaultRepository || Repository("org/repo") != "org/repo" {
+		t.Fatal("incorrect repository selection")
+	}
+}

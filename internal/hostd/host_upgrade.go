@@ -9,6 +9,7 @@ import (
 
 	"github.com/floatlab/floatlab-core/internal/hostupgrade"
 	"github.com/floatlab/floatlab-core/internal/managementupdate"
+	"github.com/floatlab/floatlab-core/internal/update"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
 )
 
@@ -45,7 +46,18 @@ func NewHostUpdateCoordinator(management *managementupdate.Manager) *hostupgrade
 }
 
 func registerHostUpdates(server *ipc.Server, m *hostupgrade.Manager) {
-	server.Handle("host.update.releases", func(ctx context.Context, _ json.RawMessage) (any, error) { return hostupgrade.Releases(ctx) })
+	server.Handle("host.update.releases", func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var r hostupgrade.Request
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &r); err != nil {
+				return nil, &ipc.RPCError{Code: "update.invalid", Message: err.Error()}
+			}
+		}
+		if err := update.ValidateUpstream(r.Upstream); err != nil {
+			return nil, &ipc.RPCError{Code: "update.invalid", Message: err.Error()}
+		}
+		return hostupgrade.Releases(ctx, r.Upstream)
+	})
 	server.Handle("host.update.status", func(_ context.Context, b json.RawMessage) (any, error) {
 		var r hostupgrade.Request
 		if len(b) > 0 {

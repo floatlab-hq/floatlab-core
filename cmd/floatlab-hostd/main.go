@@ -81,12 +81,18 @@ func main() {
 					return err
 				}
 				defer client.Close()
-				request := map[string]string{"actor": "root", "idempotency_key": fmt.Sprintf("root-%d", time.Now().UnixNano())}
+				request := map[string]any{"actor": "root", "idempotency_key": fmt.Sprintf("root-%d", time.Now().UnixNano())}
 				if len(args) > 0 {
 					request["operation_id"] = args[0]
 				}
 				if len(args) > 1 {
 					request["release"] = args[1]
+				}
+				if action == "releases" || action == "start" || action == "prepare" {
+					request["upstream"], _ = cmd.Flags().GetString("upstream")
+				}
+				if action == "start" || action == "prepare" {
+					request["skip_dry_run"], _ = cmd.Flags().GetBool("skip-dry-run")
 				}
 				raw, err := client.Execute(ctx, kind+".update."+action, request)
 				if err != nil {
@@ -98,6 +104,12 @@ func main() {
 				}
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(value)
 			}}
+			if action == "releases" || action == "start" || action == "prepare" {
+				command.Flags().String("upstream", "", "GitHub owner/repo to retrieve releases and images from")
+			}
+			if action == "start" || action == "prepare" {
+				command.Flags().Bool("skip-dry-run", false, "Skip the isolated preflight trial")
+			}
 			component.AddCommand(command)
 		}
 		updates.AddCommand(component)

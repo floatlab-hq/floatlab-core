@@ -18,14 +18,14 @@ import (
 func TestUpdateRoutesWithoutDatabase(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "update.sock")
 	daemon := ipc.NewServer(socket, zap.NewNop())
-	requests := make(chan map[string]string, 8)
+	requests := make(chan map[string]any, 8)
 	daemon.Handle("management.update.start", func(_ context.Context, raw json.RawMessage) (any, error) {
-		var payload map[string]string
+		var payload map[string]any
 		if err := json.Unmarshal(raw, &payload); err != nil {
 			return nil, err
 		}
 		requests <- payload
-		return map[string]string{"operation_id": payload["operation_id"], "state": "running", "phase": "prepare"}, nil
+		return map[string]any{"operation_id": payload["operation_id"], "state": "running", "phase": "prepare"}, nil
 	})
 	daemon.Handle("host.update.status", func(context.Context, json.RawMessage) (any, error) { return nil, nil })
 	daemon.Handle("host.update.commit", func(context.Context, json.RawMessage) (any, error) {
@@ -67,6 +67,10 @@ func TestUpdateRoutesWithoutDatabase(t *testing.T) {
 		{"management/start", "POST", `{"release":"manage-v1.2.3","operation_id":"../../other"}`, "retry", true, 400},
 		{"management/start", "POST", `{"release":"manage-v1.2.3"}`, "retry", true, 202},
 		{"management/start", "POST", `{"release":"manage-v1.2.3"}`, strings.Repeat("key/", 30), true, 202},
+		{"management/start", "POST", `{"release":"manage-v1.2.3","upstream":"my-org/core","skip_dry_run":true}`, "options", true, 202},
+		{"management/start", "POST", `{"release":"manage-v1.2.3","upstream":"../evil"}`, "bad", true, 400},
+		{"host/status?upstream=../evil", "GET", "", "", true, 400},
+		{"host/commit", "POST", `{"operation_id":"trial","skip_dry_run":true}`, "bad", true, 400},
 		{"management/commit", "POST", `{}`, "retry", true, 404},
 		{"unknown/start", "POST", `{}`, "retry", true, 404},
 		{"host/status", "POST", `{}`, "retry", true, 404},
@@ -94,11 +98,19 @@ func TestUpdateRoutesWithoutDatabase(t *testing.T) {
 	}
 	select {
 	case payload := <-requests:
-		if len(payload["operation_id"]) != 64 || payload["idempotency_key"] != strings.Repeat("key/", 30) {
+		if len(payload["operation_id"].(string)) != 64 || payload["idempotency_key"] != strings.Repeat("key/", 30) {
 			t.Fatalf("unsafe key was not converted to a safe transaction identity: %#v", payload)
 		}
 	default:
 		t.Fatal("long idempotency key did not reach hostd")
+	}
+	select {
+	case payload := <-requests:
+		if payload["upstream"] != "my-org/core" || payload["skip_dry_run"] != true {
+			t.Fatalf("lost options: %#v", payload)
+		}
+	default:
+		t.Fatal("override did not reach hostd")
 	}
 	if len(requests) != 0 {
 		t.Fatal("rejected requests reached hostd")

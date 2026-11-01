@@ -69,7 +69,7 @@ export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNe
     removeLabMember: (node, operationId) => send(`/lab/members/${encodeURIComponent(node)}/remove`, { method: "POST", body: JSON.stringify({ confirm_node_id: node, operation_id: operationId }) }),
     rotateLabIdentity: operationId => send("/lab/identity/rotate", { method: "POST", body: JSON.stringify({ operation_id: operationId }) }),
     releaseLabPeerAddress: (node, operationId) => send(`/lab/members/${encodeURIComponent(node)}/release-peer-address`, { method: "POST", body: JSON.stringify({ confirm_node_id: node, operation_id: operationId, confirm_fenced: true, confirm_reset: true }) }),
-    listUpdateReleases: (node, component) => send<UpdateRelease[]>(`${updatePath(node, component)}/releases`),
+    listUpdateReleases: (node, component, upstream) => send<UpdateRelease[]>(`${updatePath(node, component)}/releases${query({ upstream })}`),
     getUpdateStatus: (node, component, operationId) => send<UpdateStatus | null>(`${updatePath(node, component)}/status${query({ operation_id: operationId })}`),
     runUpdateAction: (node, component, action, request, key) => mutation<UpdateStatus>(`${updatePath(node, component)}/${action}`, "POST", key, request),
     createAuthToken: (credentials) => send<TokenResponse>("/auth/token", { method: "POST", body: JSON.stringify(credentials) }),

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/floatlab/floatlab-core/internal/update"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
 	"github.com/floatlab/floatlab-core/pkg/release"
 	"github.com/go-chi/chi/v5"
@@ -46,6 +47,8 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
+		Upstream    string `json:"upstream,omitempty"`
+		SkipDryRun  bool   `json:"skip_dry_run,omitempty"`
 		Release     string `json:"release,omitempty"`
 		OperationID string `json:"operation_id,omitempty"`
 	}
@@ -58,6 +61,14 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := decoder.Decode(new(any)); err != io.EOF {
 			writeError(w, http.StatusBadRequest, "one JSON request object is required")
+			return
+		}
+		if err := update.ValidateUpstream(body.Upstream); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if action != "start" && action != "prepare" && (body.Upstream != "" || body.SkipDryRun) {
+			writeError(w, http.StatusBadRequest, "upstream and skip_dry_run require start or prepare")
 			return
 		}
 		key := r.Header.Get("Idempotency-Key")
@@ -90,11 +101,26 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		actor, _ := r.Context().Value(keyActor).(string)
-		payload := map[string]string{"operation_id": body.OperationID, "release": body.Release, "actor": actor, "idempotency_key": key}
+		payload := map[string]any{"operation_id": body.OperationID, "release": body.Release, "actor": actor, "idempotency_key": key}
+		if body.Upstream != "" {
+			payload["upstream"] = body.Upstream
+		}
+		if body.SkipDryRun {
+			payload["skip_dry_run"] = true
+		}
 		s.forwardUpdate(w, r, component+".update."+action, payload, http.StatusAccepted)
 		return
 	}
-	s.forwardUpdate(w, r, component+".update."+action, map[string]string{"operation_id": r.URL.Query().Get("operation_id")}, http.StatusOK)
+	upstream := r.URL.Query().Get("upstream")
+	if err := update.ValidateUpstream(upstream); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if action != "releases" && upstream != "" {
+		writeError(w, http.StatusBadRequest, "upstream requires releases")
+		return
+	}
+	s.forwardUpdate(w, r, component+".update."+action, map[string]string{"operation_id": r.URL.Query().Get("operation_id"), "upstream": upstream}, http.StatusOK)
 }
 
 func (s *Server) forwardUpdate(w http.ResponseWriter, r *http.Request, command string, payload any, status int) {

@@ -156,6 +156,22 @@ update host activate my-node OPERATION_ID
 update host commit my-node OPERATION_ID
 ```
 
+Add `--upstream owner/repo` to `releases`, management `start`, or host `prepare`
+to use another GitHub repository for that command. Management images come from
+the selected release manifest; host artifacts come from the selected release.
+The default remains `floatlab-hq/floatlab-core`. For example:
+
+```text
+update management releases my-node --upstream my-org/floatlab-core
+update management start my-node manage-v1.2.3 --upstream my-org/floatlab-core --skip-dry-run
+update host prepare my-node host-v1.2.3 --upstream my-org/floatlab-core --skip-dry-run
+```
+
+`--skip-dry-run` bypasses the isolated preflight trial for that transaction.
+It still validates manifests and compatibility, takes rollback snapshots, and
+checks production health. Only use an upstream whose artifacts you trust.
+The root `floatlab-hostd update` commands accept the same flags.
+
 Management updates first test an isolated clone, then stop production, take a
 fresh rollback snapshot, and upgrade its existing datasets. Failure restores
 the snapshot and previous services. Preflight currently requires 4.5 GiB of

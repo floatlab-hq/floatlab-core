@@ -20,12 +20,16 @@ import (
 const Directory = "/floatlab/system/updates"
 
 type Request struct {
+	Upstream       string `json:"upstream,omitempty"`
+	SkipDryRun     bool   `json:"skip_dry_run,omitempty"`
 	OperationID    string `json:"operation_id"`
 	Release        string `json:"release"`
 	Actor          string `json:"actor"`
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 type Status struct {
+	Upstream          string            `json:"upstream,omitempty"`
+	SkipDryRun        bool              `json:"skip_dry_run,omitempty"`
 	OperationID       string            `json:"operation_id"`
 	Actor             string            `json:"actor"`
 	Phase             string            `json:"phase"`
@@ -112,6 +116,9 @@ func (m *Manager) Start(ctx context.Context, r Request) (*Status, error) {
 	if !operationID.MatchString(r.OperationID) || r.Actor == "" || len(r.Actor) > 256 || !validRelease(r.Release) {
 		return nil, fmt.Errorf("%w: valid operation_id, actor and official manage-v release required", ErrInvalid)
 	}
+	if err := update.ValidateUpstream(r.Upstream); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	old, e := m.read("")
@@ -119,8 +126,8 @@ func (m *Manager) Start(ctx context.Context, r Request) (*Status, error) {
 		return nil, e
 	}
 	if old.OperationID == r.OperationID {
-		if old.TargetRelease != r.Release {
-			return nil, fmt.Errorf("operation ID already used for another release")
+		if old.TargetRelease != r.Release || update.Repository(old.Upstream) != update.Repository(r.Upstream) || old.SkipDryRun != r.SkipDryRun {
+			return nil, fmt.Errorf("operation ID already used for another release or update options")
 		}
 		return old, nil
 	}
@@ -129,8 +136,8 @@ func (m *Manager) Start(ctx context.Context, r Request) (*Status, error) {
 		if err = json.Unmarshal(b, &previous); err != nil {
 			return nil, err
 		}
-		if previous.TargetRelease != r.Release {
-			return nil, fmt.Errorf("operation ID already used for another release")
+		if previous.TargetRelease != r.Release || update.Repository(previous.Upstream) != update.Repository(r.Upstream) || previous.SkipDryRun != r.SkipDryRun {
+			return nil, fmt.Errorf("operation ID already used for another release or update options")
 		}
 		return &previous, nil
 	} else if !os.IsNotExist(err) {
@@ -153,7 +160,7 @@ func (m *Manager) Start(ctx context.Context, r Request) (*Status, error) {
 			return nil, err
 		}
 	}
-	s := &Status{OperationID: r.OperationID, Actor: r.Actor, TargetRelease: r.Release, State: "running", Phase: "prepare", StartedAt: time.Now().UTC()}
+	s := &Status{OperationID: r.OperationID, Actor: r.Actor, TargetRelease: r.Release, Upstream: r.Upstream, SkipDryRun: r.SkipDryRun, State: "running", Phase: "prepare", StartedAt: time.Now().UTC()}
 	if e = m.save(s); e != nil {
 		unlock()
 		return nil, e
@@ -188,6 +195,9 @@ func (m *Manager) execute(ctx context.Context, s *Status) {
 		name string
 		fn   func(context.Context, *Status) error
 	}{{"prepare", m.Backend.Prepare}, {"preflight", m.Backend.Preflight}, {"fencing", m.Backend.Fence}, {"snapshot", m.Backend.Snapshot}, {"installing", m.Backend.Install}, {"checking", m.Backend.Healthy}} {
+		if step.name == "preflight" && s.SkipDryRun {
+			continue
+		}
 		if step.name == "snapshot" {
 			s.Snapshot = "floatlab-update-" + s.OperationID
 		}

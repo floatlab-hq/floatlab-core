@@ -7,16 +7,19 @@ paths:
       - {name: component, in: path, required: true, schema: {type: string, enum: [management, host]}}
     get:
       operationId: listUpdateReleases
-      summary: List official immutable releases for a local appliance update
+      summary: List immutable releases for a local appliance update
+      parameters:
+        - {name: upstream, in: query, description: "GitHub owner/repo; defaults to floatlab-hq/floatlab-core.", schema: {type: string}}
       tags: [updates]
       responses:
+        '400': {description: Invalid upstream repository.}
         '200':
           description: Available releases; discovery does not download or activate them.
           content:
             application/json:
               schema: {type: array, items: {$ref: '#/components/schemas/UpdateRelease'}}
         '401': {description: Administrator authentication required.}
-        '503': {description: Host daemon or official release source unavailable.}
+        '503': {description: Host daemon or release source unavailable.}
   /nodes/{id}/updates/{component}/status:
     parameters: *target
     get:
@@ -58,7 +61,9 @@ paths:
               type: object
               additionalProperties: false
               properties:
-                release: {type: string, description: Official immutable release tag for start/prepare.}
+                release: {type: string, description: Immutable release tag for start/prepare.}
+                upstream: {type: string, description: "GitHub owner/repo for start/prepare; defaults to floatlab-hq/floatlab-core. Images are pinned by its manifest."}
+                skip_dry_run: {type: boolean, default: false, description: Skip the isolated preflight trial on start/prepare. Validation and rollback protection remain enabled.}
                 operation_id: {type: string, description: Existing transaction for subsequent actions; defaults to the idempotency key on start/prepare.}
       responses:
         '202':
@@ -89,6 +94,8 @@ components:
         operation_id: {type: string}
         state: {type: string}
         phase: {type: string}
+        upstream: {type: string, description: Selected GitHub repository; omitted for the default upstream.}
+        skip_dry_run: {type: boolean}
         source_release: {type: string}
         target_release: {type: string}
         error: {type: string}

@@ -35,10 +35,10 @@ const commands = [
   ["logs", [], "logs <stack> [container] [--search terms] [--since value] [--limit n]"],
   ["info", ["inspect"], "info <stack> [container]"], ["list", ["ls"], "list [stack] [--containers]"],
   ["upgrade", [], "upgrade <stack> [service=image ...]"], ["snapshot", [], "snapshot create|list <stack>"],
-  ["update", [], "update management|host releases|status|start|prepare|activate|commit|rollback|cleanup <node> [release|operation]"],
+  ["update", [], "update management|host releases|status|start|prepare|activate|commit|rollback|cleanup <node> [release|operation] [--skip-dry-run] [--upstream owner/repo]"],
 ] as const;
 const aliases = new Map<string, string>(commands.flatMap(([name, names]) => [name, ...names].map((alias) => [alias, name])));
-const flagValues = new Set(["primary", "secondary", "search", "since", "limit", "file", "range", "source"]);
+const flagValues = new Set(["primary", "secondary", "search", "since", "limit", "file", "range", "source", "upstream"]);
 
 function parse(input: string | string[]): Parsed {
   const words = typeof input === "string" ? tokenize(input) : input;
@@ -57,7 +57,7 @@ function parse(input: string | string[]): Parsed {
     const equal = word.indexOf("=");
     const key = word.slice(2, equal < 0 ? undefined : equal);
     const inline = equal < 0 ? undefined : word.slice(equal + 1);
-    if (!key || !["primary", "secondary", "start", "purge", "search", "since", "limit", "containers", "file", "range", "source", "confirm-fenced", "confirm-reset"].includes(key)) throw new CommandError(`Unknown flag: ${word}`);
+    if (!key || !["primary", "secondary", "start", "purge", "search", "since", "limit", "containers", "file", "range", "source", "confirm-fenced", "confirm-reset", "skip-dry-run", "upstream"].includes(key)) throw new CommandError(`Unknown flag: ${word}`);
     if (flagValues.has(key)) {
       const value = inline ?? words[++index]; if (!value || value.startsWith("--")) throw new CommandError(`--${key} needs a value`);
       flags[key] = value;
@@ -102,6 +102,7 @@ export class CommandEngine {
       if (index === 1) return matching(["management", "host"].map(value => ({ value })));
       if (index === 2) return matching((words[1] === "host" ? ["releases", "status", "prepare", "activate", "commit", "rollback", "cleanup"] : ["releases", "status", "start", "rollback", "cleanup"]).map(value => ({ value })));
       if (index === 3) return matching((await this.getNodes().catch(() => [])).map(node => ({ value: node.name, description: node.status })));
+      if (last.startsWith("--")) return matching((words[2] === "releases" ? ["--upstream"] : ["start", "prepare"].includes(words[2] ?? "") ? ["--skip-dry-run", "--upstream"] : []).map(value => ({ value })));
       return [];
     }
     if (name === "snapshot") {
@@ -169,7 +170,7 @@ export class CommandEngine {
     if (name === "info") return this.info(args);
     if (name === "list") return this.list(args, Boolean(flags.containers));
     if (name === "upgrade") return this.upgrade(args);
-    if (name === "update") return this.update(args);
+    if (name === "update") return this.update(args, flags);
     return this.snapshot(args);
   }
 
@@ -391,23 +392,28 @@ export class CommandEngine {
     return { kind: "table", columns, rows: snapshots.map((snapshot) => [text(snapshot.name ?? ""), text(snapshot.created_at ?? ""), ...(hasType ? [text(snapshot.type ?? "")] : []), text(snapshot.used ?? snapshot.space ?? ""), ...(protectedSnapshots ? [names(snapshot.hold_targets), names(snapshot.transfer_targets)] : [])]) };
   }
 
-  private async update(args: string[]): Promise<CommandResult> {
+  private async update(args: string[], flags: Record<string, string | boolean>): Promise<CommandResult> {
     const [component, action, nodeValue, target] = args;
     const actions = component === "host" ? ["releases", "status", "prepare", "activate", "commit", "rollback", "cleanup"] : ["releases", "status", "start", "rollback", "cleanup"];
-    if ((component !== "management" && component !== "host") || !action || !actions.includes(action) || !nodeValue || args.length > 4) throw new CommandError("Usage: update management|host <action> <node> [release|operation]");
+    if ((component !== "management" && component !== "host") || !action || !actions.includes(action) || !nodeValue || args.length > 4) throw new CommandError("Usage: update management|host <action> <node> [release|operation] [--skip-dry-run] [--upstream owner/repo]");
     if (!this.api.listUpdateReleases || !this.api.getUpdateStatus || !this.api.runUpdateAction) throw new CommandError("Appliance updates are unavailable in this client");
+    const initial = action === "start" || action === "prepare";
+    if (Object.keys(flags).some(key => key !== "upstream" && key !== "skip-dry-run")) throw new CommandError("Update commands accept only --upstream and --skip-dry-run");
+    if (flags["skip-dry-run"] && !initial) throw new CommandError("--skip-dry-run requires start or prepare");
+    if (flags.upstream && !initial && action !== "releases") throw new CommandError("--upstream requires releases, start or prepare");
+    const upstream = typeof flags.upstream === "string" ? flags.upstream : undefined;
+    if (upstream && !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$/.test(upstream)) throw new CommandError("--upstream must be a GitHub owner/repo");
     const node = await this.node(nodeValue);
     if (action === "releases") {
       if (target) throw new CommandError("Usage: update management|host releases <node>");
-      const releases = await this.api.listUpdateReleases(node.id, component);
+      const releases = await this.api.listUpdateReleases(node.id, component, upstream);
       return { kind: "table", columns: ["release", "name", "published", "prerelease"], rows: releases.map(item => [item.tag_name, item.name ?? "", item.published_at ?? "", String(item.prerelease ?? false)]) };
     }
     if (action === "status") return { kind: "text", text: text(await this.api.getUpdateStatus(node.id, component, target)) };
-    const initial = action === "start" || action === "prepare";
     if (!target) throw new CommandError(`A ${initial ? "release tag" : "transaction ID"} is required for ${action}`);
     const consequence = action === "activate" ? " This reboots the appliance." : action === "rollback" ? " This discards management changes since the update checkpoint; workload changes are not undone." : "";
-    if (!await this.confirm(`${action} ${component} update on ${node.name}?${consequence}`)) return { kind: "text", text: "Update cancelled." };
-    const operation = await this.api.runUpdateAction(node.id, component as UpdateComponent, action as UpdateAction, initial ? { release: target } : { operation_id: target }, idempotencyKey());
+    if (!await this.confirm(`${action} ${component} update on ${node.name}?${flags["skip-dry-run"] ? " Skipping the isolated preflight trial." : ""}${upstream ? ` Using releases from ${upstream}.` : ""}${consequence}`)) return { kind: "text", text: "Update cancelled." };
+    const operation = await this.api.runUpdateAction(node.id, component as UpdateComponent, action as UpdateAction, initial ? { release: target, ...(upstream ? { upstream } : {}), ...(flags["skip-dry-run"] ? { skip_dry_run: true } : {}) } : { operation_id: target }, idempotencyKey());
     return { kind: "operation", action: `update ${component} ${action}`, operationId: operation.operation_id, state: operation.state, text: text(operation) };
   }
 }

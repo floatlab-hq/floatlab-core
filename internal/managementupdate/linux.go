@@ -23,7 +23,6 @@ import (
 
 const managementDataset = "floatlab/system/management"
 const composePath = "/floatlab/system/docker-compose.yml"
-const officialRepository = "floatlab-hq/floatlab-core"
 const activationDir = "/run/floatlab/activation"
 
 var digest = regexp.MustCompile(`^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$`)
@@ -119,9 +118,12 @@ type Release struct {
 	Prerelease  bool   `json:"prerelease"`
 }
 
-func Releases(ctx context.Context) ([]Release, error) {
+func Releases(ctx context.Context, upstream string) ([]Release, error) {
+	if err := update.ValidateUpstream(upstream); err != nil {
+		return nil, err
+	}
 	var rows []Release
-	if e := fetchJSON(ctx, "https://api.github.com/repos/"+officialRepository+"/releases?per_page=100", &rows); e != nil {
+	if e := fetchJSON(ctx, "https://api.github.com/repos/"+update.Repository(upstream)+"/releases?per_page=100", &rows); e != nil {
 		return nil, e
 	}
 	out := []Release{}
@@ -133,7 +135,10 @@ func Releases(ctx context.Context) ([]Release, error) {
 	return out, nil
 }
 func (l *Linux) Prepare(ctx context.Context, s *Status) error {
-	if e := fetchJSON(ctx, "https://github.com/"+officialRepository+"/releases/download/"+s.TargetRelease+"/manage-manifest.json", &s.Manifest); e != nil {
+	if err := update.ValidateUpstream(s.Upstream); err != nil {
+		return err
+	}
+	if e := fetchJSON(ctx, "https://github.com/"+update.Repository(s.Upstream)+"/releases/download/"+s.TargetRelease+"/manage-manifest.json", &s.Manifest); e != nil {
 		return e
 	}
 	if e := s.Manifest.Validate(s.TargetRelease); e != nil {

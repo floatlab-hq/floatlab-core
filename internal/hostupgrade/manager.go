@@ -15,6 +15,8 @@ import (
 )
 
 type Status struct {
+	Upstream        string    `json:"upstream,omitempty"`
+	SkipDryRun      bool      `json:"skip_dry_run,omitempty"`
 	OperationID     string    `json:"operation_id"`
 	Actor           string    `json:"actor"`
 	State           string    `json:"state"`
@@ -113,8 +115,8 @@ func (m *Manager) Prepare(ctx context.Context, r Request) (Status, error) {
 	}
 	if s.OperationID == r.OperationID {
 		release()
-		if s.TargetRelease != r.Release {
-			return s, fmt.Errorf("operation id already used for another release")
+		if s.TargetRelease != r.Release || update.Repository(s.Upstream) != update.Repository(r.Upstream) || s.SkipDryRun != r.SkipDryRun {
+			return s, fmt.Errorf("operation id already used for another release or update options")
 		}
 		return s, nil
 	}
@@ -146,7 +148,7 @@ func (m *Manager) Prepare(ctx context.Context, r Request) (Status, error) {
 			return s, err
 		}
 	}
-	s = Status{OperationID: r.OperationID, Actor: r.Actor, TargetRelease: r.Release, StartedAt: time.Now().UTC()}
+	s = Status{OperationID: r.OperationID, Actor: r.Actor, TargetRelease: r.Release, Upstream: r.Upstream, SkipDryRun: r.SkipDryRun, StartedAt: time.Now().UTC()}
 	if state, e := os.ReadFile("/sys/class/watchdog/watchdog0/state"); e == nil && strings.TrimSpace(string(state)) == "active" {
 		s.Watchdog = true
 	}
@@ -160,7 +162,7 @@ func (m *Manager) Prepare(ctx context.Context, r Request) (Status, error) {
 		work, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Hour)
 		defer cancel()
 		target, source, e := m.Backend.Stage(work, r)
-		if e == nil && m.PreflightCheckpoint != nil {
+		if e == nil && !r.SkipDryRun && m.PreflightCheckpoint != nil {
 			e = m.PreflightCheckpoint(work, r.OperationID)
 		}
 		s.Manifest, s.Source = target, source

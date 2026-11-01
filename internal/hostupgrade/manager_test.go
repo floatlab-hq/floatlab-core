@@ -3,6 +3,7 @@ package hostupgrade
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -412,5 +413,48 @@ func TestEFIBootEntryMustPointToDedicatedTrialExecutable(t *testing.T) {
 	}
 	if bootEntry.FindStringSubmatch(`Boot0001* FloatLab Trial HD(1,GPT,4da5108c-27fc-43ad-8e2b-a1fd1a42bebe,0,1)/File(\EFI\BOOT\BOOTX64.EFI)`) != nil {
 		t.Fatal("fallback executable selected")
+	}
+}
+
+func TestPrepareDryRunOverride(t *testing.T) {
+	for _, skip := range []bool{false, true} {
+		t.Run(fmt.Sprint(skip), func(t *testing.T) {
+			m, f := setup(t, "failed")
+			m.PreflightCheckpoint = func(context.Context, string) error { return errors.New("dry run failed") }
+			f.stageStarted = make(chan struct{})
+			f.stageContinue = make(chan struct{})
+			r := Request{OperationID: "override", Actor: "admin", Release: "host-v2.0.0", Upstream: "my-org/core", SkipDryRun: skip}
+			accepted, err := m.Prepare(context.Background(), r)
+			if err != nil || accepted.Upstream != r.Upstream || accepted.SkipDryRun != skip {
+				t.Fatalf("%+v %v", accepted, err)
+			}
+			<-f.stageStarted
+			close(f.stageContinue)
+			deadline := time.Now().Add(time.Second)
+			for {
+				s, err := m.Status()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if s.State != "staging" {
+					want := "failed"
+					if skip {
+						want = "staged"
+					}
+					if s.State != want || s.SkipDryRun != skip || s.Upstream != r.Upstream {
+						t.Fatalf("%+v", s)
+					}
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("staging timed out")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			r.Upstream = "other/core"
+			if _, err := m.Prepare(context.Background(), r); err == nil {
+				t.Fatal("reused ID with changed upstream")
+			}
+		})
 	}
 }

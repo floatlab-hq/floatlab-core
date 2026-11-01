@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/floatlab/floatlab-core/internal/managementupdate"
+	"github.com/floatlab/floatlab-core/internal/update"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
 	"github.com/floatlab/floatlab-core/pkg/release"
 )
@@ -31,6 +32,8 @@ func publicManagementStatus(s *managementupdate.Status) any {
 		return nil
 	}
 	return struct {
+		Upstream      string `json:"upstream,omitempty"`
+		SkipDryRun    bool   `json:"skip_dry_run,omitempty"`
 		OperationID   string `json:"operation_id"`
 		Actor         string `json:"actor"`
 		State         string `json:"state"`
@@ -41,10 +44,21 @@ func publicManagementStatus(s *managementupdate.Status) any {
 		RollbackError string `json:"rollback_error,omitempty"`
 		StartedAt     any    `json:"started_at"`
 		UpdatedAt     any    `json:"updated_at"`
-	}{s.OperationID, s.Actor, s.State, s.Phase, s.SourceRelease, s.TargetRelease, s.Error, s.RollbackError, s.StartedAt, s.UpdatedAt}
+	}{s.Upstream, s.SkipDryRun, s.OperationID, s.Actor, s.State, s.Phase, s.SourceRelease, s.TargetRelease, s.Error, s.RollbackError, s.StartedAt, s.UpdatedAt}
 }
 func registerManagementUpdates(ctx context.Context, s *ipc.Server, m *managementupdate.Manager) {
-	s.Handle("management.update.releases", func(call context.Context, _ json.RawMessage) (any, error) { return managementupdate.Releases(call) })
+	s.Handle("management.update.releases", func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var r managementupdate.Request
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &r); err != nil {
+				return nil, &ipc.RPCError{Code: "update.invalid", Message: err.Error()}
+			}
+		}
+		if err := update.ValidateUpstream(r.Upstream); err != nil {
+			return nil, &ipc.RPCError{Code: "update.invalid", Message: err.Error()}
+		}
+		return managementupdate.Releases(ctx, r.Upstream)
+	})
 	s.Handle("management.update.status", func(_ context.Context, raw json.RawMessage) (any, error) {
 		var r managementupdate.Request
 		if e := json.Unmarshal(raw, &r); e != nil {

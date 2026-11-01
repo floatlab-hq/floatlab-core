@@ -181,3 +181,35 @@ func TestAcceptedManualRollbackRevokesDurableAuthorization(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+func TestSkipDryRunPreservesProductionChecksAndRollback(t *testing.T) {
+	for _, failure := range []string{"preflight", "prepare", "install"} {
+		t.Run(failure, func(t *testing.T) {
+			b := &fakeBackend{fail: failure}
+			m := &Manager{Dir: t.TempDir(), Backend: b}
+			s := &Status{OperationID: "override", State: "running", SkipDryRun: true, Upstream: "my-org/core"}
+			m.execute(context.Background(), s)
+			want := []string{"prepare", "fence", "snapshot", "install", "healthy", "authorize"}
+			state := "succeeded"
+			if failure == "prepare" {
+				want = []string{"prepare", "cleanup"}
+				state = "failed"
+			}
+			if failure == "install" {
+				want = []string{"prepare", "fence", "snapshot", "install", "restore", "healthy", "authorize"}
+				state = "rolled_back"
+			}
+			if s.State != state || !reflect.DeepEqual(b.calls, want) {
+				t.Fatalf("%+v calls %v", s, b.calls)
+			}
+			durable, err := m.Status("override")
+			if err != nil || !durable.SkipDryRun || durable.Upstream != "my-org/core" {
+				t.Fatalf("lost options: %+v %v", durable, err)
+			}
+			r := Request{OperationID: "override", Actor: "admin", Release: "manage-v1.0.0", Upstream: "another/core", SkipDryRun: true}
+			if _, err := m.Start(context.Background(), r); err == nil {
+				t.Fatal("reused ID with changed options")
+			}
+		})
+	}
+}
