@@ -45,6 +45,7 @@ def check(image, version):
         docker("run", "--detach", "--name", management, "--network", name,
                "--publish", "127.0.0.1::8080", image,
                "--rqlite-url=http://rqlite:4001", "--raft-data=/tmp/raft",
+               "--workload-db=/tmp/workloads/local.sqlite", "--lab-data=/tmp/workloads/lab",
                "--raft-bootstrap=true", "--jwt-secret=container-smoke-test")
         base = "http://" + docker("port", management, "8080/tcp")
         for _ in range(60):

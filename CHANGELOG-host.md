@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Accept rqlite's leading v in reported versions when checking explicitly tested management update sources; continue rejecting unlisted versions.
+
 ## 0.1.5
 
 - Preserve stack identifiers, operation identifiers, and severity from structured journal messages as searchable log fields so provisioning diagnostics appear in stack API log queries.

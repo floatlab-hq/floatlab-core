@@ -9,6 +9,32 @@ import (
 	"testing"
 )
 
+func TestRQLiteSourceVersionPrefix(t *testing.T) {
+	manifest := Manifest{RQLiteSources: []string{"8.26.0"}}
+	for _, test := range []struct {
+		version string
+		allowed bool
+	}{
+		{"8.26.0", true},
+		{"v8.26.0", true},
+		{"8.26.1", false},
+		{"v8.26.1", false},
+		{"v8.26.0-dev", false},
+		{"vv8.26.0", false},
+		{"", false},
+	} {
+		t.Run(test.version, func(t *testing.T) {
+			err := manifest.validateRQLiteSource(test.version)
+			if (err == nil) != test.allowed {
+				t.Fatalf("version %q: allowed=%v, error=%v", test.version, test.allowed, err)
+			}
+			if err != nil && !strings.Contains(err.Error(), fmt.Sprintf("%q", test.version)) {
+				t.Fatalf("error lost reported version: %v", err)
+			}
+		})
+	}
+}
+
 func TestFreezeDefinitionsUsesRunningImageAndActualRestartPolicy(t *testing.T) {
 	actual := "sha256:" + strings.Repeat("a", 64)
 	var tags []string
