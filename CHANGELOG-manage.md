@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.5
+
+- Give the unprivileged release smoke-test container writable temporary workload and lab data paths so image verification can complete before publication.
+- Include the provisioning diagnostics from 0.1.4, whose release was blocked by this smoke-test configuration error.
+
 ## 0.1.4
 
 - Log previously silent provisioning failures with stack and node identifiers, the failing stage, dataset context where applicable, and the underlying error.
