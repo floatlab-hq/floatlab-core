@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.4
+
+- Log previously silent provisioning failures with stack and node identifiers, the failing stage, dataset context where applicable, and the underlying error.
+- Identify the failed network provisioning step, including pool selection, address allocation, and host service configuration.
+
 ## 0.1.3
 
 - Add partition-tolerant lab management with node-owned workload databases and authenticated, read-only workload replicas on peers.

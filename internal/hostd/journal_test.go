@@ -89,6 +89,39 @@ func TestJournalLineHandlesKernelAndBinaryMessages(t *testing.T) {
 	}
 }
 
+func TestJournalLinePreservesStructuredLogLabels(t *testing.T) {
+	for _, message := range []string{
+		`{"msg":"provision failed","stack_id":"stack-test","operation_id":"op-test","level":"error","node_id":"other-node","password":"secret"}`,
+		`plain text`,
+		`{"stack_id":"stack-test"`,
+		`{"stack_id":123}`,
+	} {
+		t.Run(message, func(t *testing.T) {
+			raw, err := json.Marshal(message)
+			if err != nil {
+				t.Fatal(err)
+			}
+			line, err := journalLine(map[string]json.RawMessage{"__REALTIME_TIMESTAMP": json.RawMessage(`"1000000"`), "MESSAGE": raw}, "node-test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if line["_msg"] != message || line["node_id"] != "node-test" {
+				t.Fatalf("message or journal identity changed: %#v", line)
+			}
+			if strings.Contains(message, `"level":"error"`) {
+				if line["stack_id"] != "stack-test" || line["operation_id"] != "op-test" || line["level"] != "error" {
+					t.Fatalf("structured labels missing: %#v", line)
+				}
+			} else if line["stack_id"] != "" || line["operation_id"] != "" || line["level"] != "" {
+				t.Fatalf("invalid message produced labels: %#v", line)
+			}
+			if _, ok := line["password"]; ok {
+				t.Fatal("unexpected field promoted to log label")
+			}
+		})
+	}
+}
+
 func TestJournalForwardingStopsOnCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()

@@ -163,6 +163,19 @@ func journalLine(entry map[string]json.RawMessage, nodeID string) (map[string]st
 	} else if line["container_id"] != "" {
 		line["source"] = "container"
 	}
+	// Preserve structured log fields used by stack and severity queries.
+	var fields struct {
+		StackID     string `json:"stack_id"`
+		OperationID string `json:"operation_id"`
+		Level       string `json:"level"`
+	}
+	if json.Unmarshal([]byte(line["_msg"]), &fields) == nil {
+		for name, value := range map[string]string{"stack_id": fields.StackID, "operation_id": fields.OperationID, "level": fields.Level} {
+			if value != "" {
+				line[name] = value
+			}
+		}
+	}
 	return line, nil
 }
 

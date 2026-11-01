@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.5
+
+- Preserve stack identifiers, operation identifiers, and severity from structured journal messages as searchable log fields so provisioning diagnostics appear in stack API log queries.
+- Keep original journal messages and host identity intact; ignore malformed structured fields and avoid promoting unrelated payload fields.
+
 ## 0.1.4
 
 - Add verified full and incremental ZFS backups over restricted, host-key-pinned lab SSH, preserving intermediate snapshots and resuming interrupted receives.

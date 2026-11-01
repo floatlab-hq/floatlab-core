@@ -201,11 +201,14 @@ func (o *Orchestrator) doProvision(ctx context.Context, stackID string) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
+	log := o.log.With(zap.String("stack_id", stackID))
 	stack, err := o.store.GetStack(ctx, stackID)
 	if err != nil {
-		o.log.Error("orchestrator: provision: get stack", zap.String("id", stackID), zap.Error(err))
+		log.Error("orchestrator: provision: get stack", zap.Error(err))
 		return
 	}
+	log = log.With(zap.String("stack", stack.Name), zap.String("node_id", stack.PrimaryNodeID))
+	log.Info("orchestrator: provisioning")
 
 	spec, lifecycleErr := compose.ParseLifecycle(stack.ComposeYAML, stack.Name)
 	var datasets []ipc.DatasetCreatePayload
@@ -217,7 +220,7 @@ func (o *Orchestrator) doProvision(ctx context.Context, stackID string) {
 	} else {
 		parsed, err := compose.Parse(ctx, stack.ComposeYAML, stack.Name)
 		if err != nil {
-			o.log.Error("orchestrator: provision: parse compose", zap.String("id", stackID), zap.Error(err))
+			log.Error("orchestrator: provision: parse compose", zap.Error(err))
 			o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack)
 			_ = o.ops.FinishForStack(context.Background(), stackID, "create", "failed", err.Error())
 			return
@@ -226,12 +229,14 @@ func (o *Orchestrator) doProvision(ctx context.Context, stackID string) {
 	}
 	restoreTasks, restoreErr := o.db.Query(ctx, rqlite.Statement{SQL: `SELECT id FROM tasks WHERE stack_id=? AND type=? LIMIT 1`, Params: []interface{}{stackID, worker.TaskBackupRestore}})
 	if restoreErr != nil {
+		log.Error("orchestrator: provision: query restore tasks", zap.Error(restoreErr))
 		o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack)
 		return
 	}
 	importProjectData := len(restoreTasks.Values) == 0
 	if lifecycleErr == nil && importProjectData {
 		if err := stageBindData(stack.Name, spec.Mounts); err != nil {
+			log.Error("orchestrator: provision: stage bind data", zap.Error(err))
 			o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack)
 			_ = o.ops.FinishForStack(context.Background(), stackID, "start", "failed", err.Error())
 			return
@@ -239,7 +244,7 @@ func (o *Orchestrator) doProvision(ctx context.Context, stackID string) {
 	}
 	for _, payload := range datasets {
 		if _, err := o.pool.Execute(ctx, stack.PrimaryNodeID, "fs.dataset.create", payload); err != nil {
-			o.log.Error("orchestrator: provision: create dataset on primary", zap.String("id", stackID), zap.Error(err))
+			log.Error("orchestrator: provision: create dataset on primary", zap.String("dataset", payload.Dataset), zap.Error(err))
 			o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack)
 			_ = o.ops.FinishForStack(context.Background(), stackID, "create", "failed", err.Error())
 			return
@@ -247,36 +252,41 @@ func (o *Orchestrator) doProvision(ctx context.Context, stackID string) {
 	}
 	if lifecycleErr == nil && importProjectData {
 		if err := restoreBindData(stack.Name, spec.Mounts); err != nil {
+			log.Error("orchestrator: provision: restore bind data", zap.Error(err))
 			o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack)
 			_ = o.ops.FinishForStack(context.Background(), stackID, "start", "failed", err.Error())
 			return
 		}
 	}
 	if _, err := o.pool.Execute(ctx, stack.PrimaryNodeID, "compose.source.write", ipc.ComposeSourcePayload{StackID: stack.ID, DatasetPath: stack.ZFSDataset, ComposeFile: stack.ComposeYAML}); err != nil {
+		log.Error("orchestrator: provision: write compose source", zap.Error(err))
 		o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack)
 		_ = o.ops.FinishForStack(context.Background(), stackID, "start", "failed", err.Error())
 		return
 	}
 	if lifecycleErr == nil && spec.HasPorts {
 		if err := o.provisionNetwork(ctx, stack, spec); err != nil {
+			log.Error("orchestrator: provision: configure network", zap.Error(err))
 			o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack)
 			_ = o.ops.FinishForStack(context.Background(), stackID, "create", "failed", err.Error())
 			return
 		}
 	}
 	if lifecycleErr == nil {
-		_ = o.syncAlerts(ctx, stack.ID, spec.Alerts)
+		if err := o.syncAlerts(ctx, stack.ID, spec.Alerts); err != nil {
+			log.Warn("orchestrator: provision: sync alerts", zap.Error(err))
+		}
 	}
 
 	if stack.BackupNodeID != "" {
 		for _, payload := range datasets {
 			if _, err := o.pool.Execute(ctx, stack.BackupNodeID, "fs.dataset.create", payload); err != nil {
-				o.log.Warn("orchestrator: provision: create dataset on secondary (non-fatal)", zap.String("id", stackID), zap.Error(err))
+				log.Warn("orchestrator: provision: create dataset on secondary (non-fatal)", zap.String("secondary_node_id", stack.BackupNodeID), zap.String("dataset", payload.Dataset), zap.Error(err))
 			}
 		}
 	}
 
-	o.log.Info("orchestrator: provisioned", zap.String("stack", stack.Name))
+	log.Info("orchestrator: provisioned")
 	o.applyEvent(stack.PrimaryNodeID, stackID, run.EventProvisionDone)
 	actor, operationID := o.activeOperationIdentity(ctx, stackID)
 	_ = operation.RecordEvent(context.Background(), o.db, operation.Event{StackID: stackID, Type: "Created", Outcome: "succeeded", Actor: actor, OperationID: operationID})
@@ -339,40 +349,40 @@ func restoreBindData(stackName string, mounts map[string]compose.Mount) error {
 func (o *Orchestrator) provisionNetwork(ctx context.Context, stack *config.Stack, spec *compose.LifecycleSpec) error {
 	pools, err := ipam.ListPools(ctx, o.db)
 	if err != nil {
-		return err
+		return fmt.Errorf("list network pools: %w", err)
 	}
 	status, err := ipam.HostStatus(ctx, o.pool, stack.PrimaryNodeID)
 	if err != nil {
-		return err
+		return fmt.Errorf("read host network status: %w", err)
 	}
 	selected, err := ipam.SelectPool(pools, spec.NetworkPool, status.Config.DefaultPoolID, stack.PrimaryNodeID)
 	if err != nil {
-		return err
+		return fmt.Errorf("select network pool: %w", err)
 	}
 	if err := ipam.Eligible(ctx, o.pool, *selected, stack.PrimaryNodeID); err != nil {
-		return err
+		return fmt.Errorf("check network pool %s eligibility: %w", selected.ID, err)
 	}
 	address, err := ipam.AllocateIPv4(ctx, o.db, *selected, stack.ID)
 	if err != nil {
-		return err
+		return fmt.Errorf("allocate address from network pool %s: %w", selected.ID, err)
 	}
 	prefix, _ := netip.ParsePrefix(selected.CIDR)
 	if err := o.db.Execute(ctx, []rqlite.Statement{{SQL: `INSERT INTO stack_runtime(stack_id,stack_ip,network_pool,active_node_id,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(stack_id) DO UPDATE SET stack_ip=excluded.stack_ip,network_pool=excluded.network_pool,active_node_id=excluded.active_node_id,updated_at=excluded.updated_at`, Params: []interface{}{stack.ID, address, selected.ID, stack.PrimaryNodeID, time.Now().UTC()}}}); err != nil {
 		_ = ipam.ReleaseIPv4(ctx, o.db, stack.ID)
-		return err
+		return fmt.Errorf("save network allocation: %w", err)
 	}
 	service := hostnetwork.Service{StackID: stack.ID, PoolID: selected.ID, Address: address + "/" + strconv.Itoa(prefix.Bits())}
 	if _, err := o.pool.Execute(ctx, stack.PrimaryNodeID, "net.service.add", service); err != nil {
 		if _, cleanupErr := o.pool.Execute(ctx, stack.PrimaryNodeID, "net.service.del", service); cleanupErr == nil {
 			_ = ipam.ReleaseIPv4(ctx, o.db, stack.ID)
 		}
-		return err
+		return fmt.Errorf("add host network service: %w", err)
 	}
 	if err := ipam.ActivateIPv4(ctx, o.db, stack.ID); err != nil {
 		if _, cleanupErr := o.pool.Execute(ctx, stack.PrimaryNodeID, "net.service.del", service); cleanupErr == nil {
 			_ = ipam.ReleaseIPv4(ctx, o.db, stack.ID)
 		}
-		return err
+		return fmt.Errorf("activate network allocation: %w", err)
 	}
 	return nil
 }
