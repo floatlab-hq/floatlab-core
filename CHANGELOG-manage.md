@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add alert and alert-rule CLI/palette commands for listing, inspection, timed muting, enabling/disabling, and validated partial JSON edits, with action and resource completion.
+- Add an alert silence API and preserve mute deadlines across incident notifications while evaluation and recovery continue.
+- Advance update command completions through component, action, and node choices in both the web palette and interactive CLI.
+
 - Use the uuid library for idempotency keys so command, update, backup, and restore actions work over HTTP when crypto.randomUUID is unavailable.
 
 ## 0.1.4

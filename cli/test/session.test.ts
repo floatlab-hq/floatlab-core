@@ -25,6 +25,27 @@ test("interactive input submits the typed command", async () => {
   expect(await answer).toBe("exit");
 });
 
+test("update completion advances to management actions", async () => {
+  const input = new PassThrough() as PassThrough & { isTTY: boolean; setRawMode(value: boolean): void };
+  const output = new PassThrough() as PassThrough & { columns: number };
+  input.isTTY = true; input.setRawMode = () => {}; output.columns = 80;
+  const seen: string[] = [];
+  const answer = commandInput(async value => {
+    seen.push(value);
+    if (value === "upd") return [{ value: "update", appendSpace: true }];
+    if (value === "update ") return [{ value: "management", appendSpace: true }];
+    if (value === "update management ") return [{ value: "status", appendSpace: true }];
+    return [];
+  }, [], { input, output });
+  await Bun.sleep(0); input.write("upd");
+  await Bun.sleep(0); input.write("\t");
+  await Bun.sleep(0); input.write("\t");
+  await Bun.sleep(0); input.write("\t");
+  await Bun.sleep(0); input.write("\r");
+  expect(await answer).toBe("update management status");
+  expect(seen).toContain("update management ");
+});
+
 test("login asks for a second factor and sends the supplied factor", async () => {
   const server = Bun.serve({ port: 0, async fetch(request) {
     const body = await request.json() as { username: string; password: string; totp_code?: string; recovery_code?: string };

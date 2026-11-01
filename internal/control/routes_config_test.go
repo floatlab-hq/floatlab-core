@@ -108,6 +108,38 @@ func TestManagementCRUDWithSQLite(t *testing.T) {
 		t.Fatalf("evaluation settings lost: %+v", changed)
 	}
 	call("GET", "/alert-rules/"+rid, nil, 200)
+	if err := db.Execute(ctx, []rqlite.Statement{{SQL: `INSERT INTO alerts(id,rule_id,severity,kind,state,message,created_at) VALUES('mute-test',?,'warning','evaluator','active','test incident',?)`, Params: []interface{}{rid, time.Now().UTC().Format(time.RFC3339Nano)}}}); err != nil {
+		t.Fatal(err)
+	}
+	alertNotification := call("POST", "/notifications", map[string]interface{}{"alert_id": "mute-test", "title": "incident", "body": "still firing", "severity": "warning"}, 201)
+	call("POST", "/alerts/mute-test/silence", map[string]string{"until": "invalid"}, 400)
+	call("POST", "/alerts/mute-test/silence", map[string]string{"until": time.Now().Add(-time.Hour).Format(time.RFC3339)}, 400)
+	deadline := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+	call("POST", "/alerts/missing/silence", map[string]string{"until": deadline}, 404)
+	muted := call("POST", "/alerts/mute-test/silence", map[string]string{"until": deadline}, 200)
+	if muted["state"] != "silenced" || muted["silenced_until"] != deadline {
+		t.Fatalf("mute response: %+v", muted)
+	}
+	notificationID := alertNotification["id"].(string)
+	if got := call("GET", "/notifications/"+notificationID, nil, 200); got["state"] != "silenced" {
+		t.Fatalf("notification not muted: %+v", got)
+	}
+	if err := db.Execute(ctx, []rqlite.Statement{
+		{SQL: `UPDATE alerts SET silenced_until=? WHERE id='mute-test'`, Params: []interface{}{time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)}},
+		{SQL: `UPDATE notifications SET silenced_until=? WHERE id=?`, Params: []interface{}{time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano), notificationID}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := call("GET", "/alerts/mute-test", nil, 200); got["state"] != "active" {
+		t.Fatalf("mute did not expire: %+v", got)
+	}
+	if got := call("GET", "/notifications/"+notificationID, nil, 200); got["state"] != "unread" {
+		t.Fatalf("notification mute did not expire: %+v", got)
+	}
+	if err := db.Execute(ctx, []rqlite.Statement{{SQL: `UPDATE alerts SET state='resolved' WHERE id='mute-test'`}}); err != nil {
+		t.Fatal(err)
+	}
+	call("POST", "/alerts/mute-test/silence", map[string]string{"until": deadline}, 409)
 	call("DELETE", "/alert-rules/"+rid, nil, 204)
 	call("GET", "/alert-rules/"+rid, nil, 404)
 	notification := call("POST", "/notifications", map[string]interface{}{"title": "test", "body": "message", "severity": "warning", "stack_id": "test-stack"}, 201)

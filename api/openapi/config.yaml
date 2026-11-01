@@ -498,6 +498,33 @@ paths:
                 items:
                   $ref: '#/components/schemas/Alert'
 
+  /alerts/{id}/silence:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+    post:
+      summary: Mute an active alert and its notifications until a given time
+      operationId: silenceAlert
+      tags: [config]
+      description: Evaluation and recovery continue. Muted active incidents are returned as silenced until the deadline, then active again.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [until]
+              properties:
+                until: {type: string, format: date-time}
+      responses:
+        '200':
+          description: Muted alert.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Alert'}
+        '400': {description: A future RFC3339 timestamp is required.}
+        '404': {description: Alert not found.}
+        '409': {description: Alert is no longer active.}
+
   /alerts/{id}:
     parameters:
       - name: id

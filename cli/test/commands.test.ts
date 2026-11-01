@@ -7,9 +7,24 @@ test("CLI subprocesses create from a file and keep output pipeable", async () =>
   const directory = await mkdtemp(join(tmpdir(), "floatlab-cli-test-"));
   const compose = "name: demo\nservices: {}\n";
   let created = false;
+  const alert = {id:"alert-one",rule_id:"rule-one",state:"active",severity:"warning",message:"Disk full"};
+  const rule = {id:"rule-one",name:"Disk capacity",enabled:true,severity:"warning",condition:"disk > 90",evaluations:[{state:"firing"}]};
   const server = Bun.serve({ port: 0, async fetch(request) {
     expect(request.headers.get("authorization")).toBe("Bearer test-token");
     const path = new URL(request.url).pathname;
+    if (path === "/api/v1/alerts") return Response.json([alert]);
+    if (path === "/api/v1/alerts/alert-one/silence") {
+      const {until}=await request.json() as {until:string};
+      expect(Date.parse(until)).toBeGreaterThan(Date.now());
+      expect(request.headers.get("idempotency-key")).toBeTruthy();
+      return Response.json({...alert,state:"silenced",silenced_until:until});
+    }
+    if (path === "/api/v1/alert-rules") return Response.json([rule]);
+    if (path === "/api/v1/alert-rules/rule-one" && request.method === "PUT") {
+      const changes=await request.json();
+      expect(request.headers.get("idempotency-key")).toBeTruthy();
+      return Response.json({...rule,...changes as object});
+    }
     if (path === "/api/v1/stacks" && request.method === "GET") return Response.json([{ id: "stack", name: "demo", state: "RunningPrimary", primary_node: "node1" }]);
     if (path === "/api/v1/stacks/stack/config") return new Response(compose);
     if (path === "/api/v1/stacks/stack/containers") return Response.json([{ id: "container", name: "demo-web-1", service: "web", status: "running" }]);
@@ -28,6 +43,11 @@ test("CLI subprocesses create from a file and keep output pipeable", async () =>
     const file = join(directory, "compose=fixture.yaml"); await writeFile(file, compose);
     expect(await run(["create", "demo", `--file=${file}`])).toEqual({ stdout: "Created demo.\n", stderr: "", code: 0 });
     expect(created).toBe(true);
+    expect((await run(["alerts","list","active"])).stdout).toContain("Disk full");
+    expect((await run(["alerts","mute","alert-one","1h"])).stdout).toContain("Muted alert-one until");
+    expect((await run(["alert-rules","list"])).stdout).toContain("firing");
+    expect((await run(["alert-rules","disable","rule-one"])).stdout).toContain('"enabled": false');
+    expect((await run(["alert-rules","edit","rule-one",'{"condition":"disk > 95"}'])).stdout).toContain('"condition": "disk > 95"');
     expect((await run(["list"])).stdout).toContain("RunningPrimary");
     expect((await run(["config", "demo"])).stdout.trimEnd()).toBe(compose.trimEnd());
     expect((await run(["stats", "demo"])).stdout).toContain("123");

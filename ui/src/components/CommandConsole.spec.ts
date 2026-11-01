@@ -43,6 +43,31 @@ afterEach(() => {
 });
 
 describe("CommandPalette", () => {
+  it("shows management actions and nodes as update tokens are completed", async () => {
+    mountPalette(api({ listNodes: vi.fn().mockResolvedValue([{ id: "node-1", name: "fl-x220", status: "ready" }]) }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { altKey: true, code: "Slash" }));
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("#palette-input")!;
+    input.value = "upd";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    await settle();
+    expect(input.value).toBe("update ");
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    await settle();
+    expect(input.value).toBe("update management ");
+    expect(Array.from(document.querySelectorAll("#palette-options code"), item => item.textContent)).toEqual(["releases", "status", "start", "rollback", "cleanup"]);
+    input.value += "sta";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    expect(Array.from(document.querySelectorAll("#palette-options code"), item => item.textContent)).toEqual(["status", "start"]);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    await settle();
+    expect(input.value).toBe("update management status ");
+    expect(document.querySelector("#palette-options code")?.textContent).toBe("fl-x220");
+  });
+
   it("opens with Alt+/, completes the final token, and restores focus on Escape", async () => {
     const origin = document.createElement("button");
     document.body.append(origin);

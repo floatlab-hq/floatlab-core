@@ -102,7 +102,9 @@ func save(ctx context.Context, db *rqlite.Client, broker *notify.Broker, rule Ru
 		next.PendingSince, next.RecoverySince = time.Time{}, time.Time{}
 	}
 	if notification != nil {
-		statements = append(statements, rqlite.Statement{SQL: `INSERT INTO notifications(id,alert_id,stack_id,node_id,kind,severity,title,body,state,created_at) SELECT ?,?,?,?,?,?,?,?,?,? WHERE` + guard, Params: append([]interface{}{notification.ID, notification.AlertID, stackID, nodeID, notification.Kind, notification.Severity, notification.Title, notification.Body, notification.State, now.Format(time.RFC3339Nano)}, guardParams...)})
+		statements = append(statements, rqlite.Statement{SQL: `INSERT INTO notifications(id,alert_id,stack_id,node_id,kind,severity,title,body,state,created_at,silenced_until)
+		 SELECT ?,?,?,?,?,?,?,?,CASE WHEN julianday(silenced_until)>julianday(?) THEN 'silenced' ELSE 'unread' END,?,silenced_until FROM alerts WHERE id=? AND` + guard,
+			Params: append([]interface{}{notification.ID, notification.AlertID, stackID, nodeID, notification.Kind, notification.Severity, notification.Title, notification.Body, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), notification.AlertID}, guardParams...)})
 	}
 	stateJSON, err := json.Marshal(next)
 	if err != nil {
@@ -114,7 +116,7 @@ func save(ctx context.Context, db *rqlite.Client, broker *notify.Broker, rule Ru
 	}
 	// Only the winning transaction publishes; persisted notifications survive SSE gaps.
 	if broker != nil && notification != nil {
-		result, err := db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT id FROM notifications WHERE id=?`, Params: []interface{}{notification.ID}})
+		result, err := db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT id FROM notifications WHERE id=? AND state!='silenced'`, Params: []interface{}{notification.ID}})
 		if err != nil {
 			return err
 		}

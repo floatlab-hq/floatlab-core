@@ -9,6 +9,17 @@ export type Notification = components["schemas"]["Notification"];
 export type RaftHealth = components["schemas"]["RaftHealth"];
 export type LoginRequest = components["schemas"]["LoginRequest"];
 export type TokenResponse = components["schemas"]["TokenResponse"];
+export type Alert = components["schemas"]["Alert"];
+export type AlertRule = components["schemas"]["AlertRule"];
+export type AlertRuleUpdate = Partial<components["schemas"]["AlertRuleUpdate"]>;
+export interface AlertsApi {
+  listAlerts(state?: Alert["state"]): Promise<Alert[]>;
+  getAlert(id: string): Promise<Alert>;
+  silenceAlert(id: string, until: string, key: string): Promise<Alert>;
+  listAlertRules(): Promise<AlertRule[]>;
+  getAlertRule(id: string): Promise<AlertRule>;
+  updateAlertRule(id: string, changes: AlertRuleUpdate, key: string): Promise<AlertRule>;
+}
 
 export interface DashboardApi {
   createAuthToken(credentials: LoginRequest): Promise<TokenResponse>;
@@ -31,7 +42,7 @@ export type CommandResult =
   | { kind: "operation"; action: string; state?: string; operationId?: string; text?: string }
   | { kind: "error"; message: string; status?: number };
 
-export type Completion = { value: string; description?: string };
+export type Completion = { value: string; description?: string; appendSpace?: boolean };
 
 export interface CommandRuntime {
   interactive: boolean;

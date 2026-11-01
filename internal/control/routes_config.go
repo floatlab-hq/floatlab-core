@@ -30,6 +30,7 @@ func registerConfigRoutes(r chi.Router, s *Server) {
 		r.Delete("/alert-rules/{id}", s.labMutation(func(target *Server) http.HandlerFunc { return target.handleAlertRules }))
 		r.Get("/alerts", s.handleAlerts)
 		r.Get("/alerts/{id}", s.handleAlerts)
+		r.Post("/alerts/{id}/silence", s.handleSilenceAlert)
 	})
 }
 
@@ -353,8 +354,10 @@ func (s *Server) handleAlertRules(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
-	query := `SELECT id,rule_id,stack_id,node_id,severity,state,message,silenced_until,resolved_at,created_at,labels,updated_at,resolution_reason,
-	(SELECT json_extract(state_json,'$.Status') FROM alert_evaluations WHERE json_extract(state_json,'$.AlertID')=alerts.id) AS evaluation_state FROM alerts WHERE 1=1`
+	query := `SELECT * FROM (SELECT id,rule_id,stack_id,node_id,severity,
+	CASE WHEN state='active' AND julianday(silenced_until)>julianday('now') THEN 'silenced' ELSE state END AS state,
+	message,silenced_until,resolved_at,created_at,labels,updated_at,resolution_reason,
+	(SELECT json_extract(state_json,'$.Status') FROM alert_evaluations WHERE json_extract(state_json,'$.AlertID')=alerts.id) AS evaluation_state FROM alerts) WHERE 1=1`
 	args := []interface{}{}
 	if id := chi.URLParam(r, "id"); id != "" {
 		query += " AND id=?"
@@ -387,4 +390,41 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	} else {
 		writeJSON(w, 200, rows)
 	}
+}
+
+func (s *Server) handleSilenceAlert(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Until string `json:"until"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	until, err := time.Parse(time.RFC3339, body.Until)
+	if err != nil || !until.After(time.Now()) {
+		writeError(w, 400, "until must be a future RFC3339 timestamp")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	rows, err := s.queryObjects(r, `SELECT state FROM alerts WHERE id=?`, id)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if len(rows) == 0 {
+		writeError(w, 404, "alert not found")
+		return
+	}
+	if rows[0]["state"] != "active" {
+		writeError(w, 409, "only active alerts can be muted")
+		return
+	}
+	deadline := until.UTC().Format(time.RFC3339Nano)
+	if err := s.db.Execute(r.Context(), []rqlite.Statement{
+		{SQL: `UPDATE alerts SET silenced_until=? WHERE id=? AND state='active'`, Params: []interface{}{deadline, id}},
+		{SQL: `UPDATE notifications SET state='silenced',silenced_until=? WHERE alert_id=? AND resolved_at IS NULL AND EXISTS(SELECT 1 FROM alerts WHERE id=? AND state='active')`, Params: []interface{}{deadline, id, id}},
+	}); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	s.handleAlerts(w, r)
 }

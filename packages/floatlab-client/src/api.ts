@@ -1,6 +1,7 @@
 import type { Container, ExecResult, FloatLabApi, HostNetworkApi, HostNetworkStatus, HostNetworkChange, NetworkPool, LogLine, Node, Stack, StackMetricSeries, UpdateApi, UpdateRelease, UpdateStatus } from "./types";
 import type { DashboardApi, TokenResponse, RaftHealth, Notification, NodeStats, StorageStats } from "./types";
 import type { LabApi, BackupApi, BackupRestoreApi } from "./types";
+import type { AlertsApi } from "./types";
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) { super(message); }
@@ -17,7 +18,7 @@ export function normalizeApiUrl(url: string): string {
   return parsed.toString().replace(/\/$/, "");
 }
 
-export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNetworkApi & DashboardApi & UpdateApi & LabApi & BackupApi & BackupRestoreApi {
+export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNetworkApi & DashboardApi & UpdateApi & LabApi & BackupApi & BackupRestoreApi & AlertsApi {
   const baseUrl = normalizeApiUrl(options.baseUrl);
   const send = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
     const headers = new Headers(init.headers);
@@ -47,6 +48,12 @@ export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNe
   const changePath = (node: string, change: string) => `${hostNetworkPath(node)}/changes/${encodeURIComponent(change)}`;
   const updatePath = (node: string, component: string) => `/nodes/${encodeURIComponent(node)}/updates/${component}`;
   return {
+    listAlerts: state => send(`/alerts${query({state})}`),
+    getAlert: id => send(`/alerts/${encodeURIComponent(id)}`),
+    silenceAlert: (id, until, key) => mutation(`/alerts/${encodeURIComponent(id)}/silence`, "POST", key, {until}),
+    listAlertRules: () => send('/alert-rules'),
+    getAlertRule: id => send(`/alert-rules/${encodeURIComponent(id)}`),
+    updateAlertRule: (id, changes, key) => mutation(`/alert-rules/${encodeURIComponent(id)}`, "PUT", key, changes),
     listBackups: values => send(`/storage/backups${query(values)}`),
     getBackupConfig: async stack => {
       let response: Response;

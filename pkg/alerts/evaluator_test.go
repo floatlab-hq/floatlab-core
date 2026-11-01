@@ -56,6 +56,57 @@ func rows(t *testing.T, db *rqlite.Client, query string) [][]interface{} {
 	return result.Values
 }
 
+func TestMutePreservesEvaluationAndSilencesEscalationUntilExpiry(t *testing.T) {
+	db := database(t)
+	ctx := context.Background()
+	broker := notify.NewBroker()
+	events, cancel := broker.Subscribe()
+	defer cancel()
+	metrics := &metricStub{rows: map[string][]stats.InstantSample{}}
+	evaluator := Evaluator{DB: db, Metrics: metrics, Broker: broker, IsLeader: func() bool { return true }}
+	rule := testRule()
+	rule.For = 0
+	rule.Severity = "info"
+	now := time.Now().UTC().Truncate(time.Second)
+	tick := func(at time.Time) {
+		t.Helper()
+		metrics.rows[rule.Condition] = []stats.InstantSample{{Labels: map[string]string{"node_id": "node"}, Value: 0, ObservedAt: at}}
+		if err := evaluator.Tick(ctx, []Rule{rule}, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tick(now)
+	if len(events) != 1 {
+		t.Fatalf("missing initial alert: %d", len(events))
+	}
+	if err := db.Execute(ctx, []rqlite.Statement{{SQL: `UPDATE alerts SET silenced_until=?`, Params: []interface{}{now.Add(time.Hour).Format(time.RFC3339Nano)}}}); err != nil {
+		t.Fatal(err)
+	}
+	rule.Severity = "warning"
+	tick(now.Add(time.Minute))
+	if len(events) != 1 {
+		t.Fatal("muted escalation was delivered")
+	}
+	if got := rows(t, db, `SELECT state,severity FROM alerts`); len(got) != 1 || got[0][0] != "active" || got[0][1] != "warning" {
+		t.Fatalf("mute changed incident evaluation: %v", got)
+	}
+	if got := rows(t, db, `SELECT state,silenced_until FROM notifications WHERE kind='alert.escalated'`); len(got) != 1 || got[0][0] != "silenced" || got[0][1] == nil {
+		t.Fatalf("mute was not inherited: %v", got)
+	}
+	rule.Severity = "critical"
+	tick(now.Add(2 * time.Hour))
+	if len(events) != 2 {
+		t.Fatal("expired mute suppressed a new escalation")
+	}
+	rule.Enabled = false
+	if err := evaluator.Tick(ctx, []Rule{rule}, now.Add(3*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got := rows(t, db, `SELECT state FROM alerts`); got[0][0] != "resolved" {
+		t.Fatalf("mute prevented resolution: %v", got)
+	}
+}
+
 func TestPersistentPerResourceLifecycle(t *testing.T) {
 	db := database(t)
 	metrics := &metricStub{rows: map[string][]stats.InstantSample{}}

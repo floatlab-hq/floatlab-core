@@ -140,6 +140,37 @@ and PR behavior plus Compose merging. After building the image,
 reload and restart persistence using disposable containers and volumes, with no
 appliance mounts or published ports.
 
+## Alert commands
+
+The interactive CLI and web command palette share these commands:
+
+```text
+alerts list active
+alerts list silenced
+alerts list all
+alerts show ALERT_ID
+alerts mute ALERT_ID 1h
+alert-rules list
+alert-rules show RULE_ID
+alert-rules disable RULE_ID
+alert-rules enable RULE_ID
+alert-rules edit RULE_ID '{"condition":"cpu_usage_percent > 95","for_duration":"5m"}'
+```
+
+Alert and rule IDs support unique prefixes; rules can also be selected by their
+quoted name. Tab completes actions, states, IDs, and example mute durations.
+Rule listings include enabled status and per-resource evaluation states;
+`alert-rules show` includes labels, observations, freshness, and evaluation errors.
+Use `alerts list all` to see active, muted, and resolved incidents with their rule IDs.
+
+Muting accepts positive whole minutes, hours, or days (`30m`, `1h`, `1d`). It
+silences the current incident's notifications until that deadline while evaluation
+and recovery continue. New notifications for the same incident inherit the mute.
+After expiry, an unresolved incident appears active again. A new incident after
+recovery has its own identity and is not muted. Disabling a rule stops its
+evaluation and resolves its incidents on the next evaluator tick. JSON edits are
+partial updates; omitted settings are preserved and the server validates changes.
+
 ## Appliance updates
 
 Management and host updates are coordinated by the local host daemon. From the

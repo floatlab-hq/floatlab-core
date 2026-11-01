@@ -1,5 +1,6 @@
 import { ApiError } from "./api";
 import { v4 as idempotencyKey } from "uuid";
+import type { AlertsApi, AlertRuleUpdate } from "./types";
 import { backupRestoreDatasets } from "./backups";
 import type { CommandResult, CommandRuntime, Completion, Container, FloatLabApi, Node, Stack, UpdateApi, UpdateAction, UpdateComponent, LabApi, LabJoinRequest, BackupApi, BackupRestoreApi } from "./types";
 
@@ -23,6 +24,8 @@ export function tokenize(input: string): string[] {
 
 type Parsed = { name: string; positionals: string[]; flags: Record<string, string | boolean> };
 const commands = [
+  ["alerts", [], "alerts [list [active|silenced|resolved|all]] | alerts show <id> | alerts mute <id> <duration: 30m|1h|1d>"],
+  ["alert-rules", [], "alert-rules [list] | alert-rules show|enable|disable <rule> | alert-rules edit <rule> '<JSON changes>'"],
   ["backup", [], "backup list|history <stack> | backup set <stack> <dataset> <node> <policy> | backup remove|run <stack> <dataset> <node> | backup restore <stack> <new-name> <backup-node> <destination-node> <snapshot> [--source node] [--file compose.yml]"],
   ["lab", [], "lab status|members|invite|join <request-json>|preview <node>|remove <node> <operation>|rotate <operation>|release-peer-address <node> <operation> --confirm-fenced --confirm-reset"],
   ["create", ["new", "add", "mk", "make"], "create <name> [--file path | --primary node] [--secondary node] [--start]"],
@@ -78,7 +81,7 @@ const text = (value: unknown) => typeof value === "string" ? value : JSON.string
 export class CommandEngine {
   private stacks?: { at: number; value: Stack[] };
   private nodes?: { at: number; value: Node[] };
-  constructor(readonly api: FloatLabApi & Partial<UpdateApi & LabApi & BackupApi & BackupRestoreApi>, readonly runtime: CommandRuntime, private readonly ttlMs = 10_000) {}
+  constructor(readonly api: FloatLabApi & Partial<UpdateApi & LabApi & BackupApi & BackupRestoreApi & AlertsApi>, readonly runtime: CommandRuntime, private readonly ttlMs = 10_000) {}
 
   async dispatch(input: string | string[]): Promise<{ code: number; result: CommandResult }> {
     try {
@@ -94,15 +97,26 @@ export class CommandEngine {
     try { words = tokenize(input); } catch { return []; }
     const last = input.endsWith(" ") ? "" : words.at(-1) ?? "";
     const matching = (choices: Completion[]) => choices.filter((choice) => choice.value.toLowerCase().startsWith(last.toLowerCase()));
-    if (words.length <= 1 && !input.endsWith(" ")) return matching([...commands.flatMap(([name, names, description]) => [name, ...names].map((value) => ({ value, description }))), ...["help", "exit", "quit"].map((value) => ({ value, description: "interactive command" }))]);
+    if (words.length <= 1 && !input.endsWith(" ")) return matching([...commands.flatMap(([name, names, description]) => [name, ...names].map((value) => ({ value, description, ...(["update", "alerts", "alert-rules"].includes(name) ? { appendSpace: true } : {}) }))), ...["help", "exit", "quit"].map((value) => ({ value, description: "interactive command" }))]);
     const name = aliases.get(words[0] ?? ""); if (!name) return [];
+    if (name === "alerts" || name === "alert-rules") {
+      const index = input.endsWith(" ") ? words.length : words.length - 1;
+      if (index === 1) return matching((name === "alerts" ? ["list", "show", "mute"] : ["list", "show", "enable", "disable", "edit"]).map(value => ({value, appendSpace: true})));
+      if (index === 2 && name === "alerts" && words[1] === "list") return matching(["active", "silenced", "resolved", "all"].map(value => ({value})));
+      if (index === 2 && ["show", "mute", "enable", "disable", "edit"].includes(words[1]!)) {
+        if (name === "alerts") return matching((await this.api.listAlerts?.().catch(() => []) ?? []).filter(alert => words[1] !== "mute" || alert.state !== "resolved").map(alert => ({value: alert.id, description: `${alert.state}: ${alert.message}`, appendSpace: words[1] === "mute"})));
+        return matching((await this.api.listAlertRules?.().catch(() => []) ?? []).map(rule => ({value: rule.id, description: rule.name, appendSpace: words[1] === "edit"})));
+      }
+      if (index === 3 && name === "alerts" && words[1] === "mute") return matching(["30m", "1h", "1d"].map(value => ({value})));
+      return [];
+    }
     if (name === "lab") return words.length <= 2 ? matching(["status", "members", "invite", "join", "preview", "remove", "rotate", "release-peer-address"].map(value => ({ value }))) : [];
     if (name === "update") {
       const index = input.endsWith(" ") ? words.length : words.length - 1;
-      if (index === 1) return matching(["management", "host"].map(value => ({ value })));
-      if (index === 2) return matching((words[1] === "host" ? ["releases", "status", "prepare", "activate", "commit", "rollback", "cleanup"] : ["releases", "status", "start", "rollback", "cleanup"]).map(value => ({ value })));
+      if (index === 1) return matching(["management", "host"].map(value => ({ value, appendSpace: true })));
+      if (index === 2) return matching((words[1] === "host" ? ["releases", "status", "prepare", "activate", "commit", "rollback", "cleanup"] : ["releases", "status", "start", "rollback", "cleanup"]).map(value => ({ value, appendSpace: true })));
       if (index === 3) return matching((await this.getNodes().catch(() => [])).map(node => ({ value: node.name, description: node.status })));
-      if (last.startsWith("--")) return matching((words[2] === "releases" ? ["--upstream"] : ["start", "prepare"].includes(words[2] ?? "") ? ["--skip-dry-run", "--upstream"] : []).map(value => ({ value })));
+      if (last.startsWith("--")) return matching((words[2] === "releases" ? ["--upstream"] : ["start", "prepare"].includes(words[2] ?? "") ? ["--skip-dry-run", "--upstream"] : []).map(value => ({ value, appendSpace: true })));
       return [];
     }
     if (name === "snapshot") {
@@ -150,6 +164,10 @@ export class CommandEngine {
   private async run(parsed: Parsed): Promise<CommandResult> {
     if (parsed.name === "help") return { kind: "text", text: commands.map(([, aliases, help]) => `${help}${aliases.length ? ` (${aliases.join(", ")})` : ""}`).join("\n") + "\nhelp, exit, quit" };
     const { name, positionals: args, flags } = parsed;
+    if (name === "alerts" || name === "alert-rules") {
+      if (Object.keys(flags).length) throw new CommandError("Alert commands do not accept flags");
+      return name === "alerts" ? this.alerts(args) : this.alertRules(args);
+    }
     if (name === "lab") return this.lab(args, flags);
  if(name === "backup") return args[0] === "restore" ? this.restoreBackup(args.slice(1), flags) : this.backup(args);
     if (name === "config") {
@@ -238,6 +256,48 @@ export class CommandEngine {
       value = await api.releaseLabPeerAddress(node.id, operation!);
     } else throw new CommandError("Invalid or unsupported lab command. See help; removal and rotation require a stable operation ID.");
     return { kind: "text", text: text(value) };
+  }
+
+  private async alerts(args: string[]): Promise<CommandResult> {
+    const api = this.api;
+    if (!api.listAlerts || !api.getAlert || !api.silenceAlert) throw new CommandError("Alert commands are unavailable in this client");
+    const action = args[0] ?? "list";
+    if (action === "list" && args.length <= 2) {
+      const state = args[1] ?? "all";
+      if (!["all", "active", "silenced", "resolved"].includes(state)) throw new CommandError("Alert state must be active, silenced, resolved, or all");
+      const alerts = await api.listAlerts(state === "all" ? undefined : state as "active" | "silenced" | "resolved");
+      return {kind: "table", columns: ["id", "rule", "state", "severity", "message", "muted until"], rows: alerts.map(alert => [alert.id, alert.rule_id, alert.state, alert.severity, alert.message, alert.silenced_until ?? ""])};
+    }
+    if (!["show", "mute"].includes(action) || args.length !== (action === "mute" ? 3 : 2)) throw new CommandError("Usage: alerts list [state] | alerts show <id> | alerts mute <id> <30m|1h|1d>");
+    const alert = exactOne((await api.listAlerts()).map(alert => ({...alert, name: alert.id})), args[1]!, "alert");
+    if (action === "show") return {kind: "text", text: text(await api.getAlert(alert.id))};
+    if (alert.state === "resolved") throw new CommandError("Only active alerts can be muted");
+    const duration = /^([1-9]\d*)(m|h|d)$/.exec(args[2]!);
+    if (!duration) throw new CommandError("Mute duration must be positive minutes, hours, or days, such as 30m, 1h, or 1d");
+    const until = new Date(Date.now() + Number(duration[1]) * {m: 60_000, h: 3_600_000, d: 86_400_000}[duration[2] as "m" | "h" | "d"]);
+    if (!Number.isFinite(until.getTime())) throw new CommandError("Mute duration is too large");
+    if (!await this.confirm(`Mute alert ${alert.id} until ${until.toISOString()}? Evaluation will continue.`)) return {kind: "text", text: "Mute cancelled."};
+    const muted = await api.silenceAlert(alert.id, until.toISOString(), idempotencyKey());
+    return {kind: "text", text: `Muted ${muted.id} until ${muted.silenced_until}.`};
+  }
+
+  private async alertRules(args: string[]): Promise<CommandResult> {
+    const api = this.api;
+    if (!api.listAlertRules || !api.getAlertRule || !api.updateAlertRule) throw new CommandError("Alert rule commands are unavailable in this client");
+    const action = args[0] ?? "list";
+    if (action === "list" && args.length <= 1) return {kind: "table", columns: ["id", "name", "enabled", "severity", "evaluations", "condition"], rows: (await api.listAlertRules()).map(rule => [rule.id, rule.name, String(rule.enabled ?? true), rule.severity, [...new Set((rule.evaluations ?? []).map(evaluation => evaluation.state))].join(", ") || "not evaluated", rule.condition])};
+    if (!["show", "enable", "disable", "edit"].includes(action) || args.length !== (action === "edit" ? 3 : 2)) throw new CommandError("Usage: alert-rules list | alert-rules show|enable|disable <rule> | alert-rules edit <rule> '<JSON changes>'");
+    const rule = exactOne(await api.listAlertRules(), args[1]!, "alert rule");
+    if (action === "show") return {kind: "text", text: text(await api.getAlertRule(rule.id))};
+    let changes: AlertRuleUpdate = {enabled: action === "enable"};
+    if (action === "edit") {
+      try { changes = JSON.parse(args[2]!); } catch { throw new CommandError("Rule changes must be a JSON object"); }
+      if (!changes || typeof changes !== "object" || Array.isArray(changes) || !Object.keys(changes).length) throw new CommandError("Rule changes must be a nonempty JSON object");
+      const fields = ["name", "condition", "severity", "for_duration", "freshness_query", "recovery_condition", "recovery_duration", "max_sample_age", "annotations", "enabled"];
+      if (Object.keys(changes).some(key => !fields.includes(key))) throw new CommandError(`Editable rule fields: ${fields.join(", ")}`);
+    }
+    if (!await this.confirm(`${action} rule ${rule.name}? Changes: ${JSON.stringify(changes)}`)) return {kind: "text", text: "Rule change cancelled."};
+    return {kind: "text", text: text(await api.updateAlertRule(rule.id, changes, idempotencyKey()))};
   }
 
   private async create(args: string[], flags: Record<string, string | boolean>): Promise<CommandResult> {

@@ -71,7 +71,11 @@ const commandPrompt = createPrompt<string, CommandInputConfig>((config, done) =>
     if (isEnterKey(key)) { done(value.trim()); return; }
     if (isUpKey(key)) { if (choices.length) setSelected((selected + choices.length - 1) % choices.length); else { const index = Math.max(0, historyIndex - 1); setHistoryIndex(index); replaceLine(config.history[index] ?? ""); } return; }
     if (isDownKey(key)) { if (choices.length) setSelected((selected + 1) % choices.length); else { const index = Math.min(config.history.length, historyIndex + 1); setHistoryIndex(index); replaceLine(config.history[index] ?? ""); } return; }
-    if (isTabKey(key) && choices[selected]) { replaceLine(replaceLastToken(value, choices[selected]!.value)); return; }
+    if (isTabKey(key) && choices[selected]) {
+      const choice = choices[selected]!;
+      const completed = replaceLastToken(value, choice.value + (choice.appendSpace ? " " : ""));
+      replaceLine(completed); setChoices(await config.complete(completed)); setSelected(0); return;
+    }
     setValue(next); const matches = await config.complete(next); setChoices(matches); setSelected(0);
   });
   const suggestion = choices.slice(0, 6).map((choice, index) => `${index === selected ? ">" : " "} ${choice.value}${choice.description ? ` — ${choice.description}` : ""}`).join("\n");

@@ -96,8 +96,10 @@ function close() {
 function acceptCompletion() {
   const completion = completions.value[active.value];
   if (!completion) return;
-  query.value = query.value.replace(/\S*$/, completion.value);
-  completions.value = [];
+  query.value = query.value.replace(/\S*$/, completion.value + (completion.appendSpace ? " " : ""));
+  active.value = 0;
+  if (completion.appendSpace) void updateCompletions();
+  else completions.value = [];
   void nextTick(() => input.value?.$el.focus());
 }
 

@@ -199,6 +199,8 @@ paths:
     $ref: './config.yaml#/paths/~1alerts'
   /alerts/{id}:
     $ref: './config.yaml#/paths/~1alerts~1{id}'
+  /alerts/{id}/silence:
+    $ref: './config.yaml#/paths/~1alerts~1{id}~1silence'
 
   # Logs
   /logs/stacks/{stack_id}:

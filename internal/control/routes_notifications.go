@@ -9,7 +9,9 @@ import (
 	"time"
 )
 
-const notificationProjection = `SELECT id,alert_id,stack_id,node_id,kind,severity,title,body,state,created_at,resolved_at,silenced_until FROM notifications`
+const notificationProjection = `SELECT * FROM (SELECT id,alert_id,stack_id,node_id,kind,severity,title,body,
+ CASE WHEN state='silenced' AND julianday(silenced_until)<=julianday('now') THEN 'unread' ELSE state END AS state,
+ created_at,resolved_at,silenced_until FROM notifications)`
 
 func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request) {
 	query := notificationProjection + " WHERE 1=1"
