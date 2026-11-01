@@ -85,6 +85,16 @@ func (m Manifest) Validate(tag string) error {
 	}
 	return nil
 }
+
+func (m Manifest) validateRQLiteSource(version string) error {
+	for _, source := range m.RQLiteSources {
+		if source == strings.TrimPrefix(version, "v") {
+			return nil
+		}
+	}
+	return fmt.Errorf("rqlite source %q has no tested transition", version)
+}
+
 func fetchJSON(ctx context.Context, address string, value any) error {
 	u, e := url.Parse(address)
 	if e != nil || u.Scheme != "https" {
@@ -172,14 +182,8 @@ func (l *Linux) Prepare(ctx context.Context, s *Status) error {
 	if e = json.Unmarshal([]byte(version), &status); e != nil {
 		return e
 	}
-	supported := false
-	for _, v := range s.Manifest.RQLiteSources {
-		if v == status.Build.Version {
-			supported = true
-		}
-	}
-	if !supported {
-		return fmt.Errorf("rqlite source %q has no tested transition", status.Build.Version)
+	if e = s.Manifest.validateRQLiteSource(status.Build.Version); e != nil {
+		return e
 	}
 	nodes, e := l.rqliteRead(ctx, "/nodes")
 	if e != nil {

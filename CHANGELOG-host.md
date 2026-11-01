@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.6
+
+- Accept rqlite's leading v in reported versions when checking explicitly tested management update sources, fixing the rejection of v8.26.0 against the tested 8.26.0 baseline.
+- Continue rejecting unlisted versions, prereleases, and malformed prefixes; add regression coverage for these cases.
+- Host upgrade transitions remain unqualified. This release supports staging; automatic activation remains blocked until the source-to-target upgrade and fallback are qualified.
+
 ## 0.1.5
 
 - Preserve stack identifiers, operation identifiers, and severity from structured journal messages as searchable log fields so provisioning diagnostics appear in stack API log queries.
