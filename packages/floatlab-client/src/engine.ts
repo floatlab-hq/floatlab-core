@@ -1,4 +1,5 @@
 import { ApiError } from "./api";
+import { v4 as idempotencyKey } from "uuid";
 import { backupRestoreDatasets } from "./backups";
 import type { CommandResult, CommandRuntime, Completion, Container, FloatLabApi, Node, Stack, UpdateApi, UpdateAction, UpdateComponent, LabApi, LabJoinRequest, BackupApi, BackupRestoreApi } from "./types";
 
@@ -65,7 +66,7 @@ function parse(input: string | string[]): Parsed {
   return { name, positionals, flags };
 }
 
-const idempotencyKey = () => crypto.randomUUID();
+export { idempotencyKey };
 const isMatch = (value: string, item: { id: string; name: string; service?: string }) => item.id === value || item.name === value || item.service === value || item.id.startsWith(value);
 const exactOne = <T extends { id: string; name: string }>(items: T[], value: string, label: string): T => {
   const found = items.filter((item) => isMatch(value, item));

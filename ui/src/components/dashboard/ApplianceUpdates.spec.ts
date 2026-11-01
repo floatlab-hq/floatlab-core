@@ -1,5 +1,5 @@
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UpdateApi } from '@floatlab/client'
 import ApplianceUpdates from './ApplianceUpdates.vue'
 enableAutoUnmount(afterEach)
@@ -12,6 +12,8 @@ function fixture(): UpdateApi {
   }
 }
 describe('Appliance updates', () => {
+  beforeEach(() => vi.stubGlobal('crypto', { getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto) }))
+  afterEach(() => vi.unstubAllGlobals())
   it('selects a release and explicitly submits a management update', async () => {
     const api = fixture()
     const wrapper = mount(ApplianceUpdates, { props: { api, nodeId: 'local' } })

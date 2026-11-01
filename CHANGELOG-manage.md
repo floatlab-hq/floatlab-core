@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Use the uuid library for idempotency keys so command, update, backup, and restore actions work over HTTP when crypto.randomUUID is unavailable.
+
 ## 0.1.4
 
 - Log previously silent provisioning failures with stack and node identifiers, the failing stage, dataset context where applicable, and the underlying error.

@@ -1,5 +1,5 @@
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackupApi, BackupRestoreApi, BackupTarget, Node, Stack } from '@floatlab/client'
 import BackupTargets from './BackupTargets.vue'
 enableAutoUnmount(afterEach)
@@ -9,6 +9,8 @@ function fixture() {
   return { api, stacks: [{ id: 'app', name: 'demo', primary_node: 'a' }] as Stack[], nodes: [{ id: 'a', name: 'Alpha' }, { id: 'b', name: 'Beta' }] as Node[] }
 }
 describe('Backup destinations', () => {
+  beforeEach(() => vi.stubGlobal('crypto', { getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto) }))
+  afterEach(() => vi.unstubAllGlobals())
   it('edits per-mount policy and resolves destination node names', async () => {
     const props = fixture(); const wrapper = mount(BackupTargets, { props })
     await wrapper.get('select').setValue('app'); await flushPromises()

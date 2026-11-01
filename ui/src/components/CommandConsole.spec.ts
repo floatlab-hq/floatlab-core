@@ -134,8 +134,8 @@ describe("CommandPalette", () => {
     await settle();
   });
 
-  it("uses choose and ask to build an interactive upgrade", async () => {
-    vi.stubGlobal("crypto", { randomUUID: () => "test-key" });
+  it("builds an interactive upgrade without crypto.randomUUID on HTTP", async () => {
+    vi.stubGlobal("crypto", { getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto) });
     const fake = api({
       listContainers: vi.fn().mockResolvedValue([{ id: "container-1", name: "web", image: "nginx:1", status: "running" }]),
       upgradeStack: vi.fn().mockResolvedValue({ state: "accepted" }),
@@ -161,6 +161,6 @@ describe("CommandPalette", () => {
     done.dispatchEvent(new Event("change", { bubbles: true }));
     document.querySelector<HTMLFormElement>(".palette-prompt form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await settle();
-    expect(fake.upgradeStack).toHaveBeenCalledWith("stack-1", { web: "nginx:2" }, "test-key");
+    expect(fake.upgradeStack).toHaveBeenCalledWith("stack-1", { web: "nginx:2" }, expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/));
   });
 });

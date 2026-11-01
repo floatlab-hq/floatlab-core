@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { idempotencyKey } from '@floatlab/client'
 import type { UpdateAction, UpdateApi, UpdateComponent, UpdateRelease, UpdateStatus } from '@floatlab/client'
 import UiButton from '../UiButton.vue'
 import UiSelect from '../UiSelect.vue'
@@ -40,7 +41,7 @@ async function run() {
   const request = initial ? { release: release.value } : { operation_id: status.value?.operation_id }
   if (initial ? !request.release : !request.operation_id) return
   const signature = JSON.stringify([props.nodeId, component.value, action, request])
-  if (retry?.signature !== signature) retry = { signature, key: globalThis.crypto.randomUUID() }
+  if (retry?.signature !== signature) retry = { signature, key: idempotencyKey() }
   const version = ++generation
   busy.value = true; error.value = ''
   try {

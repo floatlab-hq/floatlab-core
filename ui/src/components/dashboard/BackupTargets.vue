@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { backupRestoreDatasets } from '@floatlab/client'
+import { backupRestoreDatasets, idempotencyKey } from '@floatlab/client'
 import type { BackupApi, BackupRestoreApi, BackupTarget, Node, Stack } from '@floatlab/client'
 import UiButton from '../UiButton.vue'
 import UiInput from '../UiInput.vue'
@@ -44,7 +44,7 @@ async function change(action: 'save' | 'remove' | 'run', target?: BackupTarget) 
   const id = stack.value
   const selected = target ?? { dataset: dataset.value, node_id: node.value, schedule: schedule.value }
   try {
-    const key = globalThis.crypto.randomUUID()
+    const key = idempotencyKey()
     if (action === 'save') await props.api.putBackupTarget(id, selected, key)
     else if (action === 'remove') await props.api.removeBackupTarget(id, selected, key)
     else await props.api.triggerReplication(id, selected.node_id, selected.dataset, key)
@@ -75,7 +75,7 @@ async function restore() {
   const version = ++generation
   busy.value = true; error.value = ''; restoreMessage.value = ''
   try {
-    await props.api.restoreBackup({name: restoredName.value, source_node_id: props.stacks.find(item => item.id === stack.value)!.primary_node, backup_node_id: backupNode.value, destination_node_id: destination.value, compose_file: compose.value, snapshots: restoreDatasets.value.map(dataset => ({dataset, snapshot: restorePoint.value}))}, globalThis.crypto.randomUUID())
+    await props.api.restoreBackup({name: restoredName.value, source_node_id: props.stacks.find(item => item.id === stack.value)!.primary_node, backup_node_id: backupNode.value, destination_node_id: destination.value, compose_file: compose.value, snapshots: restoreDatasets.value.map(dataset => ({dataset, snapshot: restorePoint.value}))}, idempotencyKey())
     if (active && version === generation) { restoreMessage.value = 'Restore and start queued. Track the new app in the dashboard.'; emit('restored') }
   } catch (cause) { if (active && version === generation) error.value = cause instanceof Error ? cause.message : 'Restore failed' }
   finally { if (active && version === generation) busy.value = false }
