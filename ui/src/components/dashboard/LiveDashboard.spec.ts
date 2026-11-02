@@ -10,6 +10,16 @@ import LabDashboard from './LabDashboard.vue'
 enableAutoUnmount(afterEach)
 afterEach(() => vi.useRealTimers())
 describe('Live dashboard', () => {
+  it('mounts the command palette in the navigation box instead of a floating overlay', async () => {
+    const wrapper = mount(LiveDashboard, { props: { api: fixtureApi() } })
+    await flushPromises()
+    expect(wrapper.get('.dashboard-command-container').findComponent(CommandConsole).props('inline')).toBe(true)
+    expect(wrapper.find('.palette-trigger').exists()).toBe(false)
+    await wrapper.get('[aria-label="Open command palette"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.dashboard-command-container').find('#palette-input').exists()).toBe(true)
+    expect(wrapper.find('.palette-backdrop').exists()).toBe(false)
+  })
   it('renders through the Lab Dashboard story component and opens the node key', async () => {
     const wrapper = mount(LiveDashboard, { props: { api: fixtureApi() } })
     await flushPromises()

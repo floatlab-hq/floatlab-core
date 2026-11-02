@@ -15,7 +15,7 @@ export const Activity: StoryObj<typeof meta> = {
 export const PaletteInContext: StoryObj<typeof meta> = {
   args: { api: interactiveFixtureApi() },
   play: async ({ canvasElement }) => {
-    await userEvent.click(await within(canvasElement).findByRole('button', { name: 'Command Palette' }))
+    await userEvent.click(await within(canvasElement).findByRole('button', { name: 'Open command palette' }))
   },
 }
 export const Empty: StoryObj<typeof meta> = { args: { api: interactiveFixtureApi([]) } }

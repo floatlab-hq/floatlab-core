@@ -38,7 +38,7 @@ const commands = [
 <template>
   <div id="dashboard" class="lab-dashboard" :class="{ embedded }">
     <div class="dashboard-heading-area">
-      <DashboardNavigation v-if="!embedded" @command="live ? emit('action', 'command') : commandOpen = true" @settings="emit('action', 'settings')" />
+      <DashboardNavigation v-if="!embedded" @command="live ? emit('action', 'command') : commandOpen = true" @settings="emit('action', 'settings')"><template v-if="$slots.command" #command><slot name="command" /></template></DashboardNavigation>
       <LabEventLog :events="events" :readonly="live" @select="emit('action', 'event', $event)" />
       <slot name="messages" />
     </div>

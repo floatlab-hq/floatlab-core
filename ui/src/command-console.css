@@ -24,6 +24,17 @@
 
 .palette-trigger span { color: var(--text-placeholder); }
 
+.palette-inline { position: relative; min-width: 0; height: var(--height-control); }
+.palette-inline .button.palette-inline-trigger { width: 100%; justify-content: space-between; text-align: left; }
+.palette-inline .command-hint { color: var(--text-placeholder); }
+.palette-inline-popover { position: absolute; z-index: 20; top: 0; left: 0; right: 0; }
+.palette-inline-popover .palette { width: 100%; padding: 0; max-height: calc(100dvh - 64px); }
+.palette-inline-popover .palette-input { height: var(--height-control); border: 0; background: var(--surface-default); }
+.palette-inline-popover .palette-options { margin: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; }
+.palette-inline-popover .palette-hint, .palette-inline-popover .palette-result, .palette-inline-popover .palette-running { display: block; margin: 0; padding: 12px; }
+@media (max-width: 800px) { .palette-inline .command-hint { display: none; } }
+@media (max-width: 500px) { .palette-inline .command-title { display: none; } .palette-inline .button.palette-inline-trigger { justify-content: center; } }
+
 .palette-backdrop {
   position: fixed;
   z-index: 10;

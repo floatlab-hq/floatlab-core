@@ -30,8 +30,8 @@ async function settle() {
 }
 
 const wrappers: VueWrapper[] = [];
-function mountPalette(fake: FloatLabApi) {
-  const wrapper = mount(CommandPalette, { attachTo: document.body, props: { api: fake } });
+function mountPalette(fake: FloatLabApi, inline = false) {
+  const wrapper = mount(CommandPalette, { attachTo: document.body, props: { api: fake, inline } });
   wrappers.push(wrapper);
   return wrapper;
 }
@@ -43,6 +43,55 @@ afterEach(() => {
 });
 
 describe("CommandPalette", () => {
+  it('lets Tab leave the inline field when there is nothing to complete', async () => {
+    const wrapper = mountPalette(api(), true);
+    wrapper.vm.show();
+    await settle();
+    const input = wrapper.get('#palette-input');
+    await input.setValue('no-matching-command');
+    await settle();
+    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    input.element.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    const next = document.createElement('button'); document.body.append(next); next.focus();
+    await settle();
+    expect(wrapper.find('#palette-input').exists()).toBe(false);
+    expect(document.activeElement).toBe(next);
+  });
+
+  it('keeps confirmation dialogs separate from the inline field', async () => {
+    const fake = api();
+    const wrapper = mountPalette(fake, true);
+    wrapper.vm.launch(['start', 'stack-1']);
+    await settle();
+    expect(document.querySelector('[role="alertdialog"]')).not.toBeNull();
+    expect(wrapper.find('[role="alertdialog"]').exists()).toBe(false);
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    await settle();
+    expect(wrapper.find('#palette-input').exists()).toBe(true);
+    document.querySelector<HTMLButtonElement>('[role="alertdialog"] button')!.click();
+    await settle();
+    expect(fake.startStack).not.toHaveBeenCalled();
+  });
+  it('opens inside its header box and closes without an overlay', async () => {
+    const wrapper = mountPalette(api(), true);
+    await wrapper.get('[aria-label="Open command palette"]').trigger('click');
+    await settle();
+    expect(wrapper.get('.palette-inline').find('#palette-input').exists()).toBe(true);
+    expect(document.querySelector('.palette-backdrop')).toBeNull();
+    expect(wrapper.get('.palette').attributes('aria-modal')).toBeUndefined();
+    expect(wrapper.find('.palette-trigger').exists()).toBe(false);
+    const input = wrapper.get('#palette-input');
+    await input.trigger('keydown', { key: 'Escape' });
+    await settle();
+    expect(wrapper.find('#palette-input').exists()).toBe(false);
+    expect(document.activeElement).toBe(wrapper.get('[aria-label="Open command palette"]').element);
+    await wrapper.get('[aria-label="Open command palette"]').trigger('click');
+    await settle();
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    await settle();
+    expect(wrapper.find('#palette-input').exists()).toBe(false);
+  });
   it.each([
     { key: '/', code: 'Slash' },
     { key: 'k', code: 'KeyK', metaKey: true },

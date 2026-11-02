@@ -16,6 +16,9 @@ newest first, capped at 50 entries. Command completion also refreshes this feed.
 Management workflows remain accessible through the command palette (/, Cmd+K,
 Ctrl+Shift+P, or Alt/Ctrl/Cmd+/),
 including completion, confirmation, prompts and Compose editing.
+The live command input opens in the navigation box, with suggestions and results
+directly below it. Escape or clicking outside closes it; prompts and Compose
+editing use their own dialogs.
 
 The live dashboard renders the same Lab Dashboard component as Storybook, with
 the Everfloat palette, a three-event preview, and host/app directories. Full event

@@ -4,10 +4,11 @@ import UiInput from "./UiInput.vue";
 import UiButton from "./UiButton.vue";
 import UiTextarea from "./UiTextarea.vue";
 import UiSelect from "./UiSelect.vue";
+import { IconSparklesFilled } from '@tabler/icons-vue';
 import '../command-console.css';
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 
-const props = defineProps<{ api: FloatLabApi }>();
+const props = defineProps<{ api: FloatLabApi; inline?: boolean }>();
 const emit = defineEmits<{ completed: [] }>();
 
 const open = ref(false);
@@ -23,6 +24,8 @@ function clearDownload() {
   downloadUrl.value = undefined;
 }
 const input = ref<InstanceType<typeof UiInput>>();
+const root = ref<HTMLElement>();
+const trigger = ref<InstanceType<typeof UiButton>>();
 const previousFocus = ref<HTMLElement>();
 const confirmMessage = ref<string>();
 const confirmResolve = ref<(answer: boolean) => void>();
@@ -95,11 +98,22 @@ function show() {
   });
 }
 
-function close() {
+function close(restoreFocus = true) {
   if (confirmMessage.value || composeOpen.value || promptMessage.value) return;
   open.value = false;
   completions.value = [];
-  previousFocus.value?.focus();
+  if (restoreFocus) void nextTick(() => {
+    if (previousFocus.value?.isConnected && previousFocus.value !== document.body) previousFocus.value.focus();
+    else trigger.value?.$el.focus();
+  });
+}
+
+function outside(event: { target: unknown }) {
+  if (props.inline && open.value && event.target instanceof HTMLElement && !root.value?.contains(event.target)) close(false);
+}
+
+function focusout(event: { relatedTarget: unknown }) {
+  if (props.inline && event.relatedTarget instanceof HTMLElement && !root.value?.contains(event.relatedTarget)) close(false);
 }
 
 function acceptCompletion() {
@@ -159,6 +173,7 @@ function onKeydown(event: KeyboardEvent) {
     event.preventDefault();
     acceptCompletion();
   } else if (event.key === "Tab") {
+    if (props.inline) return;
     event.preventDefault();
     input.value?.$el.focus();
   } else if (event.key === "Enter") {
@@ -264,12 +279,16 @@ function onGlobalKeydown(event: KeyboardEvent) {
   }
 }
 
-onMounted(() => window.addEventListener("keydown", onGlobalKeydown));
+onMounted(() => {
+  window.addEventListener("keydown", onGlobalKeydown);
+  document.addEventListener('pointerdown', outside);
+});
 defineExpose({ show, launch });
 onBeforeUnmount(() => {
   controller?.abort();
   clearDownload();
   window.removeEventListener("keydown", onGlobalKeydown);
+  document.removeEventListener('pointerdown', outside);
   confirmResolve.value?.(false);
   composeResolve.value?.(undefined);
   promptResolve.value?.(undefined);
@@ -277,121 +296,128 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <UiButton
-    class="palette-trigger"
-    type="button"
-    aria-label="Open command palette"
-    aria-keyshortcuts="/ Meta+K Control+Shift+P"
-    title="Command palette: /, ⌘K, Ctrl+Shift+P"
-    @click="show"
-  >
-    ⌘K <span>/</span>
-  </UiButton>
-
-  <Teleport to="body">
-    <div
-      v-if="open"
-      class="palette-backdrop"
-      @mousedown.self="close"
+  <div ref="root" :class="{ 'palette-inline': inline }" @focusout="focusout">
+    <UiButton
+      v-if="!inline || !open"
+      ref="trigger"
+      :class="inline ? 'palette-inline-trigger' : 'palette-trigger'"
+      :variant="inline ? 'surface' : undefined"
+      type="button"
+      aria-label="Open command palette"
+      aria-keyshortcuts="/ Meta+K Control+Shift+P"
+      title="Command palette: /, ⌘K, Ctrl+Shift+P"
+      @click="show"
     >
-      <section
-        class="palette"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="palette-title"
-        @keydown="onKeydown"
-      >
-        <h2
-          id="palette-title"
-          class="sr-only"
-        >
-          FloatLab command palette
-        </h2>
-        <label
-          class="sr-only"
-          for="palette-input"
-        >Command</label>
-        <UiInput
-          id="palette-input"
-          ref="input"
-          v-model="query"
-          class="palette-input"
-          role="combobox"
-          autocomplete="off"
-          spellcheck="false"
-          placeholder="Type a FloatLab command…"
-          aria-autocomplete="list"
-          aria-controls="palette-options"
-          :aria-expanded="completions.length > 0"
-          :aria-activedescendant="completions.length ? `palette-option-${active}` : undefined"
-          @input="onInput"
-        />
-        <ul
-          v-if="completions.length"
-          id="palette-options"
-          class="palette-options"
-          role="listbox"
-          aria-label="Command suggestions"
-        >
-          <li
-            v-for="(completion, index) in completions"
-            :id="`palette-option-${index}`"
-            :key="completion.value"
-            role="option"
-            :aria-selected="index === active"
-            :class="{ active: index === active }"
-            @mousedown.prevent="active = index; acceptCompletion()"
-          >
-            <code>{{ completion.value }}</code><small v-if="completion.description">{{ completion.description }}</small>
-          </li>
-        </ul>
-        <p
-          v-else
-          class="palette-hint"
-        >
-          Tab completes · Enter runs · Esc closes
-        </p>
+      <template v-if="inline"><span class="command-title">Command Palette <span class="command-hint">Search apps, hosts, actions, cli and more</span></span><IconSparklesFilled :size="12" aria-hidden="true" /></template>
+      <template v-else>⌘K <span>/</span></template>
+    </UiButton>
 
-        <output
-          v-if="result"
-          class="palette-result"
-          :class="`palette-result-${result.kind}`"
-          aria-live="polite"
+    <Teleport to="body" :disabled="inline">
+      <div
+        v-if="open"
+        :class="inline ? 'palette-inline-popover' : 'palette-backdrop'"
+        @mousedown.self="close()"
+      >
+        <section
+          class="palette"
+          :role="inline ? 'region' : 'dialog'"
+          :aria-modal="inline ? undefined : true"
+          aria-labelledby="palette-title"
+          @keydown="onKeydown"
         >
-          <p v-if="result.kind === 'text'">{{ result.text }}</p>
-          <a v-else-if="result.kind === 'binary'" :href="downloadUrl" download="floatlab-response">Download response ({{ result.data.byteLength }} bytes)</a>
-          <table v-else-if="result.kind === 'table'">
-            <thead><tr><th
-              v-for="column in result.columns"
-              :key="column"
-            >{{ column }}</th></tr></thead>
-            <tbody><tr
-              v-for="(row, rowIndex) in result.rows"
-              :key="rowIndex"
-            ><td
-              v-for="(cell, cellIndex) in row"
-              :key="cellIndex"
-            >{{ cell }}</td></tr></tbody>
-          </table>
-          <pre v-else-if="result.kind === 'logs'">{{ result.lines.map((line) => `${line.ts} ${line.stream}: ${line.msg}`).join('\n') }}</pre>
-          <pre v-else-if="result.kind === 'exec'">{{ result.stdout }}{{ result.stderr }}</pre>
-          <p v-else-if="result.kind === 'operation'">{{ result.text ?? `${result.action}${result.state ? `: ${result.state}` : ""}` }}</p>
+          <h2
+            id="palette-title"
+            class="sr-only"
+          >
+            FloatLab command palette
+          </h2>
+          <label
+            class="sr-only"
+            for="palette-input"
+          >Command</label>
+          <UiInput
+            id="palette-input"
+            ref="input"
+            v-model="query"
+            class="palette-input"
+            role="combobox"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Type a FloatLab command…"
+            aria-autocomplete="list"
+            aria-controls="palette-options"
+            :aria-expanded="completions.length > 0"
+            :aria-activedescendant="completions.length ? `palette-option-${active}` : undefined"
+            @input="onInput"
+          />
+          <ul
+            v-if="completions.length"
+            id="palette-options"
+            class="palette-options"
+            role="listbox"
+            aria-label="Command suggestions"
+          >
+            <li
+              v-for="(completion, index) in completions"
+              :id="`palette-option-${index}`"
+              :key="completion.value"
+              role="option"
+              :aria-selected="index === active"
+              :class="{ active: index === active }"
+              @mousedown.prevent="active = index; acceptCompletion()"
+            >
+              <code>{{ completion.value }}</code><small v-if="completion.description">{{ completion.description }}</small>
+            </li>
+          </ul>
           <p
             v-else
-            role="alert"
-          >{{ result.message }}</p>
-        </output>
-        <p
-          v-if="running"
-          class="palette-running"
-          role="status"
-        >
-          Running…
-          <UiButton type="button" @click="controller?.abort()">Stop</UiButton>
-        </p>
-      </section>
-    </div>
+            class="palette-hint"
+          >
+            Tab completes · Enter runs · Esc closes
+          </p>
 
+          <output
+            v-if="result"
+            class="palette-result"
+            :class="`palette-result-${result.kind}`"
+            aria-live="polite"
+          >
+            <p v-if="result.kind === 'text'">{{ result.text }}</p>
+            <a v-else-if="result.kind === 'binary'" :href="downloadUrl" download="floatlab-response">Download response ({{ result.data.byteLength }} bytes)</a>
+            <table v-else-if="result.kind === 'table'">
+              <thead><tr><th
+                v-for="column in result.columns"
+                :key="column"
+              >{{ column }}</th></tr></thead>
+              <tbody><tr
+                v-for="(row, rowIndex) in result.rows"
+                :key="rowIndex"
+              ><td
+                v-for="(cell, cellIndex) in row"
+                :key="cellIndex"
+              >{{ cell }}</td></tr></tbody>
+            </table>
+            <pre v-else-if="result.kind === 'logs'">{{ result.lines.map((line) => `${line.ts} ${line.stream}: ${line.msg}`).join('\n') }}</pre>
+            <pre v-else-if="result.kind === 'exec'">{{ result.stdout }}{{ result.stderr }}</pre>
+            <p v-else-if="result.kind === 'operation'">{{ result.text ?? `${result.action}${result.state ? `: ${result.state}` : ""}` }}</p>
+            <p
+              v-else
+              role="alert"
+            >{{ result.message }}</p>
+          </output>
+          <p
+            v-if="running"
+            class="palette-running"
+            role="status"
+          >
+            Running…
+            <UiButton type="button" @click="controller?.abort()">Stop</UiButton>
+          </p>
+        </section>
+      </div>
+    </Teleport>
+  </div>
+  <Teleport to="body">
     <div
       v-if="confirmMessage"
       class="palette-backdrop"

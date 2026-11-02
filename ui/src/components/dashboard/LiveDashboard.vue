@@ -106,6 +106,7 @@ onBeforeUnmount(() => { active = false; clearInterval(timer); document.removeEve
 <template>
   <main class="live-dashboard">
     <LabDashboard :hosts="hosts" :apps="apps" :events="events.slice(0, 3)" lab-name="My lab" live :loading="loading" :cluster-status="loading ? 'Refreshing…' : cluster" :cluster-health="clusterHealth" :detail-open="Boolean(selectedNode || selectedStack || utility)" @action="action" @closed="restoreFocus">
+      <template #command><CommandConsole ref="commandConsole" :api="api" inline @completed="refresh" /></template>
       <template #messages>
         <div v-if="errors.length" role="alert"><p v-for="error in errors" :key="error">{{ error }}</p></div>
         <p v-if="!events.length && !loading">{{ errors.some(error => /^(Events|Activity):/.test(error)) ? 'Events unavailable' : 'No recent events' }}</p>
@@ -125,7 +126,6 @@ onBeforeUnmount(() => { active = false; clearInterval(timer); document.removeEve
       <template #footer-actions><div class="dashboard-controls"><span v-if="raft?.dev_mode" role="status">Development mode</span><UiButton variant="plain" :disabled="loading" @click="refresh">{{ loading ? 'Refreshing…' : 'Refresh' }}</UiButton><UiButton variant="plain" @click="emit('logout')">Sign out</UiButton></div></template>
     </LabDashboard>
     <CreateApp v-if="creating" :nodes="nodes" @close="creating = false" @create="createApp" />
-    <CommandConsole ref="commandConsole" :api="api" @completed="refresh" />
   </main>
 </template>
 <style scoped>

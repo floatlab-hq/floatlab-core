@@ -1,11 +1,18 @@
 import type { Meta, StoryObj } from '@storybook/vue3-vite'
 import { userEvent, within } from 'storybook/test'
 import CommandConsole from './CommandConsole.vue'
+import DashboardNavigation from './dashboard/DashboardNavigation.vue'
 import { fixtureApi } from '../dashboard/live-fixtures'
 const args = { api: fixtureApi() }
 const meta: Meta<typeof CommandConsole> = { title: '2. Pattern/Command Console', component: CommandConsole, args, render: args => ({ components: { CommandConsole }, setup: () => ({ args }), template: '<CommandConsole v-bind="args" />' }) }
 export default meta
 export const Default: StoryObj<typeof meta> = {}
+export const Inline: StoryObj<typeof meta> = {
+  render: args => ({ components: { CommandConsole, DashboardNavigation }, setup: () => ({ args }), template: '<DashboardNavigation><template #command><CommandConsole :api="args.api" inline /></template></DashboardNavigation>' }),
+  play: async ({ canvasElement }) => {
+    await userEvent.click(within(canvasElement).getByRole('button', { name: 'Open command palette' }))
+  },
+}
 export const KeyboardShortcuts: StoryObj<typeof meta> = {
   play: async ({ canvasElement }) => {
     const page = within(canvasElement.ownerDocument.body)
