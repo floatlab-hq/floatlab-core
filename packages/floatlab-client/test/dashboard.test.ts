@@ -10,11 +10,13 @@ test("dashboard requests use the contract routes and bearer authentication", asy
   await api.createAuthToken({ username: "admin", password: "secret" });
   await api.getRaftHealth();
   await api.listNotifications();
+  await api.listAuditLog();
   await api.getNodeStats("node/a");
   await api.getStorageStats("node/a");
   await api.getNodeLogs("node/a");
   expect(requests.map(request => request.url)).toEqual([
     "https://host/api/v1/auth/token", "https://host/api/v1/health/raft", "https://host/api/v1/notifications?limit=50",
+    "https://host/api/v1/logs/audit?limit=50",
     "https://host/api/v1/stats/nodes/node%2Fa?range=1h", "https://host/api/v1/stats/storage/node%2Fa?range=1h", "https://host/api/v1/logs/nodes/node%2Fa?tail=100",
   ]);
   expect(requests[0].init.method).toBe("POST");

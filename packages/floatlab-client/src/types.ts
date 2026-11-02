@@ -25,11 +25,13 @@ export interface DashboardApi {
   createAuthToken(credentials: LoginRequest): Promise<TokenResponse>;
   getRaftHealth(): Promise<RaftHealth>;
   listNotifications(): Promise<Notification[]>;
+  listAuditLog(): Promise<AuditEntry[]>;
   getNodeStats(id: string): Promise<NodeStats>;
   getStorageStats(id: string): Promise<StorageStats>;
   getNodeLogs(id: string): Promise<LogLine[]>;
 }
 export type LogLine = components["schemas"]["LogLine"];
+export type AuditEntry = components["schemas"]["AuditEntry"] & { outcome?: string; details?: string | null };
 
 export type StackMetricSeries = components["schemas"]["StackMetricSeries"];
 export type ExecResult = { stdout: string; stderr: string; exit_code: number };

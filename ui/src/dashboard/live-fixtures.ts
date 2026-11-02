@@ -13,6 +13,7 @@ export const stack: Stack = {
 export const fixtureData: Record<string, unknown> = {
   '/api/v1/nodes': [node], '/api/v1/stacks': [stack],
   '/api/v1/notifications': [{ id: 'event-1', severity: 'info', state: 'unread', title: 'App started', body: 'plex is running', node_id: node.id, created_at: node.created_at }],
+  '/api/v1/logs/audit': [],
   '/api/v1/health/raft': { leader: 'alpha', state: 'Leader', peers: ['alpha'], commit_index: 1, last_log_index: 1 },
   '/api/v1/stats/nodes/node-1': { node_id: node.id, range: '1h', series: {} },
   '/api/v1/stats/storage/node-1': { node_id: node.id, range: '1h', series: {} },

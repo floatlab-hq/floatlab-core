@@ -9,6 +9,25 @@ import CommandConsole from '../CommandConsole.vue'
 enableAutoUnmount(afterEach)
 afterEach(() => vi.useRealTimers())
 describe('Live dashboard', () => {
+  it('shows durable workload activity even when there are no alert notifications', async () => {
+    const api = { ...fixtureApi(), listNotifications: vi.fn().mockResolvedValue([]), listAuditLog: vi.fn().mockResolvedValue([
+      { id: 'audit-1', actor: 'admin', action: 'StartStack', resource_type: 'stack', resource_id: 'stack-1', ts: '2026-11-02T05:00:00Z', outcome: 'failed' },
+    ]) }
+    const wrapper = mount(LiveDashboard, { props: { api } })
+    await flushPromises()
+    expect(api.listAuditLog).toHaveBeenCalledOnce()
+    const events = wrapper.get('[aria-label="Recent lab events"]')
+    expect(events.text()).toContain('StartStack')
+    expect(events.text()).toContain('plex · failed · admin')
+    expect(events.get('.lab-event-row').classes()).toContain('error')
+  })
+  it('keeps notifications visible when audit history is unavailable', async () => {
+    const api = { ...fixtureApi(), listAuditLog: vi.fn().mockRejectedValue(new ApiError('History offline', 503)) }
+    const wrapper = mount(LiveDashboard, { props: { api } })
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('History offline')
+    expect(wrapper.get('[aria-label="Recent lab events"]').text()).toContain('plex is running')
+  })
   it('opens real workload tools and refreshes after commands complete', async () => {
     const api = interactiveFixtureApi()
     const list = vi.spyOn(api, 'listStacks')

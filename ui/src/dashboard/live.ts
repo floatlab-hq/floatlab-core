@@ -1,4 +1,4 @@
-import type { Node, Stack, NodeStats, StorageStats, Notification, components } from '@floatlab/client'
+import type { AuditEntry, Node, Stack, NodeStats, StorageStats, Notification, components } from '@floatlab/client'
 import type { HostItem, DirectoryApp, LabEvent } from './types'
 
 export function latest(series?: components['schemas']['MetricSeries']): number | undefined {
@@ -44,5 +44,16 @@ export function labEvent(notification: Notification, nodes: Node[]): LabEvent {
     time: new Date(notification.created_at).toLocaleString(),
     host: nodes.find(node => node.id === notification.node_id)?.name ?? notification.node_id ?? '—',
     source: notification.kind ?? notification.title, message: notification.body,
+  }
+}
+
+export function auditEvent(entry: AuditEntry, stacks: Stack[], nodes: Node[]): LabEvent {
+  const stack = stacks.find(stack => stack.id === entry.resource_id)
+  return {
+    id: `audit:${entry.id}`, tone: /fail|error/i.test(entry.outcome ?? '') ? 'error' : 'info',
+    time: new Date(entry.ts).toLocaleString(),
+    host: nodes.find(node => node.id === stack?.primary_node)?.name ?? '—',
+    source: entry.action,
+    message: `${stack?.name ?? (entry.resource_id || entry.resource_type)} · ${entry.outcome ?? 'recorded'} · ${entry.actor}`,
   }
 }

@@ -2,7 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { IconPlusFilled } from '@tabler/icons-vue'
 import { ApiError, type DashboardApi, type FloatLabApi, type Node, type Stack, type NodeStats, type StorageStats, type Notification, type RaftHealth, type LogLine, type UpdateApi, type BackupApi, type BackupRestoreApi } from '@floatlab/client'
-import { appItem, hostItem, labEvent } from '../../dashboard/live'
+import { appItem, auditEvent, hostItem, labEvent } from '../../dashboard/live'
+import type { AuditEntry } from '@floatlab/client'
 import UiButton from '../UiButton.vue'
 import SplitView from '../SplitView.vue'
 import CommandConsole from '../CommandConsole.vue'
@@ -22,6 +23,7 @@ const emit = defineEmits<{ logout: [] }>()
 const nodes = ref<Node[]>([])
 const stacks = ref<Stack[]>([])
 const notifications = ref<Notification[]>([])
+const activity = ref<AuditEntry[]>([])
 const raft = ref<RaftHealth>()
 const stats = ref<Record<string, NodeStats>>({})
 const storage = ref<Record<string, StorageStats>>({})
@@ -34,7 +36,10 @@ const creating = ref(false)
 const commandConsole = ref<InstanceType<typeof CommandConsole>>()
 const hosts = computed(() => nodes.value.map(node => hostItem(node, stacks.value, stats.value[node.id], storage.value[node.id])))
 const apps = computed(() => stacks.value.map(stack => appItem(stack, nodes.value)))
-const events = computed(() => notifications.value.map(notification => labEvent(notification, nodes.value)))
+const events = computed(() => [
+  ...notifications.value.map(notification => ({ ts: notification.created_at, event: labEvent(notification, nodes.value) })),
+  ...activity.value.map(entry => ({ ts: entry.ts, event: auditEvent(entry, stacks.value, nodes.value) })),
+].sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts)).slice(0, 50).map(value => value.event))
 const selectedNode = computed(() => nodes.value.find(node => node.id === selected.value))
 const selectedStack = computed(() => stacks.value.find(stack => stack.id === selectedApp.value))
 const selectedApps = computed(() => stacks.value.filter(stack => stack.primary_node === selected.value || stack.secondary_node === selected.value).map(stack => appItem(stack, nodes.value)))
@@ -58,6 +63,7 @@ async function refresh() {
     read('Hosts', props.api.listNodes(), value => { nodes.value = value }),
     read('Apps', props.api.listStacks(), value => { stacks.value = value }),
     read('Events', props.api.listNotifications(), value => { notifications.value = value }),
+    read('Activity', props.api.listAuditLog(), value => { activity.value = value }),
     read('Cluster', props.api.getRaftHealth(), value => { raft.value = value }),
   ])
   if (!active) return
@@ -97,7 +103,7 @@ onBeforeUnmount(() => { active = false; clearInterval(timer); document.removeEve
     </div>
     <div v-if="errors.length" role="alert"><p v-for="error in errors" :key="error">{{ error }}</p></div>
     <LabEventLog :events="events" readonly />
-    <p v-if="!events.length && !loading">{{ errors.some(error => error.startsWith('Events:')) ? 'Events unavailable' : 'No recent events' }}</p>
+    <p v-if="!events.length && !loading">{{ errors.some(error => /^(Events|Activity):/.test(error)) ? 'Events unavailable' : 'No recent events' }}</p>
     <SplitView :open="Boolean(selectedNode || selectedStack)" @closed="restoreFocus">
       <div>
         <div class="dashboard-section-heading"><h1>Hosts</h1><UiButton variant="surface" @click="commandConsole?.launch(['lab', 'invite'], false)"><IconPlusFilled :size="18" aria-hidden="true" /> Host</UiButton></div>

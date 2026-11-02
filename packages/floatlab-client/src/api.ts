@@ -1,5 +1,5 @@
 import type { Container, ExecResult, FloatLabApi, HostNetworkApi, HostNetworkStatus, HostNetworkChange, NetworkPool, LogLine, Node, Stack, StackMetricSeries, UpdateApi, UpdateRelease, UpdateStatus } from "./types";
-import type { DashboardApi, TokenResponse, RaftHealth, Notification, NodeStats, StorageStats } from "./types";
+import type { AuditEntry, DashboardApi, TokenResponse, RaftHealth, Notification, NodeStats, StorageStats } from "./types";
 import type { LabApi, BackupApi, BackupRestoreApi } from "./types";
 import type { AlertsApi } from "./types";
 import type { HttpApi, HttpRequest } from "./types";
@@ -105,6 +105,7 @@ export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNe
     createAuthToken: (credentials) => send<TokenResponse>("/auth/token", { method: "POST", body: JSON.stringify(credentials) }),
     getRaftHealth: () => send<RaftHealth>("/health/raft"),
     listNotifications: () => send<Notification[]>("/notifications?limit=50"),
+    listAuditLog: () => send<AuditEntry[]>("/logs/audit?limit=50"),
     getNodeStats: (id) => send<NodeStats>(`/stats/nodes/${encodeURIComponent(id)}?range=1h`),
     getStorageStats: (id) => send<StorageStats>(`/stats/storage/${encodeURIComponent(id)}?range=1h`),
     getNodeLogs: (id) => send<LogLine[]>(`/logs/nodes/${encodeURIComponent(id)}?tail=100`),

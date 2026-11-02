@@ -6,6 +6,18 @@ const args = { api: interactiveFixtureApi() }
 const meta: Meta<typeof LiveDashboard> = { title: '2. Pattern/Live Dashboard', component: LiveDashboard, args, parameters: { layout: 'fullscreen' }, render: args => ({ components: { LiveDashboard }, setup: () => ({ args }), template: '<LiveDashboard v-bind="args" />' }) }
 export default meta
 export const Default: StoryObj<typeof meta> = {}
+export const Activity: StoryObj<typeof meta> = {
+  args: { api: { ...interactiveFixtureApi(), listNotifications: async () => [], listAuditLog: async () => [
+    { id: 'audit-1', actor: 'admin', action: 'StartStack', resource_type: 'stack', resource_id: stack.id, ts: '2026-11-02T05:00:00Z', outcome: 'failed' },
+    { id: 'audit-2', actor: 'admin', action: 'CreateStack', resource_type: 'stack', resource_id: stack.id, ts: '2026-11-02T04:59:00Z', outcome: 'succeeded' },
+  ] } },
+}
+export const PaletteInContext: StoryObj<typeof meta> = {
+  args: { api: interactiveFixtureApi() },
+  play: async ({ canvasElement }) => {
+    await userEvent.click(await within(canvasElement).findByRole('button', { name: 'Command Palette' }))
+  },
+}
 export const Empty: StoryObj<typeof meta> = { args: { api: interactiveFixtureApi([]) } }
 export const Running: StoryObj<typeof meta> = { args: { api: interactiveFixtureApi([stack]) } }
 export const AddApp: StoryObj<typeof meta> = {

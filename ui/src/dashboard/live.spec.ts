@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { appItem, hostItem, labEvent, latest, percentage } from './live'
+import { appItem, auditEvent, hostItem, labEvent, latest, percentage } from './live'
 import { node, stack } from './live-fixtures'
 describe('Live dashboard mapping', () => {
+  it('maps workload history without inventing missing hosts or workloads', () => {
+    const entry = { id: 'audit-1', actor: 'admin', action: 'StartStack', resource_type: 'stack', resource_id: stack.id, ts: node.created_at }
+    expect(auditEvent({ ...entry, outcome: 'failed' }, [stack], [node])).toMatchObject({ id: 'audit:audit-1', tone: 'error', host: node.name, message: 'plex · failed · admin' })
+    expect(auditEvent(entry, [], [])).toMatchObject({ tone: 'info', host: '—', message: 'stack-1 · recorded · admin' })
+    expect(auditEvent({ ...entry, resource_id: '' }, [], []).message).toBe('stack · recorded · admin')
+  })
   it('labels remote snapshots as cached without renaming local workloads', () => {
     expect(appItem({ ...stack, replica: true, stale: true }, [node]).name).toBe(stack.name + ' (cached)')
     expect(appItem(stack, [node]).name).toBe(stack.name)
