@@ -32,6 +32,18 @@ export const WorkloadActions: StoryObj<typeof meta> = {
     await userEvent.click(await within(canvasElement).findByRole('button', { name: 'Tools for plex' }))
   },
 }
+export const NodeKey: StoryObj<typeof meta> = {
+  args: { api: interactiveFixtureApi() },
+  play: async ({ canvasElement }) => {
+    await userEvent.click(await within(canvasElement).findByRole('button', { name: /Node key/ }))
+  },
+}
+export const EventHistory: StoryObj<typeof meta> = {
+  args: { api: { ...interactiveFixtureApi(), listAuditLog: async () => Array.from({ length: 5 }, (_, index) => ({ id: `audit-${index}`, actor: 'admin', action: 'Snapshot', resource_type: 'stack', resource_id: stack.id, ts: `2026-11-02T05:0${index}:00Z`, outcome: 'succeeded' })) } },
+  play: async ({ canvasElement }) => {
+    await userEvent.click(await within(canvasElement).findByRole('button', { name: /View all .* events/ }))
+  },
+}
 export const CachedPeerView: StoryObj<typeof meta> = { args: { api: { ...fixtureApi(), listStacks: async () => [stack, { ...stack, id: 'peer-stack', primary_node: 'peer-node', name: 'web', replica: true, stale: true, observed_revision: 42 }] } } }
 const devApi = fixtureApi()
 const raftHealth = devApi.getRaftHealth

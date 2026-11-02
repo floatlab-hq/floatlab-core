@@ -7,10 +7,27 @@ import HostDirectory from './HostDirectory.vue'
 import AppDirectory from './AppDirectory.vue'
 import LabEventLog from './LabEventLog.vue'
 import CommandPalette from '../CommandPalette.vue'
+import SplitView from '../SplitView.vue'
 
 const fixture = { hosts, apps, events }
 
 describe('Lab dashboard', () => {
+  it('uses the same composition for live data while hiding unwired controls', async () => {
+    const wrapper = mount(LabDashboard, { props: { ...fixture, live: true, labName: 'My lab', clusterStatus: 'Cluster status unavailable', clusterHealth: 'unknown', detailOpen: true }, slots: { detail: '<p>Host details</p>', 'footer-actions': '<button>Refresh</button>' } })
+    expect(wrapper.get('h1').text()).toBe('My lab')
+    expect(wrapper.get('[role="status"]').text()).toContain('Cluster status unavailable')
+    expect(wrapper.find('[aria-label="Filter apps"]').exists()).toBe(false)
+    expect(wrapper.find('[aria-label="Choose app columns"]').exists()).toBe(false)
+    expect(wrapper.find('.dashboard-filter-note').exists()).toBe(false)
+    expect(wrapper.find('.event-action').exists()).toBe(false)
+    expect(wrapper.getComponent(AppDirectory).props('managed')).toBe(true)
+    expect(wrapper.get('.split-detail').text()).toContain('Host details')
+    expect(wrapper.get('.dashboard-footer').text()).toContain('Refresh')
+    await wrapper.get('.dashboard-command').trigger('click')
+    expect(wrapper.emitted('action')).toContainEqual(['command'])
+    wrapper.getComponent(SplitView).vm.$emit('closed')
+    expect(wrapper.emitted('closed')).toHaveLength(1)
+  })
   it('uses proper heading levels, composes the patterns, and exposes filters', async () => {
     const wrapper = mount(LabDashboard, { props: fixture })
     expect(wrapper.get('h1').text()).toBe('Cavs lab')

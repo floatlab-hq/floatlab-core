@@ -6,9 +6,32 @@ import { fixtureApi, interactiveFixtureApi } from '../../dashboard/live-fixtures
 import CreateApp from './CreateApp.vue'
 import WorkloadDetail from './WorkloadDetail.vue'
 import CommandConsole from '../CommandConsole.vue'
+import LabDashboard from './LabDashboard.vue'
 enableAutoUnmount(afterEach)
 afterEach(() => vi.useRealTimers())
 describe('Live dashboard', () => {
+  it('renders through the Lab Dashboard story component and opens the node key', async () => {
+    const wrapper = mount(LiveDashboard, { props: { api: fixtureApi() } })
+    await flushPromises()
+    const dashboard = wrapper.getComponent(LabDashboard)
+    expect(dashboard.props()).toMatchObject({ live: true, labName: 'My lab', clusterStatus: 'Leader · 1 peers' })
+    expect(wrapper.get('.dashboard-footer').text()).toContain('Sign out')
+    expect(wrapper.find('[aria-label="Backup destinations"]').exists()).toBe(false)
+    await wrapper.findAll('button').find(button => button.text().startsWith('Node key'))!.trigger('click')
+    expect(wrapper.get('[aria-label="Node key"]').text()).toContain('lab-alpha')
+    await wrapper.get('[aria-label="Close detail panel"]').trigger('click')
+    expect(wrapper.find('[aria-label="Node key"]').exists()).toBe(false)
+  })
+  it('keeps the newest three events in the strip and opens the remaining history', async () => {
+    const api = { ...fixtureApi(), listNotifications: vi.fn().mockResolvedValue([]), listAuditLog: vi.fn().mockResolvedValue(Array.from({ length: 5 }, (_, index) => ({ id: `event-${index}`, actor: 'admin', action: `Action ${index}`, resource_type: 'stack', resource_id: 'stack-1', ts: `2026-11-02T05:0${index}:00Z` }))) }
+    const wrapper = mount(LiveDashboard, { props: { api } })
+    await flushPromises()
+    expect(wrapper.findAll('.lab-event-row')).toHaveLength(3)
+    await wrapper.get('.event-history').trigger('click')
+    expect(wrapper.get('.detail-panel').findAll('.lab-event-row')).toHaveLength(5)
+    await wrapper.get('[aria-label="Close detail panel"]').trigger('click')
+    expect(wrapper.findAll('.lab-event-row')).toHaveLength(3)
+  })
   it('shows durable workload activity even when there are no alert notifications', async () => {
     const api = { ...fixtureApi(), listNotifications: vi.fn().mockResolvedValue([]), listAuditLog: vi.fn().mockResolvedValue([
       { id: 'audit-1', actor: 'admin', action: 'StartStack', resource_type: 'stack', resource_id: 'stack-1', ts: '2026-11-02T05:00:00Z', outcome: 'failed' },

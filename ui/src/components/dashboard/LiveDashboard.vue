@@ -1,18 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { IconPlusFilled } from '@tabler/icons-vue'
 import { ApiError, type DashboardApi, type FloatLabApi, type Node, type Stack, type NodeStats, type StorageStats, type Notification, type RaftHealth, type LogLine, type UpdateApi, type BackupApi, type BackupRestoreApi } from '@floatlab/client'
 import { appItem, auditEvent, hostItem, labEvent } from '../../dashboard/live'
 import type { AuditEntry } from '@floatlab/client'
 import UiButton from '../UiButton.vue'
-import SplitView from '../SplitView.vue'
+import DetailPanel from '../DetailPanel.vue'
 import CommandConsole from '../CommandConsole.vue'
-import DashboardNavigation from './DashboardNavigation.vue'
+import LabDashboard from './LabDashboard.vue'
 import CreateApp from './CreateApp.vue'
 import WorkloadDetail from './WorkloadDetail.vue'
-import HostDirectory from './HostDirectory.vue'
-import AppDirectory from './AppDirectory.vue'
 import LabEventLog from './LabEventLog.vue'
+import UiNodePlate from './UiNodePlate.vue'
 import LiveHostDetail from './LiveHostDetail.vue'
 import ApplianceUpdates from './ApplianceUpdates.vue'
 import BackupTargets from './BackupTargets.vue'
@@ -33,6 +31,7 @@ const errors = ref<string[]>([])
 const selected = ref('')
 const selectedApp = ref('')
 const creating = ref(false)
+const utility = ref('')
 const commandConsole = ref<InstanceType<typeof CommandConsole>>()
 const hosts = computed(() => nodes.value.map(node => hostItem(node, stacks.value, stats.value[node.id], storage.value[node.id])))
 const apps = computed(() => stacks.value.map(stack => appItem(stack, nodes.value)))
@@ -44,6 +43,7 @@ const selectedNode = computed(() => nodes.value.find(node => node.id === selecte
 const selectedStack = computed(() => stacks.value.find(stack => stack.id === selectedApp.value))
 const selectedApps = computed(() => stacks.value.filter(stack => stack.primary_node === selected.value || stack.secondary_node === selected.value).map(stack => appItem(stack, nodes.value)))
 const cluster = computed(() => raft.value ? `${raft.value.state} · ${raft.value.peers.length} peers` : 'Cluster status unavailable')
+const clusterHealth = computed(() => raft.value ? ['Leader', 'Follower'].includes(raft.value.state) ? 'ready' : 'degraded' : 'unknown')
 let active = true
 let origin: HTMLElement | undefined
 let timer: ReturnType<typeof setInterval> | undefined
@@ -78,56 +78,64 @@ async function refresh() {
 async function inspect(id: string) {
   origin = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
   selectedApp.value = ''
+  utility.value = ''
   selected.value = id
   await read('Host logs', props.api.getNodeLogs(id), value => { logs.value[id] = value })
 }
 function inspectApp(id: string) {
   origin = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
-  selected.value = ''; selectedApp.value = id
+  selected.value = ''; selectedApp.value = id; utility.value = ''
+}
+function action(name: string, id?: string) {
+  if (name === 'command') { commandConsole.value?.show(); return }
+  if (name === 'settings') { commandConsole.value?.launch(['alert-rules', 'list']); return }
+  if (name.startsWith('host-') && id) { void inspect(id); return }
+  if (name.startsWith('app-') && id) { inspectApp(id); return }
+  if (name === 'add-app') { creating.value = true; return }
+  if (name === 'add-host') { commandConsole.value?.launch(['lab', 'invite'], false); return }
+  origin = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
+  selected.value = ''; selectedApp.value = ''; utility.value = name
 }
 async function createApp(args: string[]) { creating.value = false; await nextTick(); commandConsole.value?.launch(args) }
-async function close() { selected.value = ''; selectedApp.value = ''; await nextTick(); origin?.focus({ preventScroll: true }) }
+async function close() { selected.value = ''; selectedApp.value = ''; utility.value = ''; await nextTick(); origin?.focus({ preventScroll: true }) }
 function restoreFocus() { origin?.focus({ preventScroll: true }) }
 function visibleRefresh() { if (document.visibilityState === 'visible') void refresh() }
 onMounted(() => { void refresh(); timer = setInterval(visibleRefresh, 30_000); document.addEventListener('visibilitychange', visibleRefresh) })
 onBeforeUnmount(() => { active = false; clearInterval(timer); document.removeEventListener('visibilitychange', visibleRefresh) })
 </script>
 <template>
-  <main id="dashboard" class="live-dashboard">
-    <DashboardNavigation @command="commandConsole?.show()" @settings="commandConsole?.launch(['alert-rules', 'list'])" />
-    <div class="dashboard-toolbar">
-      <p v-if="raft?.dev_mode" role="status">Development mode</p>
-      <p role="status">{{ loading ? 'Refreshing…' : cluster }}</p>
-      <UiButton variant="surface" :disabled="loading" @click="refresh">Refresh</UiButton>
-      <UiButton variant="surface" @click="emit('logout')">Sign out</UiButton>
-    </div>
-    <div v-if="errors.length" role="alert"><p v-for="error in errors" :key="error">{{ error }}</p></div>
-    <LabEventLog :events="events" readonly />
-    <p v-if="!events.length && !loading">{{ errors.some(error => /^(Events|Activity):/.test(error)) ? 'Events unavailable' : 'No recent events' }}</p>
-    <SplitView :open="Boolean(selectedNode || selectedStack)" @closed="restoreFocus">
-      <div>
-        <div class="dashboard-section-heading"><h1>Hosts</h1><UiButton variant="surface" @click="commandConsole?.launch(['lab', 'invite'], false)"><IconPlusFilled :size="18" aria-hidden="true" /> Host</UiButton></div>
-        <HostDirectory :hosts="hosts" @inspect="inspect" @tools="inspect" @connect="inspect" />
+  <main class="live-dashboard">
+    <LabDashboard :hosts="hosts" :apps="apps" :events="events.slice(0, 3)" lab-name="My lab" live :loading="loading" :cluster-status="loading ? 'Refreshing…' : cluster" :cluster-health="clusterHealth" :detail-open="Boolean(selectedNode || selectedStack || utility)" @action="action" @closed="restoreFocus">
+      <template #messages>
+        <div v-if="errors.length" role="alert"><p v-for="error in errors" :key="error">{{ error }}</p></div>
+        <p v-if="!events.length && !loading">{{ errors.some(error => /^(Events|Activity):/.test(error)) ? 'Events unavailable' : 'No recent events' }}</p>
+        <UiButton v-if="events.length > 3" variant="plain" class="event-history" @click="action('events')">View all {{ events.length }} events</UiButton>
+      </template>
+      <template #hosts-empty>
         <p v-if="!hosts.length && !loading">{{ errors.some(error => error.startsWith('Hosts:')) ? 'Hosts unavailable' : 'No registered hosts' }}</p>
-        <div class="dashboard-section-heading"><h2>Apps</h2><UiButton variant="surface" :disabled="!nodes.length" @click="creating = true"><IconPlusFilled :size="18" aria-hidden="true" /> App</UiButton></div>
-        <AppDirectory :apps="apps" managed @state="inspectApp" @tools="inspectApp" @open="inspectApp" />
-      </div>
+      </template>
       <template #detail>
+        <DetailPanel v-if="utility === 'node-key'" title="Node key" @close="close"><dl class="node-key"><template v-for="host in hosts" :key="host.id"><dt><UiNodePlate :name="host.name" /></dt><dd>{{ host.name }}<span>{{ host.address || 'Address unavailable' }}</span></dd></template></dl><p v-if="!hosts.length">No registered hosts</p></DetailPanel>
+        <DetailPanel v-if="utility === 'events'" title="Recent lab events" @close="close"><LabEventLog :events="events" readonly /></DetailPanel>
         <WorkloadDetail v-if="selectedStack" :key="selectedStack.id" :stack="selectedStack" :api="api" @close="close" @command="(args, run) => commandConsole?.launch(args, run)" />
+        <details v-if="selectedStack && backupApi" class="backup-details"><summary>Backups and restore</summary><BackupTargets :key="selectedStack.id + '-backups'" :api="backupApi" :nodes="nodes" :stacks="[selectedStack]" @restored="refresh" /></details>
         <LiveHostDetail v-if="selectedNode" :key="selectedNode.id" :node="selectedNode" :apps="selectedApps" :storage="storage[selected]" :logs="logs[selected]" :loading="loading" @close="close" />
         <ApplianceUpdates v-if="selectedNode && updateApi" :key="selectedNode.id + '-updates'" :api="updateApi" :node-id="selectedNode.id" />
       </template>
-    </SplitView>
-    <BackupTargets v-if="backupApi && stacks.length" :api="backupApi" :nodes="nodes" :stacks="stacks" @restored="refresh" />
+      <template #footer-actions><div class="dashboard-controls"><span v-if="raft?.dev_mode" role="status">Development mode</span><UiButton variant="plain" :disabled="loading" @click="refresh">{{ loading ? 'Refreshing…' : 'Refresh' }}</UiButton><UiButton variant="plain" @click="emit('logout')">Sign out</UiButton></div></template>
+    </LabDashboard>
     <CreateApp v-if="creating" :nodes="nodes" @close="creating = false" @create="createApp" />
     <CommandConsole ref="commandConsole" :api="api" @completed="refresh" />
   </main>
 </template>
 <style scoped>
-.live-dashboard { display: grid; gap: 26px; padding: 32px 48px; }
-.dashboard-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.dashboard-toolbar p:first-child { margin-right: auto; }
-.dashboard-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 24px 0 12px; }
-.dashboard-section-heading h1, .dashboard-section-heading h2 { margin: 0; font-size: var(--text-heading); font-weight: var(--weight-ui); }
-[role="alert"] { color: var(--status-error); } @media (max-width: 900px) { .live-dashboard { padding: 16px; } }
+.live-dashboard { width: 100%; margin: 0; padding: 0; min-height: 100vh; }
+.dashboard-controls { display: flex; align-items: center; gap: 16px; margin-left: auto; flex-wrap: wrap; }
+.event-history { display: block; margin: 8px 0 0 auto; }
+.node-key { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 16px; }
+.node-key dd { margin: 0; overflow-wrap: anywhere; }
+.node-key dd span { display: block; margin-top: 4px; color: var(--text-placeholder); font-size: var(--text-meta); }
+.backup-details { padding: 16px; background: var(--surface-recessed); }
+.backup-details summary { cursor: pointer; }
+[role="alert"] { color: var(--status-error); }
 </style>

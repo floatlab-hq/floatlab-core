@@ -16,8 +16,11 @@ newest first, capped at 50 entries. Command completion also refreshes this feed.
 Management workflows remain accessible through the command palette (Alt/Ctrl/Cmd+/),
 including completion, confirmation, prompts and Compose editing.
 
-The live dashboard reuses the Storybook navigation, host/app directories and detail
-panel. App state and Tools open the workload panel: start/stop, logs, metrics,
+The live dashboard renders the same Lab Dashboard component as Storybook, with
+the Everfloat palette, a three-event preview, and host/app directories. Full event
+history and the node key open in the detail panel. Refresh and sign-out actions
+sit in the legend footer; backup management sits with workload details.
+App state and Tools open the workload panel: start/stop, logs, metrics,
 Compose, inspection, snapshots, image upgrades and deletion use the shared CLI
 command engine. Containers expose start/stop, logs, inspection and command
 execution. Cached peer entries expose read operations only. Restart, app links,

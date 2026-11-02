@@ -11,3 +11,5 @@ const meta: Meta<typeof LabDashboard> = {
 }
 export default meta
 export const Default: StoryObj<typeof meta> = {}
+export const Connected: StoryObj<typeof meta> = { args: { live: true, labName: 'My lab', clusterStatus: 'Leader · 3 peers', clusterHealth: 'ready' } }
+export const ClusterUnavailable: StoryObj<typeof meta> = { args: { live: true, labName: 'My lab', clusterStatus: 'Cluster status unavailable', clusterHealth: 'unknown', hosts: [], apps: [], events: [] } }
