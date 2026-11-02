@@ -386,6 +386,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.openTimezone()
 				return m, textinput.Blink
 			}
+			if m.stage == "account" && m.focus == 13 {
+				switch v.String() {
+				case "left", "right", " ":
+					sources := []string{"none", "github", "gitlab", "launchpad", "web"}
+					for i, source := range sources {
+						if source == m.fields[13].Value() {
+							delta := 1
+							if v.String() == "left" {
+								delta = -1
+							}
+							m.fields[13].SetValue(sources[(i+delta+len(sources))%len(sources)])
+							break
+						}
+					}
+					m.validation = ""
+					return m, nil
+				}
+			}
 			if m.stage == "settings" && m.focus == 2 || m.stage == "account" && m.focus == 10 {
 				left, right := "dhcp", "static"
 				if m.focus == 10 {
@@ -430,7 +448,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.moveFocus(1)
 				return m, textinput.Blink
 			}
-			if m.focus == len(m.fields) || m.focus == 10 || (m.stage == "settings" && (m.focus == 1 || m.focus == 2)) {
+			if m.focus == len(m.fields) || m.focus == 10 || m.focus == 13 || (m.stage == "settings" && (m.focus == 1 || m.focus == 2)) {
 				return m, nil
 			}
 			return m, m.updateField(v)
@@ -484,7 +502,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "timezone":
 		m.timezoneSearch, cmd = m.timezoneSearch.Update(msg)
 	case "settings", "account":
-		if m.focus < len(m.fields) && m.focus != 1 && m.focus != 2 && m.focus != 10 {
+		if m.focus < len(m.fields) && m.focus != 1 && m.focus != 2 && m.focus != 10 && m.focus != 13 {
 			cmd = m.updateField(msg)
 		}
 	}
@@ -497,8 +515,8 @@ func (m *Model) reboot() tea.Cmd {
 }
 
 func (m *Model) settings() {
-	m.labels = []string{"Node name", "Timezone", "IPv4 configuration", "IPv4 address (static only)", "Netmask (static only)", "Gateway (static only)", "DNS servers (comma separated)", "Administrator username", "Password", "Confirm password", "Set up TOTP", "Console recovery password", "Confirm recovery password"}
-	defaults := []string{"floatlab", "", "dhcp", "", "", "", "1.1.1.1,8.8.8.8", "admin", "", "", "no", "", ""}
+	m.labels = []string{"Node name", "Timezone", "IPv4 configuration", "IPv4 address (static only)", "Netmask (static only)", "Gateway (static only)", "DNS servers (comma separated)", "Administrator username", "Password", "Confirm password", "Set up TOTP", "Console recovery password", "Confirm recovery password", "Root SSH key source", "SSH key username"}
+	defaults := []string{"floatlab", "", "dhcp", "", "", "", "1.1.1.1,8.8.8.8", "admin", "", "", "no", "", "", "none", ""}
 	m.fields = make([]textinput.Model, len(m.labels))
 	for i := range m.fields {
 		f := textinput.New()
@@ -518,7 +536,11 @@ func (m *Model) settings() {
 }
 func (m *Model) visibleFields() []int {
 	if m.stage == "account" {
-		return []int{7, 8, 9, 11, 12, 10}
+		fields := []int{7, 8, 9, 11, 12, 13}
+		if m.fields[13].Value() != "none" {
+			fields = append(fields, 14)
+		}
+		return append(fields, 10)
 	}
 	fields := []int{0, 1, 2}
 	if m.fields[2].Value() == "static" {
@@ -536,7 +558,7 @@ func (m *Model) setFocus(index int) {
 		m.focusAction(2)
 		return
 	}
-	if index < len(m.fields) && index != 1 && index != 2 && index != 10 {
+	if index < len(m.fields) && index != 1 && index != 2 && index != 10 && index != 13 {
 		m.fields[index].Focus()
 	}
 	m.manualScroll = false
@@ -642,7 +664,7 @@ func (m *Model) config() installer.InstallConfig {
 			network.DNSServers = append(network.DNSServers, v)
 		}
 	}
-	return installer.InstallConfig{NodeName: value(0), Timezone: value(1), Network: network, Username: value(7), Password: value(8), PasswordConfirmation: value(9), RecoveryPassword: value(11), RecoveryConfirmation: value(12), TOTP: value(10) == "yes", TOTPCode: m.totpCode, RecoverySaved: m.enrollment != nil && m.confirmation.Value() == "SAVED"}
+	return installer.InstallConfig{SSHKeySource: value(13), SSHKeyReference: value(14), NodeName: value(0), Timezone: value(1), Network: network, Username: value(7), Password: value(8), PasswordConfirmation: value(9), RecoveryPassword: value(11), RecoveryConfirmation: value(12), TOTP: value(10) == "yes", TOTPCode: m.totpCode, RecoverySaved: m.enrollment != nil && m.confirmation.Value() == "SAVED"}
 }
 func size(bytes int64) string { return fmt.Sprintf("%.1f GiB", float64(bytes)/float64(installer.GiB)) }
 func partitions(d installer.Disk) string {
@@ -753,6 +775,13 @@ func (m *Model) body() string {
 					value = "( ) DHCP    (●) Static"
 				}
 			}
+			if i == 13 {
+				names := map[string]string{"none": "None", "github": "GitHub", "gitlab": "GitLab", "launchpad": "Launchpad", "web": "Web"}
+				value = "◂ " + names[m.fields[13].Value()] + " ▸"
+			}
+			if i == 14 && m.fields[13].Value() == "web" {
+				label = strings.Replace(label, "SSH key username", "SSH key URL", 1)
+			}
 			if i == 10 {
 				value = "( ) Yes    (●) No"
 				if m.fields[10].Value() == "yes" {
@@ -795,6 +824,11 @@ func (m *Model) body() string {
 			recoveryPassword = "Set and confirmed (root)"
 		}
 		rows = append(rows, [2]string{"Console recovery", recoveryPassword})
+		sshSource := "Disabled"
+		if c.SSHKeySource != "none" && c.SSHKeySource != "" {
+			sshSource = c.SSHKeySource + ": " + c.SSHKeyReference
+		}
+		rows = append(rows, [2]string{"Root SSH access", sshSource})
 		if c.TOTP {
 			recovery := "Not saved"
 			if c.RecoverySaved {

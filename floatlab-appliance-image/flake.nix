@@ -230,6 +230,9 @@
            assert installed.users.users.root.hashedPasswordFile == "/floatlab/system/etc/root-password.hash";
            assert !installed.users.mutableUsers;
            assert installed.services.openssh.settings.PermitRootLogin == "prohibit-password";
+           assert pkgs.lib.hasInfix "Match User root" installed.services.openssh.extraConfig;
+           assert pkgs.lib.hasInfix "/floatlab/system/etc/root-authorized-keys" installed.services.openssh.extraConfig;
+           assert !(pkgs.lib.hasInfix "/floatlab/system/etc/root-authorized-keys" cfg.services.openssh.extraConfig);
            assert installed.hardware.enableAllHardware;
            assert pkgs.lib.all (name: builtins.elem name installed.boot.initrd.availableKernelModules)
              [ "virtio_blk" "virtio_scsi" "nvme" "ahci" "uas" "hpsa" "hv_storvsc" ];

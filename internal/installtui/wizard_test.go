@@ -106,7 +106,7 @@ func TestAccountAndTOTPStayOnTheirScreensUntilValidated(t *testing.T) {
 	if m.stage != "account" || !strings.Contains(m.View(), "passwords do not match") {
 		t.Fatal("account error did not stay on its screen")
 	}
-	if len(m.visibleFields()) != 6 || m.visibleFields()[5] != 10 {
+	if len(m.visibleFields()) != 7 || m.visibleFields()[6] != 10 {
 		t.Fatal("account screen does not include the TOTP choice")
 	}
 	m.fields[10].SetValue("yes")

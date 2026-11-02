@@ -118,6 +118,7 @@ func TestWorkerRetriesFinalizationWithoutErasing(t *testing.T) {
 		t.Fatal(err)
 	}
 	sub.RecoveryPasswordHash = string(recoveryHash)
+	sub.SSHAuthorizedKeys = testSSHKey(t)
 	if err := credentials.WritePrivate(runtimeDir+"/submission.json", sub); err != nil {
 		t.Fatal(err)
 	}
@@ -156,6 +157,30 @@ func TestWorkerRetriesFinalizationWithoutErasing(t *testing.T) {
 	info, err := os.Stat(persistentDir + "/root-password.hash")
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatal("recovery hash is not private", err)
+	}
+	keys, err := os.ReadFile(persistentDir + "/root-authorized-keys")
+	if err != nil || string(keys) != sub.SSHAuthorizedKeys {
+		t.Fatal("SSH keys not persisted", err)
+	}
+	info, err = os.Stat(persistentDir + "/root-authorized-keys")
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatal("SSH keys are not private", err)
+	}
+	sub.SSHAuthorizedKeys = "malformed"
+	if err := credentials.WritePrivate(runtimeDir+"/submission.json", sub); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker(context.Background(), runtimeDir, persistentDir, mediaDir, inventory); err == nil || !strings.Contains(err.Error(), "SSH key source") {
+		t.Fatal("worker accepted malformed SSH key", err)
+	}
+	sub.SSHAuthorizedKeys = ""
+	if err := credentials.WritePrivate(runtimeDir+"/submission.json", sub); err != nil {
+		t.Fatal(err)
+	}
+	_ = worker(context.Background(), runtimeDir, persistentDir, mediaDir, inventory)
+	keys, err = os.ReadFile(persistentDir + "/root-authorized-keys")
+	if err != nil || len(keys) != 0 {
+		t.Fatal("None retained SSH keys", err)
 	}
 	for _, command := range []string{"wipefs --all", "sfdisk --wipe", "zpool create -f"} {
 		if strings.Count(string(commands), command) != 1 {

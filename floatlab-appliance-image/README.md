@@ -394,3 +394,18 @@ The ISO contains a template Compose file. It is installed only when `/floatlab/s
 2. Decide whether release images also embed the third-party service images for fully offline seeding.
 3. Add NixOS VM tests for pool-present, pool-absent, and Compose-seed paths.
 4. Add PXE outputs (`kernel`, `initrd`, and squashfs/root image) after the ISO path is stable.
+
+### Installer SSH key import
+
+The account screen optionally imports root SSH keys from one GitHub, GitLab, or
+Launchpad username, or an HTTP/HTTPS URL serving OpenSSH public keys. Choose the
+source with Left/Right or Space, then enter its username or URL. All returned
+public keys grant root SSH access; administrator and console recovery passwords
+remain required. Plain HTTP allows keys to be changed in transit, so prefer HTTPS
+when available.
+
+Keys are fetched when Finish is selected. A failed or empty import leaves the
+configuration editable for retry or selecting None. Imported keys are an
+installation-time snapshot: later provider changes are not synchronized. They
+are stored in `/floatlab/system/etc/root-authorized-keys` and survive reboots and
+OS updates. Root SSH password login remains disabled.

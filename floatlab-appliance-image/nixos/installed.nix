@@ -39,6 +39,11 @@
   };
   users.mutableUsers = false;
   users.users.root.hashedPasswordFile = "/floatlab/system/etc/root-password.hash";
+  services.openssh.extraConfig = ''
+    Match User root
+      AuthorizedKeysFile ${lib.concatStringsSep " " config.services.openssh.authorizedKeysFiles} /floatlab/system/etc/root-authorized-keys
+    Match all
+  '';
   services.timesyncd.enable = true;
   environment.systemPackages = [ pkgs.zfs pkgs.gitMinimal ];
   system.stateVersion = "26.05";

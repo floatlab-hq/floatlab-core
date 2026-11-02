@@ -28,6 +28,8 @@ type Request struct {
 	Config       *InstallConfig `json:"config,omitempty"`
 }
 type InstallConfig struct {
+	SSHKeySource         string             `json:"ssh_key_source,omitempty"`
+	SSHKeyReference      string             `json:"ssh_key_reference,omitempty"`
 	NodeName             string             `json:"node_name"`
 	Timezone             string             `json:"timezone"`
 	Network              hostnetwork.Config `json:"network"`
@@ -488,6 +490,9 @@ func checkFirmware() error {
 }
 
 func validateAccount(config InstallConfig) error {
+	if _, err := sshKeyURL(config.SSHKeySource, config.SSHKeyReference); err != nil {
+		return err
+	}
 	if config.Username == "" {
 		return fmt.Errorf("enter an administrator username")
 	}
@@ -557,6 +562,10 @@ func (s *Service) submission(ctx context.Context, config InstallConfig, enroll b
 			return sub, err
 		}
 		sub.Admin.TOTPSecret, sub.Admin.RecoveryHashes = secret, s.recoveryHashes
+	}
+	sub.SSHAuthorizedKeys, err = fetchSSHKeys(ctx, config.SSHKeySource, config.SSHKeyReference)
+	if err != nil {
+		return sub, err
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(config.Password), bcrypt.DefaultCost)
 	if err != nil {

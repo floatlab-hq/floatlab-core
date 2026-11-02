@@ -42,6 +42,7 @@ type Appliance struct {
 	Network   hostnetwork.Config `json:"network"`
 }
 type Submission struct {
+	SSHAuthorizedKeys    string                `json:"ssh_authorized_keys,omitempty"`
 	Host                 Appliance             `json:"host"`
 	Admin                credentials.Bootstrap `json:"admin"`
 	VerificationCode     string                `json:"verification_code,omitempty"`
@@ -488,10 +489,18 @@ func installWorker(stopCtx context.Context, runtimeDir, persistentDir, mediaDir 
 	if _, e := bcrypt.Cost([]byte(sub.RecoveryPasswordHash)); e != nil || len(sub.RecoveryPasswordHash) != 60 || strings.ContainsAny(sub.RecoveryPasswordHash, "\x00:\r\n") {
 		return fmt.Errorf("invalid console recovery password hash")
 	}
+	if sub.SSHAuthorizedKeys != "" {
+		if _, err = parseSSHKeys([]byte(sub.SSHAuthorizedKeys)); err != nil {
+			return err
+		}
+	}
 	if sub.Host.NodeID != op.Identity.NodeID || sub.Host.HostID != op.Identity.HostID || sub.Host.JWTSecret != op.Identity.JWTSecret || sub.Admin.NodeID != sub.Host.NodeID || sub.Admin.NodeName != sub.Host.NodeName {
 		return fmt.Errorf("staged identity does not match confirmed installation")
 	}
 	if err = phase("Persist and apply host configuration", func() error {
+		if e := credentials.WriteBytes(persistentDir+"/root-authorized-keys", []byte(sub.SSHAuthorizedKeys)); e != nil {
+			return e
+		}
 		if e := credentials.WriteBytes(persistentDir+"/root-password.hash", []byte(sub.RecoveryPasswordHash+"\n")); e != nil {
 			return e
 		}
