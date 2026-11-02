@@ -17,7 +17,7 @@ import (
 )
 
 func (s *Server) runAlertEvaluator(ctx context.Context) {
-	evaluator := alerts.Evaluator{DB: s.db, Metrics: s.vmets, Broker: s.broker, IsLeader: func() bool { return s.raft != nil && s.raft.IsLeader() }}
+	evaluator := alerts.Evaluator{Observer: s.cfg.LocalNodeID, DB: s.db, Metrics: s.vmets, Broker: s.broker, IsLeader: func() bool { return s.raft != nil && s.raft.IsLeader() }}
 	ticker := time.NewTicker(alerts.Interval)
 	defer ticker.Stop()
 	for {

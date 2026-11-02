@@ -6,6 +6,13 @@ import "context"
 // Safe to call on every startup (uses CREATE TABLE IF NOT EXISTS).
 func Migrate(ctx context.Context, c *Client) error {
 	stmts := []Statement{
+		{SQL: `CREATE TABLE IF NOT EXISTS monitoring_checks (id TEXT PRIMARY KEY, producer TEXT NOT NULL, state_json TEXT NOT NULL DEFAULT '{}', version INTEGER NOT NULL DEFAULT 0)`},
+		{SQL: `CREATE TABLE IF NOT EXISTS monitoring_observations (id TEXT PRIMARY KEY, check_id TEXT NOT NULL, recorded_at TEXT NOT NULL, result_json TEXT NOT NULL)`},
+		{SQL: `CREATE INDEX IF NOT EXISTS idx_monitoring_observations_check ON monitoring_observations(check_id,recorded_at)`},
+		{SQL: `CREATE TABLE IF NOT EXISTS monitoring_executions (id TEXT PRIMARY KEY, state TEXT NOT NULL, active INTEGER NOT NULL, record_json TEXT NOT NULL)`},
+		{SQL: `CREATE TABLE IF NOT EXISTS monitoring_attempts (id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, record_json TEXT NOT NULL)`},
+		{SQL: `CREATE TABLE IF NOT EXISTS monitoring_deliveries (id TEXT PRIMARY KEY, notification_id TEXT NOT NULL, state TEXT NOT NULL, record_json TEXT NOT NULL)`},
+		{SQL: `CREATE TABLE IF NOT EXISTS monitoring_interventions (id TEXT PRIMARY KEY, incident_id TEXT NOT NULL, state TEXT NOT NULL, record_json TEXT NOT NULL)`},
 		{SQL: `CREATE TABLE IF NOT EXISTS users (
 			username      TEXT PRIMARY KEY,
 			password_hash TEXT NOT NULL,
@@ -46,7 +53,10 @@ func Migrate(ctx context.Context, c *Client) error {
 			message        TEXT NOT NULL,
 			silenced_until DATETIME,
 			resolved_at    DATETIME,
-			created_at     DATETIME NOT NULL
+			created_at     DATETIME NOT NULL,
+			labels         TEXT NOT NULL DEFAULT '{}',
+			updated_at     TEXT,
+			resolution_reason TEXT
 		)`},
 		{SQL: `CREATE TABLE IF NOT EXISTS ip_reservations (
 			id           TEXT PRIMARY KEY,

@@ -27,6 +27,10 @@ func TestCompatibilityAlertLifecycle(t *testing.T) {
 		}
 	}
 	check()
+	rows, err := db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT json_extract(result_json,'$.observer') FROM monitoring_observations`})
+	if err != nil || len(rows.Values) != 1 || rows.Values[0][0] != "node" {
+		t.Fatalf("missing local observer: %+v %v", rows, err)
+	}
 	select {
 	case <-events:
 	default:
@@ -41,9 +45,13 @@ func TestCompatibilityAlertLifecycle(t *testing.T) {
 	result.Status = "unknown"
 	result.Error = "unreachable"
 	check()
-	rows, err := db.Query(ctx, rqlite.Statement{SQL: `SELECT (SELECT count(*) FROM alerts),(SELECT count(*) FROM notifications)`})
+	rows, err = db.Query(ctx, rqlite.Statement{SQL: `SELECT (SELECT count(*) FROM alerts),(SELECT count(*) FROM notifications)`})
 	if err != nil || len(rows.Values) != 1 || rows.Values[0][0] != float64(1) || rows.Values[0][1] != float64(1) {
 		t.Fatalf("deduplication: %+v, %v", rows, err)
+	}
+	rows, err = db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT json_extract(state_json,'$.status'),json_extract(state_json,'$.last_success') FROM monitoring_checks`})
+	if err != nil || len(rows.Values) != 1 || rows.Values[0][0] != "unknown" || rows.Values[0][1] != "0001-01-01T00:00:00Z" {
+		t.Fatalf("unknown compatibility claimed success: %+v %v", rows, err)
 	}
 	result.Status = "compatible"
 	check()
@@ -53,6 +61,10 @@ func TestCompatibilityAlertLifecycle(t *testing.T) {
 	}
 	result.Status = "incompatible"
 	check()
+	rows, err = db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT id FROM alerts`})
+	if err != nil || len(rows.Values) != 2 {
+		t.Fatalf("recurrence overwrote compatibility history: %+v %v", rows, err)
+	}
 	select {
 	case <-events:
 	default:

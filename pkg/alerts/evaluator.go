@@ -16,6 +16,7 @@ type Querier interface {
 }
 
 type Evaluator struct {
+	Observer string
 	DB       *rqlite.Client
 	Metrics  Querier
 	Broker   *notify.Broker
@@ -81,7 +82,7 @@ func (e *Evaluator) Tick(ctx context.Context, rules []Rule, now time.Time) error
 			if queryErr != nil {
 				next.Error = queryErr.Error()
 			}
-			if err := save(ctx, e.DB, e.Broker, rule, old, next, now, ""); err != nil {
+			if err := save(ctx, e.DB, e.Broker, rule, old, next, now, "", e.Observer); err != nil {
 				failures = append(failures, err)
 			}
 		}
@@ -100,7 +101,7 @@ func (e *Evaluator) Tick(ctx context.Context, rules []Rule, now time.Time) error
 			next := old.State
 			next.Status, next.LastEvaluated = "resolved", now
 			rule := Rule{ID: ruleID, Name: "Alert rule disabled or removed", Severity: old.Severity}
-			if err := save(ctx, e.DB, e.Broker, rule, old, next, now, "rule disabled or removed"); err != nil {
+			if err := save(ctx, e.DB, e.Broker, rule, old, next, now, "rule disabled or removed", e.Observer); err != nil {
 				failures = append(failures, err)
 			}
 		}

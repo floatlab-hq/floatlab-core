@@ -2,7 +2,7 @@ package stats
 
 import (
 	"encoding/json"
-	"fmt"
+	"github.com/floatlab/floatlab-core/pkg/monitoring"
 	"github.com/floatlab/floatlab-core/pkg/notify"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
 	"github.com/google/uuid"
@@ -13,11 +13,12 @@ import (
 
 type alertmanagerPayload struct {
 	Alerts []struct {
-		Status      string            `json:"status"`
-		Labels      map[string]string `json:"labels"`
-		Annotations map[string]string `json:"annotations"`
-		StartsAt    time.Time         `json:"startsAt"`
-		EndsAt      time.Time         `json:"endsAt"`
+		Status       string            `json:"status"`
+		Labels       map[string]string `json:"labels"`
+		Annotations  map[string]string `json:"annotations"`
+		StartsAt     time.Time         `json:"startsAt"`
+		EndsAt       time.Time         `json:"endsAt"`
+		GeneratorURL string            `json:"generatorURL"`
 	} `json:"alerts"`
 }
 
@@ -56,39 +57,31 @@ func WebhookHandler(db *rqlite.Client, broker *notify.Broker, log *zap.Logger) h
 			}
 			body := a.Annotations["description"]
 			stackID, nodeID := a.Labels["stack_id"], a.Labels["node_id"]
-			id := uuid.NewSHA1(uuid.NameSpaceOID, []byte(ruleID+"\x00"+stackID+"\x00"+nodeID)).String()
-			previous, err := db.Query(r.Context(), rqlite.Statement{SQL: `SELECT state FROM alerts WHERE id=?`, Params: []interface{}{id}})
-			if err != nil {
-				log.Error("alert lookup", zap.Error(err))
-				http.Error(w, "alert lookup failed", 500)
-				return
-			}
-			state := "active"
-			var resolved interface{}
-			if a.Status == "resolved" {
-				state = "resolved"
-				ended := a.EndsAt
-				if ended.IsZero() {
-					ended = time.Now().UTC()
+			identityLabels := map[string]string{}
+			for key, value := range a.Labels {
+				if key != "severity" {
+					identityLabels[key] = value
 				}
-				resolved = ended.UTC().Format(time.RFC3339Nano)
 			}
-			created := a.StartsAt
-			if created.IsZero() {
-				created = time.Now().UTC()
+			identity, _ := json.Marshal(identityLabels)
+			key := uuid.NewSHA1(uuid.NameSpaceOID, append([]byte(ruleID+"\x00"), identity...)).String()
+			now := time.Now().UTC()
+			status, action := "failing", "open"
+			observed := a.StartsAt
+			if a.Status == "resolved" {
+				status, action = "healthy", "resolve"
+				observed = a.EndsAt
 			}
-			if err := db.Execute(r.Context(), []rqlite.Statement{{SQL: `INSERT INTO alerts(id,rule_id,stack_id,node_id,severity,kind,state,message,created_at,resolved_at) VALUES(?,?,?,?,?,'metrics',?,?,?,?) ON CONFLICT(id) DO UPDATE SET severity=excluded.severity,state=excluded.state,message=excluded.message,resolved_at=excluded.resolved_at`, Params: []interface{}{id, ruleID, stackID, nodeID, severity, state, body, created.UTC().Format(time.RFC3339Nano), resolved}}}); err != nil {
-				log.Error("persist alert", zap.Error(err))
+			if observed.IsZero() {
+				observed = now
+			}
+			if err := monitoring.Record(r.Context(), db, broker, monitoring.Transition{
+				Result: monitoring.Result{CheckID: "webhook:" + key, Producer: "webhook", Kind: "metrics", Resource: monitoring.Resource{HostID: nodeID, WorkloadID: stackID, Pool: a.Labels["pool"], Dataset: a.Labels["dataset"], SourceID: a.Labels["source_node_id"], DestinationID: a.Labels["dest_node_id"]}, Observer: r.RemoteAddr, Status: status, ObservedAt: observed, EvaluatedAt: now, Labels: a.Labels, Evidence: map[string]interface{}{"generator_url": a.GeneratorURL}},
+				RuleID: ruleID, Title: title, Message: body, Severity: severity, Action: action, Notify: true,
+			}); err != nil {
+				log.Error("persist alert observation", zap.Error(err))
 				http.Error(w, "alert persistence failed", 500)
 				return
-			}
-			firstFiring := a.Status == "firing" && (len(previous.Values) == 0 || previous.Values[0][0] != "active")
-			if firstFiring {
-				if err := notify.Create(r.Context(), db, broker, &notify.Notification{AlertID: id, StackID: stackID, NodeID: nodeID, Kind: "alert", Severity: severity, Title: title, Body: body}); err != nil {
-					log.Error("alert notification", zap.Error(err))
-					http.Error(w, fmt.Sprintf("notification persistence failed: %v", err), 500)
-					return
-				}
 			}
 		}
 		w.WriteHeader(200)

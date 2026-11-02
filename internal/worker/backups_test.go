@@ -174,4 +174,11 @@ func TestReplicationAlertsAreIndependentAndClearOnSuccess(t *testing.T) {
 	if counts["replication:active"] != 1 || counts["replication:resolved"] != 1 || counts["backup_pruning:active"] != 1 {
 		t.Fatalf("incorrect outcome: %+v", counts)
 	}
+	if err := w.replicationOutcome(ctx, a, errors.New("next occurrence failed")); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT (SELECT count(*) FROM alerts),(SELECT count(*) FROM notifications),(SELECT count(*) FROM monitoring_observations)`})
+	if err != nil || rows.Values[0][0] != float64(4) || rows.Values[0][1] != float64(0) || rows.Values[0][2] != float64(6) {
+		t.Fatalf("worker recurrence/history changed notification policy: %+v %v", rows, err)
+	}
 }

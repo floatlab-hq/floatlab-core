@@ -63,7 +63,7 @@ func TestMutePreservesEvaluationAndSilencesEscalationUntilExpiry(t *testing.T) {
 	events, cancel := broker.Subscribe()
 	defer cancel()
 	metrics := &metricStub{rows: map[string][]stats.InstantSample{}}
-	evaluator := Evaluator{DB: db, Metrics: metrics, Broker: broker, IsLeader: func() bool { return true }}
+	evaluator := Evaluator{Observer: "observer", DB: db, Metrics: metrics, Broker: broker, IsLeader: func() bool { return true }}
 	rule := testRule()
 	rule.For = 0
 	rule.Severity = "info"
@@ -113,7 +113,7 @@ func TestPersistentPerResourceLifecycle(t *testing.T) {
 	broker := notify.NewBroker()
 	events, cancel := broker.Subscribe()
 	defer cancel()
-	evaluator := Evaluator{DB: db, Metrics: metrics, Broker: broker, IsLeader: func() bool { return true }}
+	evaluator := Evaluator{Observer: "observer", DB: db, Metrics: metrics, Broker: broker, IsLeader: func() bool { return true }}
 	rule := testRule()
 	rule.For = 0
 	now := time.Now().UTC().Truncate(time.Second)
@@ -128,6 +128,9 @@ func TestPersistentPerResourceLifecycle(t *testing.T) {
 	}
 	metrics.rows[rule.Condition] = []stats.InstantSample{sample("a", now), sample("b", now)}
 	tick(now)
+	if got := rows(t, db, `SELECT json_extract(result_json,'$.observer') FROM monitoring_observations`); len(got) != 2 || got[0][0] != "observer" || got[1][0] != "observer" {
+		t.Fatalf("missing observer attribution: %v", got)
+	}
 	incidents := rows(t, db, `SELECT id,state FROM alerts ORDER BY id`)
 	if len(incidents) != 2 || len(rows(t, db, `SELECT id FROM notifications`)) != 2 {
 		t.Fatal(incidents)
@@ -194,7 +197,7 @@ func TestAtomicTransitionAndCompetingWrites(t *testing.T) {
 	if err := db.Execute(ctx, []rqlite.Statement{{SQL: `CREATE TRIGGER reject_notification BEFORE INSERT ON notifications BEGIN SELECT RAISE(ABORT,'notification unavailable'); END`}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := save(ctx, db, nil, rule, storedState{}, next, now, ""); err == nil {
+	if err := save(ctx, db, nil, rule, storedState{}, next, now, "", "observer"); err == nil {
 		t.Fatal("expected failed transaction")
 	}
 	if len(rows(t, db, `SELECT id FROM alerts`)) != 0 {
@@ -204,7 +207,7 @@ func TestAtomicTransitionAndCompetingWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 2 {
-		if err := save(ctx, db, nil, rule, storedState{}, next, now, ""); err != nil {
+		if err := save(ctx, db, nil, rule, storedState{}, next, now, "", "observer"); err != nil {
 			t.Fatal(err)
 		}
 	}

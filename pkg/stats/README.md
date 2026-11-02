@@ -57,4 +57,11 @@ The external Alertmanager-compatible receiver remains at
 `POST /api/v1/stats/webhook` for separately owned external rules. It persists
 firing/resolved state and notifies on first firing. It does not look up or evaluate
 management rule definitions. Do not run external and management evaluation for
-the same rule. External alerts retain their existing identity/history behaviour.
+the same rule. Shared monitoring persistence keeps resource-scoped observations,
+commits incidents and local notifications together, and sends recovery only for
+previously notified incidents. Severity changes retain identity; independent
+resource labels retain separate incidents. A recurrence after recovery gets a
+new incident ID. Older event timestamps cannot reopen or resolve newer evidence.
+
+Webhook observations are ordered events using `startsAt`/`endsAt`, without an
+age cutoff. Polling checks enforce their configured freshness deadlines.

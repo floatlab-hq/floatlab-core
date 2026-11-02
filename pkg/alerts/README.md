@@ -83,7 +83,9 @@ durable; SSE is a best-effort hint and consumers can fetch notification history.
 
 The default Compose deployment no longer starts vmalert. The existing webhook
 remains available for separately owned external rules; do not evaluate the same
-rule in both systems. Its legacy identity/history semantics are unchanged.
+rule in both systems. Both producers use the shared monitoring incident store;
+webhook identity includes resource labels (excluding severity), and recurrence
+after recovery creates a new incident rather than overwriting history.
 
 This change installs the evaluator and existing-rule adapters, not the proposed
 built-in catalogue or new host/SMART/ZFS/protection collectors. Setup alerts,

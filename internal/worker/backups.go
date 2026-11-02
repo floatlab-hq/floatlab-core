@@ -2,8 +2,9 @@ package worker
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"github.com/floatlab/floatlab-core/pkg/config"
+	"github.com/floatlab/floatlab-core/pkg/monitoring"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
 	"go.uber.org/zap"
 	"time"
@@ -44,12 +45,16 @@ func (w *Worker) replicationOutcome(ctx context.Context, p ReplTriggerPayload, c
 	return w.backupOutcome(ctx, p, "replication", cause)
 }
 func (w *Worker) backupOutcome(ctx context.Context, p ReplTriggerPayload, kind string, cause error) error {
-	id := fmt.Sprintf("%s:%s:%s:%s", kind, p.NodeID, p.Dataset, p.DestNodeID)
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if cause == nil {
-		return w.db.Execute(ctx, []rqlite.Statement{{SQL: `UPDATE alerts SET state='resolved',resolved_at=?,updated_at=? WHERE id=? AND state='active'`, Params: []interface{}{now, now, id}}})
+	now := time.Now().UTC()
+	status, action, message := "healthy", "resolve", "Recovered"
+	if cause != nil {
+		status, action, message = "failing", "open", cause.Error()
 	}
-	return w.db.Execute(ctx, []rqlite.Statement{{SQL: `INSERT INTO alerts(id,rule_id,stack_id,node_id,severity,kind,state,message,created_at,updated_at) VALUES(?,?,?,?,'warning',?,'active',?,?,?) ON CONFLICT(id) DO UPDATE SET state='active',message=excluded.message,resolved_at=NULL,updated_at=excluded.updated_at`, Params: []interface{}{id, kind, p.StackID, p.NodeID, kind, cause.Error(), now, now}}})
+	identity, _ := json.Marshal([]string{kind, p.NodeID, p.StackID, p.Dataset, p.DestNodeID, p.DestDataset})
+	return monitoring.Record(ctx, w.db, nil, monitoring.Transition{
+		Result: monitoring.Result{CheckID: "worker:" + string(identity), Producer: "worker", Kind: kind, Resource: monitoring.Resource{HostID: p.NodeID, WorkloadID: p.StackID, Dataset: p.Dataset, SourceID: p.NodeID, DestinationID: p.DestNodeID}, Observer: p.NodeID, Target: p.DestHost, Status: status, Reason: message, ObservedAt: now, EvaluatedAt: now},
+		RuleID: kind, Title: kind, Message: message, Severity: "warning", Action: action,
+	})
 }
 
 func (w *Worker) runBackupCleanup(ctx context.Context) {
