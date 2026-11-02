@@ -59,5 +59,5 @@ do $env.config.completions.external.completer [lab start 'demo stack' we] | to j
       expect(readable).toContain("prepare"); expect(readable).toContain("demo stack"); expect(readable).toContain("web app");
       if (shell === "bash") { expect(readable).toContain("lab node"); expect(readable).not.toContain("--primary="); }
     } finally { server.stop(true); await rm(directory, { recursive: true }); }
-  });
+  }, 15_000); // Allow cold shell startup plus several completion subprocesses on CI runners.
 }
