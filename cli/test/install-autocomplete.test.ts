@@ -56,7 +56,8 @@ test("PowerShell and Nushell query their actual startup paths without loading pr
       await installAutocomplete(selected, env);
       expect(await readFile(profile, "utf8")).toBe(result);
       await expect(installAutocomplete(shell, { ...env, LAB_TEST_PROFILE: "relative" })).rejects.toThrow("absolute startup file path");
-      await expect(installAutocomplete(shell, { ...env, PATH: "" })).rejects.toThrow("ensure it is on PATH");
+      // Bun falls back to system search paths when PATH is empty.
+      await expect(installAutocomplete(shell, { ...env, PATH: join(directory, "missing-shells") })).rejects.toThrow("ensure it is on PATH");
     }
   } finally { await rm(directory, { recursive: true }); }
 });
