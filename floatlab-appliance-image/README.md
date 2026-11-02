@@ -30,7 +30,7 @@ Both environments use the existing ordered systemd pipeline:
 8. After update reconciliation authorizes startup, `floatlab-core-stack.service` starts rqlite, VictoriaMetrics, VictoriaLogs, and the control plane with `docker compose up -d`. Uncommitted updates keep Docker restart policies suppressed.
 9. Hostd forwards host, kernel, and Docker journal entries to VictoriaLogs over its loopback-only HTTP endpoint. It batches entries and advances a cursor in `/run/floatlab` only after successful delivery, retrying when VictoriaLogs is unavailable. Journal storage is ephemeral and capped at 256 MiB; retries can duplicate an acknowledged batch if checkpointing is interrupted.
 
-The production ISO shares the trimmed kernel and networking/storage support with the installed appliance, with separate initrds and root layouts. Docker, Compose and the bundled control-plane image live only in the installed OS archive, outside the live SquashFS. The development ISO retains its standalone appliance services.
+The production ISO shares the trimmed kernel and networking/storage support with the installed appliance, with separate initrds and root layouts. Docker, Compose and the bundled control-plane image live only in the installed OS archive, outside the live SquashFS. Test hosts boot this same installer and reboot into the installed appliance; there is no separately provisioned development ISO.
 
 The live ISOs omit Git, the bundled Nixpkgs source tree and the generic NixOS install/rebuild tools. Nix remains available for temporary tools, for example `nix-shell -p tcpdump smartmontools`. The first use downloads Nixpkgs expressions from the NixOS 26.05 channel; missing packages require Internet access, consume the live environment's RAM-backed writable storage, and disappear after reboot. The installed appliance retains `gitMinimal`.
 
@@ -299,36 +299,107 @@ The previous ISO build and effective boot-configuration check passed, as did the
 host-network VM regression, 129 installer/control/credential Go tests, and six
 CLI tests. Physical hardware validation remains separate from these VM checks.
 
-## Fast test VM
+## Unattended installation
+
+On the Review screen, press Ctrl+E to save `floatlab-answers.toml`. The export contains
+bcrypt hashes for both the FloatLab administrator password and the local root recovery
+password; it contains no plaintext passwords. Files are written atomically with mode
+0600. Authenticator enrollment remains interactive and cannot be cloned into answers.
+
+Place exactly one `floatlab-*.toml` file in the boot USB's root. The installer checks
+`/iso` and other partitions on that same USB, mounting extra partitions read-only.
+This permits a writable answers partition beside a read-only ISO. One matching file
+starts unattended installation and reboots only after successful verification. No
+matching file opens the ordinary interactive installer. Multiple files or invalid
+answers stop installation with diagnostics instead of choosing a disk layout arbitrarily.
+An already installed appliance is never automatically reinstalled.
+
+The format is TOML, with the same host/network settings as the interactive installer:
+
+```toml
+version = 1
+command = 'zpool create floatlab /dev/disk/by-id/virtio-floatlab-zfs'
+confirmation = 'ERASE ALL DATA'
+
+[config]
+node_name = 'floatlab-test'
+timezone = 'UTC'
+username = 'admin'
+password_hash = 'REPLACE_WITH_EXPORTED_BCRYPT_HASH'
+recovery_password_hash = 'REPLACE_WITH_EXPORTED_BCRYPT_HASH'
+
+[config.network]
+version = 1
+excluded_macs = []
+bonds = []
+dns_servers = ['1.1.1.1', '8.8.8.8']
+
+[config.network.ipv4]
+mode = 'dhcp'
+```
+
+The hash placeholders must be replaced; exporting from the UI creates valid bcrypt
+hashes. Plaintext password fields and unknown TOML keys are rejected. Exact disk IDs,
+eligibility, capacity, pool dry-run, and disk fingerprint revalidation still pass through
+the same installer service as interactive installation. `confirmation` explicitly
+permits erasing every disk named in `command`.
+
+For multi-node test hosts, `[config] enable_lab = true` requires static IPv4 settings.
+The installer derives the advertised HTTPS peer and rqlite addresses from that static
+address and writes the installed runtime configuration. The multi-node suite creates
+one independent administrator and machine identity per installation.
+
+To run unattended installation manually from a live root console:
+
+```bash
+install-service --answers /path/to/floatlab-answers.toml --reboot
+```
+
+Omit `--reboot` to remain in the verified live installer. Hash-only installation checks
+the stored administrator hash/role and recovery hash, then verifies authenticated node
+health using a short-lived local token. The workload suites additionally log in with
+the known test password after booting the installed OS.
+
+## Test VMs
 
 ```bash
 nix develop
 just run
 ```
 
-The minimum supported appliance has 4 GiB RAM; end-to-end acceptance uses 4096 MiB per VM.
-
-This explicitly builds the `dev-iso` variant, replaces any existing `floatlab-dev` VM, creates a thin 16 GiB qcow2 volume in libvirt's `default` pool, and starts the VM with KVM. The appliance recognizes that test disk, creates the `floatlab` ZFS pool, and uses the same bridged DHCP default as production on its first boot.
-
-Open its serial console with:
-
-```console
-virsh -c qemu:///system console floatlab-dev
-```
-
-Override defaults when needed:
+This builds the standard installer ISO and opens the interactive installation flow on
+a blank UEFI disk. The minimum supported appliance and acceptance VMs have 4 GiB RAM.
+Existing domains and volumes are not replaced. For unattended installation:
 
 ```bash
+FLOATLAB_ANSWERS=/path/to/floatlab-answers.toml just run
+```
+
+The harness attaches private answers media labeled `FLOATLAB_ANSWERS` containing
+`floatlab-answers.toml`, alongside the unchanged release ISO. It uses the same discovery
+and installer as USB installation. Keep answers media private and remove it with the VM.
+
+```bash
+virsh -c qemu:///system console floatlab-dev
 VM_NAME=test2 ZFS_DISK_SIZE=32G MEMORY_MB=4096 ./scripts/run-libvirt.sh
 ```
 
-Run the container API integration test against a freshly built appliance VM:
+From the repository root, run complete workload and multi-node acceptance with:
 
 ```bash
-FLOATLAB_VM_INTEGRATION=1 go test -count=1 -timeout 30m -v ./integration
+scripts/test-workloads.sh
+scripts/test-multi-node.sh
 ```
 
-`./scripts/run-qemu.sh` remains available as `just run-qemu`; its disk is persistent and still uses the manual provisioning flow below.
+All appliance E2E suites, including host upgrades, use the shared unattended installer
+harness. They check `/floatlab/system/etc/installed`, the installer's completed status,
+the pool's `mountpoint=none`, and a disk-booted `floatlab/os/live` root. Existing dedicated
+appliances supplied through `API_URL` plus `VM_SSH` or `VM_NAME` must pass those checks too.
+Each suite discovers the real installer-generated node ID instead of assuming `node1`.
+The installer UI/mirror tests still drive the actual interactive installer intentionally.
+
+`just run-qemu` uses UEFI and the same optional `FLOATLAB_ANSWERS` media. Its disk and UEFI
+variables persist beside `FLOATLAB_TEST_DISK`; `nix develop` provides `FLOATLAB_OVMF`.
 
 ## Host network settings
 

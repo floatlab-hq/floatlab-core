@@ -23,7 +23,7 @@ func TestAlertEvaluator(t *testing.T) {
 	rule := c.object("POST", "/api/v1/alert-rules", map[string]interface{}{
 		"name": name, "condition": metric + " > 90", "recovery_condition": metric + " < 85",
 		"freshness_query": "timestamp(" + metric + ")", "severity": "warning",
-		"for_duration": "30s", "recovery_duration": "30s", "max_sample_age": "45s", "node_id": "node1",
+		"for_duration": "30s", "recovery_duration": "30s", "max_sample_age": "45s", "node_id": c.nodeID,
 	}, 201)
 	ruleID := rule["id"].(string)
 	t.Cleanup(func() {
@@ -40,7 +40,7 @@ func TestAlertEvaluator(t *testing.T) {
 	})
 	push := func(a, b int) {
 		t.Helper()
-		body := fmt.Sprintf("fl_alert_evaluator_test{test_case=%q,node_id=\"node1\",device=\"a\"} %d\nfl_alert_evaluator_test{test_case=%q,node_id=\"node1\",device=\"b\"} %d\n", name, a, name, b)
+		body := fmt.Sprintf("fl_alert_evaluator_test{test_case=%q,node_id=%q,device=\"a\"} %d\nfl_alert_evaluator_test{test_case=%q,node_id=%q,device=\"b\"} %d\n", name, c.nodeID, a, name, c.nodeID, b)
 		out, err := guestCommand(root, "curl -fsS --data-binary '"+body+"' http://127.0.0.1:8428/api/v1/import/prometheus")
 		if err != nil {
 			t.Fatalf("push evaluator samples: %s %v", out, err)
@@ -49,7 +49,7 @@ func TestAlertEvaluator(t *testing.T) {
 	incidents := func() []map[string]interface{} {
 		t.Helper()
 		var own []map[string]interface{}
-		for _, value := range c.expect("GET", "/api/v1/alerts?node_id=node1", nil, 200).([]interface{}) {
+		for _, value := range c.expect("GET", "/api/v1/alerts?node_id="+c.nodeID, nil, 200).([]interface{}) {
 			row := value.(map[string]interface{})
 			if row["rule_id"] == ruleID {
 				own = append(own, row)

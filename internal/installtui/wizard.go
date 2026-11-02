@@ -254,7 +254,7 @@ func (m *Model) button(label string, action int, enabled bool) string {
 }
 
 func (m *Model) actionBar() string {
-	if m.stage == "timezone" || m.stage == "waiting" {
+	if m.stage == "timezone" || m.stage == "waiting" || m.stage == "export-answers" {
 		return ""
 	}
 	next := "Next →"
@@ -291,7 +291,9 @@ func (m *Model) helpBar(width int) string {
 	case m.stage == "timezone":
 		help = "Type Filter  ↑↓ Move  Enter Select  Esc Back"
 	case m.stage == "review":
-		help = "PgUp/PgDn Scroll  Enter Finish"
+		help = "Ctrl+E Save answers  Enter Finish"
+	case m.stage == "export-answers":
+		help = "Enter Save  Esc Cancel"
 	case m.stage == "totp":
 		help = "Type Confirm  ↓ Actions  Enter Next"
 	case m.stage == "complete" || m.stage == "failed" && m.terminal:

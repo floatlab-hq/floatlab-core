@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-for tool in go nix virsh virt-install python3; do
+for tool in go nix virsh virt-install python3 xorriso; do
   command -v "$tool" >/dev/null || { echo "Missing $tool; enter the development shell." >&2; exit 1; }
 done
 [[ -e /dev/kvm ]] || { echo "Multi-node acceptance requires /dev/kvm." >&2; exit 1; }

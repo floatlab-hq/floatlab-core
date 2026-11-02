@@ -1,23 +1,9 @@
-{ config, pkgs, floatlab-binaries, floatlab-development ? false, floatlab-dev-bundle ? null, ... }:
+{ config, pkgs, floatlab-binaries, ... }:
 let
-  devCompose = if floatlab-dev-bundle == null then null else pkgs.writeText "floatlab-dev-compose.yml" (
-    builtins.replaceStrings
-      [ "      FLOATLAB_APPLIANCE_CONFIG: /floatlab/system/etc/appliance.json\n      FLOATLAB_CREDENTIAL_KEY_FILE: /floatlab/system/etc/credential.key\n      FLOATLAB_BOOTSTRAP_FILE: /floatlab/system/etc/bootstrap.json" ]
-      [ "      FLOATLAB_BOOTSTRAP_USER: demo\n      FLOATLAB_BOOTSTRAP_PASSWORD: floatlab\n      FLOATLAB_JWT_SECRET: floatlab-development-secret-change-before-production" ]
-      (builtins.readFile (floatlab-dev-bundle + "/docker-compose.yml"))
-  );
   seedCompose = pkgs.writeShellApplication {
     name = "floatlab-seed-core-stack";
     runtimeInputs = [ pkgs.coreutils ];
     text = ''
-      ${pkgs.lib.optionalString (floatlab-development && floatlab-dev-bundle != null) ''
-        if [ ! -e /floatlab/system/docker-compose.yml ]; then
-          install -d /floatlab/system/images
-          cp ${floatlab-dev-bundle}/images/*.tar /floatlab/system/images/
-          cp ${floatlab-dev-bundle}/images.json /floatlab/system/images.json
-          cp ${devCompose} /floatlab/system/docker-compose.yml
-        fi
-      ''}
       test -s /floatlab/system/docker-compose.yml
       test -s /floatlab/system/images.json
     '';

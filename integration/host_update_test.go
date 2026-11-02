@@ -23,9 +23,8 @@ func TestHostUpdateAppliance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	uri, pool := env("LIBVIRT_URI", "qemu:///system"), env("LIBVIRT_POOL", "default")
+	uri := env("LIBVIRT_URI", "qemu:///system")
 	name := fmt.Sprintf("floatlab-host-upgrade-%d", time.Now().UnixNano())
-	volume := name + ".qcow2"
 	t.Setenv("VM_NAME", name)
 	t.Setenv("VM_SSH", "")
 	work := t.TempDir()
@@ -54,95 +53,13 @@ func TestHostUpdateAppliance(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	beforePools := map[string]bool{}
-	raw, err := command(time.Minute, root, nil, "virsh", "-c", uri, "pool-list", "--all", "--name")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range strings.Fields(raw) {
-		beforePools[entry] = true
-	}
-	t.Cleanup(func() {
-		if os.Getenv("FLOATLAB_KEEP_VM") == "1" {
-			t.Logf("keeping installed qualification VM %s", name)
-			return
-		}
-		command(time.Minute, root, nil, "virsh", "-c", uri, "destroy", name)
-		command(time.Minute, root, nil, "virsh", "-c", uri, "undefine", name, "--nvram")
-		command(time.Minute, root, nil, "virsh", "-c", uri, "vol-delete", "--pool", pool, volume)
-		cleanupISOPools(t, root, uri, filepath.Dir(iso), beforePools)
-	})
-	if _, err = command(time.Minute, root, nil, "virsh", "-c", uri, "dominfo", name); err == nil {
-		t.Fatal("refusing to replace an existing VM")
-	}
-	run(t, root, nil, "virsh", "-c", uri, "vol-create-as", pool, volume, "64G", "--format", "qcow2", "--allocation", "0")
-	run(t, root, nil, "virt-install", "--connect", uri, "--name", name, "--memory", applianceMemoryMiB, "--vcpus", "4", "--cpu", "host-passthrough", "--import", "--wait", "0", "--osinfo", "detect=on,require=off", "--boot", "uefi", "--disk", "path="+iso+",device=cdrom,readonly=on,boot_order=1", "--disk", "vol="+pool+"/"+volume+",bus=virtio,serial=floatlab-upgrade,boot_order=2", "--network", "network=default,model=virtio", "--channel", "unix,target_type=virtio,name=org.qemu.guest_agent.0", "--graphics", "none", "--console", "pty,target_type=serial", "--noautoconsole")
-	t.Cleanup(func() {
-		if t.Failed() {
-			out, e := guestCommand(root, `cat /proc/meminfo /proc/spl/kstat/zfs/arcstats; ps -eo pid,rss,comm --sort=-rss | head -25; cat /floatlab/system/updates/host.json /run/floatlab-installer/status.json /floatlab/system/etc/install-status.json /run/floatlab-upgrade-acceptance/acceptance-install-TestApplianceInstall.log 2>/dev/null || true; journalctl -u floatlab-installer-console@ttyS0 -u floatlab-installer-root -u floatlab-hostd -u floatlab-boot-recovery -u floatlab-core-stack -u docker --no-pager -n 200 || true; zfs list -t all || true; efibootmgr -v || true`)
-			t.Logf("installed upgrade diagnostics: %s %v", out, e)
-		}
-	})
-	waitFor(t, 10*time.Minute, func() error { _, e := guestCommand(root, "true"); return e })
+	t.Setenv("API_URL", "")
+	t.Setenv("FLOATLAB_APPLIANCE_ISO", iso)
+	t.Setenv("ZFS_DISK_SIZE", "64G")
+	startAppliance(t)
 	assertHostARCBudget(t, root)
-	installerBinary := filepath.Join(work, "installer-tests")
 	hostBinary := filepath.Join(work, "host-tests")
-	for _, entry := range []struct{ pkg, binary string }{{"./internal/installer", installerBinary}, {"./internal/hostupgrade", hostBinary}} {
-		run(t, root, []string{"CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64"}, "go", "test", "-c", "-tags=appliance", "-ldflags=-s -w", "-o", entry.binary, entry.pkg)
-	}
-	if out, e := guestCommand(root, "set -eu; systemctl stop floatlab-installer-display.service floatlab-installer-console@ttyS0.service; mkdir -p /run/floatlab-upgrade-acceptance"); e != nil {
-		t.Fatalf("stop interactive installer: %s %v", out, e)
-	}
-	uploadUpgradeGuestFile(t, root, installerBinary, "/run/floatlab-upgrade-acceptance/install-tests")
-	hostGuestPhase(t, root, "/run/floatlab-upgrade-acceptance/install-tests", "TestApplianceInstall", "install", nil, true)
-	// Shut down the temporary installer root cleanly before removing its mounted media.
-	if out, e := guestCommand(root, `set -eu; systemd-run --on-active=2s sh -ec 'systemctl stop floatlab-installer-root.service; zpool export floatlab; systemctl poweroff'`); e != nil {
-		t.Fatalf("poweroff installer: %s %v", out, e)
-	}
-	waitFor(t, 5*time.Minute, func() error {
-		out, e := command(time.Minute, root, nil, "virsh", "-c", uri, "domstate", name)
-		if e != nil {
-			return e
-		}
-		if strings.TrimSpace(out) != "shut off" {
-			return fmt.Errorf("installer still running: %s", out)
-		}
-		return nil
-	})
-	domain, err := command(time.Minute, root, nil, "virsh", "-c", uri, "dumpxml", name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var domainXML struct {
-		Disks []struct {
-			Device string `xml:"device,attr"`
-			Target struct {
-				Dev string `xml:"dev,attr"`
-			} `xml:"target"`
-		} `xml:"devices>disk"`
-	}
-	if err = xml.Unmarshal([]byte(domain), &domainXML); err != nil {
-		t.Fatal(err)
-	}
-	cdrom := ""
-	for _, disk := range domainXML.Disks {
-		if disk.Device == "cdrom" {
-			cdrom = disk.Target.Dev
-		}
-	}
-	if cdrom == "" {
-		t.Fatal("installer CD device not found")
-	}
-	run(t, root, nil, "virsh", "-c", uri, "change-media", name, cdrom, "--eject", "--config", "--force")
-	run(t, root, nil, "virsh", "-c", uri, "start", name)
-	waitFor(t, 10*time.Minute, func() error {
-		out, e := guestCommand(root, "set -eu; test \"$(findmnt -n -o SOURCE /)\" = floatlab/os/live; curl -fsS http://127.0.0.1:8080/api/v1/health/ready")
-		if e != nil {
-			return fmt.Errorf("installed root readiness: %s %w", out, e)
-		}
-		return nil
-	})
-	assertHostARCBudget(t, root)
+	run(t, root, []string{"CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64"}, "go", "test", "-c", "-tags=appliance", "-ldflags=-s -w", "-o", hostBinary, "./internal/hostupgrade")
 	uploadUpgradeGuestFile(t, root, hostBinary, "/floatlab/system/updates/appliance-host-tests")
 	hostDownloadCandidate(t, root, uri, candidate)
 	// Keep real workload data outside the management rollback tree throughout every host trial.
@@ -231,9 +148,6 @@ func assertHostARCBudget(t *testing.T, root string) {
 func hostGuestPhase(t *testing.T, root, binary, phase, operation string, variables []string, wait bool) {
 	t.Helper()
 	directory := "/floatlab/system/updates"
-	if phase == "TestApplianceInstall" {
-		directory = "/run/floatlab-upgrade-acceptance"
-	}
 	prefix := directory + "/acceptance-" + operation + "-" + phase
 	environment := "env FLOATLAB_APPLIANCE_TEST=1"
 	for _, v := range variables {

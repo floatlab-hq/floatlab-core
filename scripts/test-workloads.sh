@@ -22,7 +22,7 @@ if [[ -n "${API_URL:-}" ]]; then
   fi
 else
   [[ -e /dev/kvm ]] || { echo "Missing /dev/kvm; use a KVM host or API_URL and VM_SSH." >&2; exit 1; }
-  for tool in nix virsh virt-install; do
+  for tool in nix virsh virt-install xorriso; do
     command -v "$tool" >/dev/null || { echo "Missing $tool." >&2; exit 1; }
   done
   virsh -c "${LIBVIRT_URI:-qemu:///system}" uri >/dev/null

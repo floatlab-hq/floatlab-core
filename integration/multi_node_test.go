@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/floatlab/floatlab-core/internal/hostnetwork"
 	"github.com/floatlab/floatlab-core/pkg/compose"
 )
 
@@ -314,13 +316,45 @@ func assertRemovedPeerRejected(t *testing.T, removed, survivor *labGuest) {
 
 func newLabGuest(t *testing.T, index int) *labGuest {
 	t.Helper()
+	if os.Getenv("LIBVIRT_NETWORK") != "floatlab-multinode-"+os.Getenv("FLOATLAB_MULTI_NODE_RUN_ID") {
+		t.Fatal("run scripts/test-multi-node.sh to create an isolated installation network")
+	}
 	t.Setenv("API_URL", "")
 	name := fmt.Sprintf("floatlab-multinode-%s-%d", os.Getenv("FLOATLAB_MULTI_NODE_RUN_ID"), index)
 	t.Setenv("VM_NAME", name)
 	if _, err := command(15*time.Second, "..", nil, "virsh", "-c", env("LIBVIRT_URI", "qemu:///system"), "dominfo", name); err == nil {
 		t.Fatalf("refusing to replace an existing domain %s", name)
 	}
-	address := startAppliance(t)
+	username, password := "demo", "floatlab"
+	if index > 1 {
+		username = fmt.Sprintf("standalone-node-%d", index)
+		password = fmt.Sprintf("standalone-%s-node-%d-password", os.Getenv("FLOATLAB_MULTI_NODE_RUN_ID"), index)
+	}
+	answers := applianceAnswers(t, strings.ToLower(name), username, password)
+	raw, err := command(15*time.Second, "..", nil, "virsh", "-c", env("LIBVIRT_URI", "qemu:///system"), "net-dumpxml", env("LIBVIRT_NETWORK", "default"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var network struct {
+		IP struct {
+			Address string `xml:"address,attr"`
+			Netmask string `xml:"netmask,attr"`
+		} `xml:"ip"`
+	}
+	if err := xml.Unmarshal([]byte(raw), &network); err != nil {
+		t.Fatal(err)
+	}
+	gateway, err := netip.ParseAddr(network.IP.Address)
+	if err != nil || !gateway.Is4() || network.IP.Netmask != "255.255.255.0" || index < 1 || index > 99 {
+		t.Fatal("multi-node test requires an IPv4 /24 network and node index 1..99")
+	}
+	addressBytes := gateway.As4()
+	addressBytes[3] = byte(100 + index) // Outside the test network's DHCP range (.2-.99).
+	ip := netip.AddrFrom4(addressBytes).String()
+	answers.Config.Network.IPv4 = hostnetwork.IPv4{Mode: "static", Address: ip, Netmask: "255.255.255.0", Gateway: gateway.String()}
+	answers.Config.Network.DNSServers = []string{gateway.String()}
+	answers.Config.EnableLab = true
+	address := startApplianceWithAnswers(t, &answers)
 	root, err := filepath.Abs("..")
 	if err != nil {
 		t.Fatal(err)
@@ -335,35 +369,7 @@ func newLabGuest(t *testing.T, index int) *labGuest {
 		}
 	})
 	n.client.waitReady()
-	// Only this newly created, empty fixture is reset; never touch user appliances.
-	identity := fmt.Sprintf("integration-node-%d", index)
-	configuration := fmt.Sprintf("FLOATLAB_NODE_ID=%s\nFLOATLAB_PEER_URL=https://%s:9443\nFLOATLAB_RQLITE_RAFT_ADDRESS=%s:4002\nFLOATLAB_RQLITE_ADDRESS=%s:4001\n", identity, n.host(), n.host(), n.host())
-	jwtSecret := fmt.Sprintf("floatlab-multi-node-%s-node-%d-integration-secret", os.Getenv("FLOATLAB_MULTI_NODE_RUN_ID"), index)
-	n.standaloneUser, n.standalonePassword = "demo", "floatlab"
-	if index > 1 {
-		n.standaloneUser = fmt.Sprintf("standalone-node-%d", index)
-		n.standalonePassword = fmt.Sprintf("standalone-%s-node-%d-password", os.Getenv("FLOATLAB_MULTI_NODE_RUN_ID"), index)
-	}
-	// Release bundles freeze Compose interpolation, so seed the frozen values too.
-	substitutions := "sed -i -e " + shellQuote("s/--host-node-id=node1/--host-node-id="+identity+"/g") +
-		" -e " + shellQuote("s/-node-id=node1/-node-id="+identity+"/g") +
-		" -e " + shellQuote("s|FLOATLAB_PEER_URL:.*|FLOATLAB_PEER_URL: https://"+n.host()+":9443|") +
-		" -e " + shellQuote("s|FLOATLAB_RQLITE_RAFT_ADDRESS:.*|FLOATLAB_RQLITE_RAFT_ADDRESS: "+n.host()+":4002|") +
-		" -e " + shellQuote("s|FLOATLAB_RQLITE_ADDRESS:.*|FLOATLAB_RQLITE_ADDRESS: "+n.host()+":4001|") +
-		" -e " + shellQuote("s/FLOATLAB_JWT_SECRET:.*/FLOATLAB_JWT_SECRET: "+jwtSecret+"/") +
-		" -e " + shellQuote("s/FLOATLAB_BOOTSTRAP_USER:.*/FLOATLAB_BOOTSTRAP_USER: "+n.standaloneUser+"/") +
-		" -e " + shellQuote("s/FLOATLAB_BOOTSTRAP_PASSWORD:.*/FLOATLAB_BOOTSTRAP_PASSWORD: "+n.standalonePassword+"/") + " /floatlab/system/docker-compose.yml; "
-	reset := "systemctl stop floatlab-core-stack; docker compose -f /floatlab/system/docker-compose.yml down; " +
-		"for path in /floatlab/system/management/rqlite /floatlab/system/workloads /floatlab/system/etc/lab; do if test -d \"$path\"; then find \"$path\" -mindepth 1 -delete; fi; done; " +
-		"printf %s " + shellQuote(configuration) + " > /floatlab/system/.env; " +
-		substitutions +
-		"mkdir -p /run/systemd/system/floatlab-hostd.service.d; " +
-		"printf %s " + shellQuote("[Service]\nEnvironment=FLOATLAB_NODE_ID="+identity+"\n") + " > /run/systemd/system/floatlab-hostd.service.d/integration.conf; " +
-		"systemctl daemon-reload; systemctl restart floatlab-hostd; systemctl start --no-block floatlab-core-stack"
-	if out, err := n.guest("set -eu; " + reset); err != nil {
-		t.Fatalf("initialize unique empty fixture identity: %s %v", out, err)
-	}
-	n.client.waitReady()
+	n.standaloneUser, n.standalonePassword = username, password
 	var standaloneToken struct {
 		AccessToken string `json:"access_token"`
 	}

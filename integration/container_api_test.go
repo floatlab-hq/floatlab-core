@@ -19,6 +19,8 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/floatlab/floatlab-core/api/openapi"
+	"github.com/floatlab/floatlab-core/internal/hostnetwork"
+	"github.com/floatlab/floatlab-core/internal/installer"
 )
 
 type apiClient struct {
@@ -26,6 +28,7 @@ type apiClient struct {
 	baseURL string
 	token   string
 	client  *http.Client
+	nodeID  string
 }
 
 func TestContainerManagementAPI(t *testing.T) {
@@ -41,7 +44,7 @@ func TestContainerManagementAPI(t *testing.T) {
 
 	stackName := fmt.Sprintf("api-it-%d", time.Now().UnixNano())
 	marker := "floatlab-api-integration-" + stackName
-	compose := composeFixture(stackName, marker, "alpine:3.20", "from-start")
+	compose := c.composeFixture(stackName, marker, "alpine:3.20", "from-start")
 
 	started := c.startNewStack(stackName, compose)
 	stackID := started.StackID
@@ -95,8 +98,13 @@ func newAPIClient(t *testing.T, baseURL string) *apiClient {
 const applianceMemoryMiB = "4096"
 
 func startAppliance(t *testing.T) string {
+	return startApplianceWithAnswers(t, nil)
+}
+
+func startApplianceWithAnswers(t *testing.T, configuration *installer.Answers) string {
 	t.Helper()
 	if baseURL := os.Getenv("API_URL"); baseURL != "" {
+		assertInstalledAppliance(t)
 		return baseURL
 	}
 	// A newly owned VM must never inherit another appliance's SSH destination.
@@ -107,11 +115,18 @@ func startAppliance(t *testing.T) string {
 	}
 	appliance := filepath.Join(root, "floatlab-appliance-image")
 	name := env("VM_NAME", "floatlab-integration")
+	t.Setenv("VM_NAME", name)
 	uri := env("LIBVIRT_URI", "qemu:///system")
 	pool := env("LIBVIRT_POOL", "default")
 	volume := name + "-zfs.qcow2"
 	var isoDirectory string
 	existingPools := map[string]bool{}
+	// Check ownership before registering cleanup, which must never delete an existing VM.
+	for _, args := range [][]string{{"dominfo", name}, {"vol-info", "--pool", pool, volume}, {"vol-info", "--pool", pool, name + "-answers.iso"}} {
+		if _, err := command(15*time.Second, root, nil, "virsh", append([]string{"-c", uri}, args...)...); err == nil {
+			t.Fatalf("refusing to replace an existing appliance resource: %s", strings.Join(args, " "))
+		}
+	}
 
 	t.Cleanup(func() {
 		if os.Getenv("FLOATLAB_KEEP_VM") == "1" {
@@ -121,6 +136,7 @@ func startAppliance(t *testing.T) string {
 		command(30*time.Second, root, nil, "virsh", "-c", uri, "destroy", name)
 		command(30*time.Second, root, nil, "virsh", "-c", uri, "undefine", name, "--nvram")
 		command(30*time.Second, root, nil, "virsh", "-c", uri, "vol-delete", "--pool", pool, volume)
+		command(30*time.Second, root, nil, "virsh", "-c", uri, "vol-delete", "--pool", pool, name+"-answers.iso")
 		if isoDirectory != "" {
 			cleanupISOPools(t, root, uri, isoDirectory, existingPools)
 		}
@@ -138,7 +154,7 @@ func startAppliance(t *testing.T) string {
 			run(t, appliance, nil, "nix", "build", "path:"+root+"?dir=floatlab-appliance-image#host-image", "--impure", "--print-build-logs", "--out-link", host)
 			run(t, root, nil, "python3", "scripts/release.py", "prepare-iso", bundle, "--version", "integration", "--local-host", host)
 		}
-		run(t, appliance, []string{"FLOATLAB_ISO_BUNDLE=" + bundle}, "nix", "--extra-experimental-features", "nix-command flakes", "build", "path:"+root+"?dir=floatlab-appliance-image#dev-iso", "--impure", "--print-build-logs", "--out-link", result)
+		run(t, appliance, []string{"FLOATLAB_ISO_BUNDLE=" + bundle}, "nix", "--extra-experimental-features", "nix-command flakes", "build", "path:"+root+"?dir=floatlab-appliance-image#iso", "--impure", "--print-build-logs", "--out-link", result)
 		images, err := filepath.Glob(filepath.Join(result, "iso", "*.iso"))
 		if err != nil || len(images) != 1 {
 			t.Fatalf("expected one appliance ISO: %v %v", images, err)
@@ -161,8 +177,57 @@ func startAppliance(t *testing.T) string {
 	if os.Getenv("FLOATLAB_MULTI_NODE_INTEGRATION") == "1" {
 		t.Setenv("FLOATLAB_APPLIANCE_ISO", image)
 	}
-	run(t, root, []string{"VM_NAME=" + name, "LIBVIRT_URI=" + uri, "LIBVIRT_POOL=" + pool, "MEMORY_MB=" + applianceMemoryMiB, "ZFS_DISK_SIZE=" + env("ZFS_DISK_SIZE", "32G")}, filepath.Join(appliance, "scripts/run-libvirt.sh"), image)
-	return "http://" + waitForIP(t, root, uri, name) + ":8080"
+	answers := applianceAnswers(t, strings.ToLower(name), env("FLOATLAB_USER", "demo"), env("FLOATLAB_PASSWORD", "floatlab"))
+	if configuration != nil {
+		answers = *configuration
+	}
+	answersPath := filepath.Join(t.TempDir(), "answers.toml")
+	if err := installer.WriteAnswers(answersPath, answers); err != nil {
+		t.Fatal(err)
+	}
+	run(t, root, []string{"VM_NAME=" + name, "LIBVIRT_URI=" + uri, "LIBVIRT_POOL=" + pool, "MEMORY_MB=" + applianceMemoryMiB, "ZFS_DISK_SIZE=" + env("ZFS_DISK_SIZE", "32G"), "FLOATLAB_ANSWERS=" + answersPath}, filepath.Join(appliance, "scripts/run-libvirt.sh"), image)
+	t.Cleanup(func() {
+		if t.Failed() {
+			out, err := guestCommand(root, `cat /run/floatlab-installer/status.json /floatlab/system/etc/install-status.json 2>/dev/null || true; journalctl -u floatlab-install-discovery -u floatlab-unattended-install -u floatlab-installer-root -u floatlab-hostd -u floatlab-core-stack --no-pager -n 100; zfs list -t all`)
+			t.Logf("installer appliance diagnostics: %s\n%v", out, err)
+		}
+	})
+	assertInstalledAppliance(t)
+	return "http://" + waitForIP(t, root) + ":8080"
+}
+
+func applianceAnswers(t *testing.T, name, username, password string) installer.Answers {
+	t.Helper()
+	answers, err := installer.NewAnswers(installer.ZPoolCommand([]installer.Disk{{Path: "/dev/disk/by-id/virtio-floatlab-zfs"}}), installer.InstallConfig{NodeName: name, Timezone: "UTC", Network: hostnetwork.DefaultConfig(), Username: username, Password: password, PasswordConfirmation: password, RecoveryPassword: "integration-console-password", RecoveryConfirmation: "integration-console-password"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return answers
+}
+
+func assertInstalledAppliance(t *testing.T) {
+	t.Helper()
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func() error {
+		out, err := guestCommand(root, `set -eu; if systemctl is-failed --quiet floatlab-unattended-install.service || systemctl is-failed --quiet floatlab-install-discovery.service; then echo INSTALLATION_FAILED; journalctl -u floatlab-unattended-install -u floatlab-install-discovery --no-pager -n 60; exit 1; fi; test "$(findmnt -n -o SOURCE /)" = floatlab/os/live; test -e /floatlab/system/etc/installed; test "$(jq -r .ready /floatlab/system/etc/install-status.json)" = true; test "$(zfs get -H -o value mountpoint floatlab)" = none`)
+		if strings.Contains(out, "INSTALLATION_FAILED") {
+			t.Fatalf("unattended installer failed: %s", out)
+		}
+		if err != nil {
+			return fmt.Errorf("waiting for a verified installation booted from disk: %s %w", out, err)
+		}
+		return nil
+	}
+	if os.Getenv("API_URL") != "" {
+		if err := check(); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	waitFor(t, 20*time.Minute, check)
 }
 
 // virt-install automatically registers the ISO's directory as a storage pool.
@@ -272,17 +337,14 @@ func (c *apiClient) waitNodeReady() {
 		if err := c.doJSON(http.MethodGet, "/api/v1/nodes", c.token, "", nil, &nodes); err != nil {
 			return err
 		}
-		registered := false
-		for _, node := range nodes {
-			registered = registered || node.ID == "node1"
+		if len(nodes) != 1 {
+			return fmt.Errorf("expected one installed standalone node, got %d", len(nodes))
 		}
-		if !registered {
-			return fmt.Errorf("node1 is not registered")
-		}
+		c.nodeID = nodes[0].ID
 		var health struct {
 			Status string `json:"status"`
 		}
-		if err := c.doJSON(http.MethodGet, "/api/v1/nodes/node1/health", c.token, "", nil, &health); err != nil {
+		if err := c.doJSON(http.MethodGet, "/api/v1/nodes/"+c.nodeID+"/health", c.token, "", nil, &health); err != nil {
 			return err
 		}
 		if health.Status != "reachable" {
@@ -536,7 +598,7 @@ func (c *apiClient) assertLogAPIs(stackID, containerID, marker string) {
 		"/api/v1/logs/search?query=*&limit=5",
 		"/api/v1/logs/stacks/" + stackID + "?range=1h",
 		"/api/v1/logs/containers/" + containerID,
-		"/api/v1/logs/nodes/node1?range=1h",
+		"/api/v1/logs/nodes/" + c.nodeID + "?range=1h",
 		"/api/v1/logs/audit?limit=5",
 	} {
 		var lines []map[string]any
@@ -572,8 +634,8 @@ func (c *apiClient) assertStatsAPIs(stackID string) {
 	for _, path := range []string{
 		"/api/v1/stats/query?q=" + url.QueryEscape("up") + "&range=1h",
 		"/api/v1/stats/stacks/" + stackID + "?range=1h",
-		"/api/v1/stats/nodes/node1?range=1h",
-		"/api/v1/stats/storage/node1?range=1h",
+		"/api/v1/stats/nodes/" + c.nodeID + "?range=1h",
+		"/api/v1/stats/storage/" + c.nodeID + "?range=1h",
 	} {
 		var payload any
 		if err := c.doJSON(http.MethodGet, path, "", "", nil, &payload); err != nil {
@@ -644,7 +706,7 @@ func (c *apiClient) assertIdempotency(stackID string) {
 
 func (c *apiClient) assertComposeUpdate(stackID, stackName, marker string) {
 	c.t.Helper()
-	updated := composeFixture(stackName, marker, "alpine:3.20", "from-update")
+	updated := c.composeFixture(stackName, marker, "alpine:3.20", "from-update")
 	var stack struct {
 		ID          string `json:"id"`
 		ComposeFile string `json:"compose_file"`
@@ -656,7 +718,7 @@ func (c *apiClient) assertComposeUpdate(stackID, stackName, marker string) {
 		c.t.Fatalf("unexpected compose update response: %+v", stack)
 	}
 
-	resp, body, err := c.request(http.MethodPut, "/api/v1/stacks/"+stackID+"/compose", c.token, "bad-compose-"+time.Now().Format("150405000000000"), "application/json", bytes.NewReader(mustJSON(c.t, map[string]string{"compose_file": strings.Replace(updated, "primary_node: node1", "primary_node: other", 1)})))
+	resp, body, err := c.request(http.MethodPut, "/api/v1/stacks/"+stackID+"/compose", c.token, "bad-compose-"+time.Now().Format("150405000000000"), "application/json", bytes.NewReader(mustJSON(c.t, map[string]string{"compose_file": strings.Replace(updated, "primary_node: "+c.nodeID, "primary_node: other", 1)})))
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -852,22 +914,32 @@ func waitFor(t *testing.T, timeout time.Duration, check func() error) {
 	t.Fatalf("timed out after %s: %v", timeout, last)
 }
 
-func waitForIP(t *testing.T, dir, uri, name string) string {
+func waitForIP(t *testing.T, dir string) string {
 	t.Helper()
 	var ip string
 	waitFor(t, 5*time.Minute, func() error {
-		out, err := command(15*time.Second, dir, nil, "virsh", "-c", uri, "domifaddr", name, "--source", "lease")
+		out, err := guestCommand(dir, "ip -json -4 addr show dev floatlab-lan")
 		if err != nil {
 			return err
 		}
-		for _, field := range strings.Fields(out) {
-			candidate, _, err := net.ParseCIDR(field)
-			if err == nil && candidate.To4() != nil && !candidate.IsLoopback() {
-				ip = candidate.String()
-				return nil
+		var links []struct {
+			Addresses []struct {
+				Local string `json:"local"`
+			} `json:"addr_info"`
+		}
+		if err := json.Unmarshal([]byte(out), &links); err != nil {
+			return err
+		}
+		for _, link := range links {
+			for _, address := range link.Addresses {
+				candidate := net.ParseIP(address.Local)
+				if candidate.To4() != nil && !candidate.IsLoopback() {
+					ip = candidate.String()
+					return nil
+				}
 			}
 		}
-		return fmt.Errorf("no IPv4 lease yet")
+		return fmt.Errorf("installed LAN has no IPv4 address yet")
 	})
 	return ip
 }
@@ -914,12 +986,12 @@ func env(name, fallback string) string {
 	return fallback
 }
 
-func composeFixture(name, marker, image, revision string) string {
+func (c *apiClient) composeFixture(name, marker, image, revision string) string {
 	return fmt.Sprintf(`name: %s
 x-fl-health-timeout: 90s
 x-fl-stack:
   schema_version: 1
-  primary_node: node1
+  primary_node: %s
   failover:
     mode: manual
   storage:
@@ -950,5 +1022,5 @@ services:
         x-fl-snapshots: 1h/2 1d/2
 volumes:
   data: {}
-`, name, image, marker, revision)
+`, name, c.nodeID, image, marker, revision)
 }

@@ -110,16 +110,9 @@ func TestCLICaddy(t *testing.T) {
 	prefix := netip.MustParsePrefix(subnet)
 	startIP := prefix.Addr().Next().Next()
 	endIP := startIP.Next().Next()
-	bridge, err := guestCommand(root, "if ! ip link show dev floatlab-lan >/dev/null 2>&1; then ip link add floatlab-lan type bridge; ip link set floatlab-lan up; echo created; fi")
+	_, err = guestCommand(root, "ip link show dev floatlab-lan")
 	if err != nil {
-		t.Fatalf("prepare VM bridge: %v", err)
-	}
-	if strings.Contains(bridge, "created") {
-		t.Cleanup(func() {
-			if _, err := guestCommand(root, "ip link delete floatlab-lan"); err != nil {
-				t.Errorf("cleanup test bridge: %v", err)
-			}
-		})
+		t.Fatalf("installer did not configure the LAN bridge: %v", err)
 	}
 	// Pools must belong to a node and match one of its actual LAN subnets.
 	lanAddress := prefix.Addr().Next().String() + "/24"
@@ -419,8 +412,33 @@ func TestCaddyComposeFixture(t *testing.T) {
 }
 
 func TestExistingAPIBypassesVMProvisioning(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$INSTALL_CHECK_ARGS\"\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	t.Setenv("VM_SSH", "test-appliance")
+	argsPath := filepath.Join(dir, "args")
+	t.Setenv("INSTALL_CHECK_ARGS", argsPath)
 	t.Setenv("API_URL", "http://example.test:8080")
 	if got := startAppliance(t); got != "http://example.test:8080" {
 		t.Fatalf("existing API URL = %q", got)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil || !strings.Contains(string(args), "floatlab/os/live") || !strings.Contains(string(args), "install-status.json") {
+		t.Fatal("existing target bypassed installed-appliance validation", err)
+	}
+}
+
+func TestInstalledAddressUsesTheBridgeInsteadOfAnOldDHCPLease(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\nprintf '%s\\n' '[{\"addr_info\":[{\"local\":\"198.19.1.101\"}]}]'\n"
+	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	t.Setenv("VM_SSH", "installed-test-appliance")
+	if got := waitForIP(t, dir); got != "198.19.1.101" {
+		t.Fatalf("installed bridge address = %q", got)
 	}
 }

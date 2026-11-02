@@ -236,43 +236,35 @@ tests.
 
 ## Development VM
 
-The repository's Nix development shell provides the VM tooling. Host libvirt must be installed, running, and accessible to your user.
-
-Create and boot a fresh `floatlab-dev` VM:
-
-```bash
-nix develop -c env LIBVIRT_URI=qemu:///system scripts/create-floatlab-vm.sh
-```
-
-The command builds and loads the management API container, installs the native host daemon, and starts rqlite, VictoriaMetrics, VictoriaLogs, and the management API. The services start automatically after a VM reboot.
-
-Once provisioning finishes, the API and Swagger UI are available on the VM's host-facing IP:
-
-```text
-http://<VM-IP>:8080
-http://<VM-IP>:8080/swagger/
-```
-
-Start an existing VM:
+VMs use the release installer ISO, private TOML answers with bcrypt password hashes,
+and a blank UEFI disk. Host libvirt must be running and accessible to your user.
+Export an answers file with Ctrl+E on the installer's Review screen, then run:
 
 ```bash
-nix develop -c virsh --connect qemu:///system start floatlab-dev
+nix develop -c env LIBVIRT_URI=qemu:///system scripts/create-floatlab-vm.sh /path/to/floatlab-answers.toml
 ```
 
-Find its IP address and connect:
+Review the exact disk IDs in the answers before reuse. The VM disk is
+`/dev/disk/by-id/virtio-floatlab-zfs`. Existing domains and volumes are never replaced.
+The installer verifies the installation, reboots into the installed OS, and starts
+management services. Find its address using the guest agent:
 
 ```bash
-nix develop -c virsh --connect qemu:///system domifaddr floatlab-dev --source lease
-ssh ubuntu@<IP>
+nix develop -c virsh --connect qemu:///system domifaddr floatlab-dev --source agent
 ```
 
-Create a VM and run the uncached container API integration suite:
+The API is at `http://<VM-IP>:8080`; sign in with the credentials used to generate
+the answers. To create disposable hosts and run real workload acceptance:
 
 ```bash
-nix develop -c env LIBVIRT_URI=qemu:///system RUN_INTEGRATION_TESTS=1 scripts/create-floatlab-vm.sh
+nix develop -c scripts/test-workloads.sh
 ```
 
-The integration suite destroys the `floatlab-dev` domain and removes its generated files when it finishes, including after a failure.
+The suite generates private answers for each VM, installs through the normal installer,
+and requires a completed installation booted from disk before running workloads.
+It removes its owned domains, disks, and answers media after the run. It requires KVM;
+ordinary CI Go tests skip these appliance scenarios unless explicitly enabled.
+See the [unattended installation guide](floatlab-appliance-image/README.md#unattended-installation).
 
 ### FloatLab Raft - Distributed Consensus Algorithm
 

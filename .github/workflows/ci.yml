@@ -92,6 +92,11 @@ jobs:
       - name: Test release metadata and offline bundle assembly
         run: python3 scripts/release_test.py
 
+      - name: Test installer answers discovery and VM launchers
+        run: |
+          python3 floatlab-appliance-image/tests/installer-answers.py floatlab-appliance-image/nixos/modules/installer-answers.sh
+          python3 floatlab-appliance-image/tests/vm-harness.py
+
       - name: Download modules
         run: go mod download
 

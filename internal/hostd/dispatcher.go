@@ -290,9 +290,28 @@ func (d *Dispatcher) datasetCreate(ctx context.Context, raw json.RawMessage) (an
 		return nil, fmt.Errorf("invalid ZFS properties")
 	}
 	if _, err := runShell(ctx, "zfs", "list", "-H", "-o", "name", p.Dataset); err == nil {
+		mountpoint, err := runShell(ctx, "zfs", "get", "-H", "-o", "value", "mountpoint", p.Dataset)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(mountpoint) != "/"+p.Dataset {
+			if _, err := runShell(ctx, "zfs", "set", "mountpoint=/"+p.Dataset, p.Dataset); err != nil {
+				return nil, err
+			}
+		}
+		mounted, err := runShell(ctx, "zfs", "get", "-H", "-o", "value", "mounted", p.Dataset)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(mounted) != "yes" {
+			if _, err := runShell(ctx, "zfs", "mount", p.Dataset); err != nil {
+				return nil, err
+			}
+		}
 		return map[string]string{"dataset": p.Dataset}, nil
 	}
-	args := []string{"create"}
+	// The pool uses mountpoint=none; workloads need an explicit mountpoint.
+	args := []string{"create", "-o", "mountpoint=/" + p.Dataset}
 	if p.BlockSize != "" {
 		args = append(args, "-o", "recordsize="+p.BlockSize)
 	}

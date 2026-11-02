@@ -50,12 +50,37 @@ func TestWorkloadConfidence(t *testing.T) {
 	}{
 		{"container-management", TestContainerManagementAPI},
 		{"cli-caddy", TestCLICaddy},
-		{"documented-management", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertManagementContracts() }},
-		{"unconfigured-lab-rejections", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertUnconfiguredLab() }},
+		{"documented-management", func(t *testing.T) {
+			c := newAPIClient(t, c.baseURL)
+			c.login()
+			c.waitNodeReady()
+			c.assertManagementContracts()
+		}},
+		{"unconfigured-lab-rejections", func(t *testing.T) {
+			c := newAPIClient(t, c.baseURL)
+			c.login()
+			c.waitNodeReady()
+			c.assertUnconfiguredLab()
+		}},
 		{"alert-evaluator", TestAlertEvaluator},
-		{"persistence-recovery-rollback", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertRecoveryWorkload() }},
-		{"network-settings", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertHostNetworkTransactions() }},
-		{"management-update", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertManagementUpdateAppliance() }},
+		{"persistence-recovery-rollback", func(t *testing.T) {
+			c := newAPIClient(t, c.baseURL)
+			c.login()
+			c.waitNodeReady()
+			c.assertRecoveryWorkload()
+		}},
+		{"network-settings", func(t *testing.T) {
+			c := newAPIClient(t, c.baseURL)
+			c.login()
+			c.waitNodeReady()
+			c.assertHostNetworkTransactions()
+		}},
+		{"management-update", func(t *testing.T) {
+			c := newAPIClient(t, c.baseURL)
+			c.login()
+			c.waitNodeReady()
+			c.assertManagementUpdateAppliance()
+		}},
 	} {
 		if !coverage.scenarioTest(t, scenario.name, func(child *testing.T) {
 			defer diagnostics(child) // Capture workloads before owned-resource cleanup runs.
@@ -105,7 +130,7 @@ func preflightWorkloads(t *testing.T) {
 	if _, err := os.Stat("/dev/kvm"); err != nil {
 		t.Fatal("full suite requires /dev/kvm, or API_URL and VM_SSH for a dedicated appliance")
 	}
-	for _, name := range []string{"nix", "virsh", "virt-install"} {
+	for _, name := range []string{"nix", "virsh", "virt-install", "xorriso"} {
 		if _, err := exec.LookPath(name); err != nil {
 			t.Fatalf("full suite requires %s", name)
 		}
@@ -239,7 +264,7 @@ func (c *apiClient) assertManagementContracts() {
 	c.assertNotificationContract(name)
 	c.expect("GET", "/api/v1/storage/replication", nil, 200)
 	// Successful received-backup reads/restores require the separate multi-node suite.
-	c.expect("GET", "/api/v1/storage/backups?node_id=node1&source_node_id=invalid/source&dataset=invalid", nil, 400)
+	c.expect("GET", "/api/v1/storage/backups?node_id="+c.nodeID+"&source_node_id=invalid/source&dataset=invalid", nil, 400)
 	c.expect("POST", "/api/v1/storage/backups/restore", map[string]any{}, 400)
 	c.expect("GET", "/api/v1/storage/faults", nil, 200)
 	c.expect("GET", "/api/v1/failover/status", nil, 200)

@@ -99,19 +99,13 @@
         inherit system;
         modules = [ ./nixos/iso.nix ];
         pkgs = pkgs;
-        specialArgs = { inherit floatlab-binaries floatlab-installer-binaries floatlab-version; floatlab-development = false; floatlab-installer-command = null; };
+        specialArgs = { inherit floatlab-binaries floatlab-installer-binaries floatlab-version; floatlab-installer-command = null; };
       };
 
-      nixosConfigurations.floatlab-dev-iso = nixpkgs.lib.nixosSystem {
-        inherit system;
-        modules = [ ./nixos/iso.nix ];
-        pkgs = pkgs;
-        specialArgs = { inherit floatlab-binaries floatlab-installer-binaries floatlab-version; floatlab-development = true; floatlab-dev-bundle = bundle; floatlab-installer-command = null; };
-      };
       nixosConfigurations.floatlab-installed = nixpkgs.lib.nixosSystem {
         inherit system pkgs;
         modules = [ ./nixos/installed.nix ];
-        specialArgs = { inherit floatlab-binaries floatlab-installer-binaries floatlab-version; floatlab-development = false; };
+        specialArgs = { inherit floatlab-binaries floatlab-installer-binaries floatlab-version; };
       };
       nixosConfigurations.floatlab-installer-preview = nixpkgs.lib.nixosSystem {
         inherit system pkgs;
@@ -126,7 +120,6 @@
       };
       packages.${system} = {
         iso = makeISO self.nixosConfigurations.floatlab-iso;
-        dev-iso = makeISO self.nixosConfigurations.floatlab-dev-iso;
         installer-preview = self.nixosConfigurations.floatlab-installer-preview.config.system.build.vm;
         installer-test = pkgs.writeShellApplication {
           name = "floatlab-installer-test";
@@ -141,6 +134,10 @@
       };
 
       checks.${system} = {
+        installer-answers = pkgs.runCommand "floatlab-installer-answers-check" { nativeBuildInputs = [ pkgs.python3 pkgs.bash pkgs.coreutils ]; } ''
+          python3 ${./tests/installer-answers.py} ${./nixos/modules/installer-answers.sh}
+          touch "$out"
+        '';
         zfs-memory = pkgs.runCommand "floatlab-zfs-memory-check" { nativeBuildInputs = [ pkgs.python3 pkgs.bash pkgs.gawk ]; } ''
           python3 ${./tests/zfs-memory.py} ${./nixos/modules/zfs-memory.sh}
           touch "$out"
@@ -182,7 +179,7 @@
         image-trim =
         let
           configurations = map (name: self.nixosConfigurations.${name}.config)
-            [ "floatlab-iso" "floatlab-dev-iso" "floatlab-installed" ];
+            [ "floatlab-iso" "floatlab-installed" ];
           trimmed = cfg:
             !cfg.documentation.enable && !cfg.services.rsyslogd.enable
             && !cfg.hardware.bluetooth.enable && !cfg.networking.wireless.enable
@@ -249,16 +246,19 @@
            assert cfg.systemd.services."floatlab-installer-console@".serviceConfig.RestartForceExitStatus == "SIGHUP";
            assert pkgs.lib.hasSuffix "/bin/install-tui" cfg.systemd.services."floatlab-installer-console@".serviceConfig.ExecStart;
            assert cfg.systemd.services."floatlab-installer-console@".serviceConfig.TimeoutStopSec == "infinity";
+           assert cfg.systemd.services.floatlab-unattended-install.serviceConfig.Type == "oneshot";
            assert !(builtins.hasAttr "floatlab-install-worker" cfg.systemd.services);
            assert builtins.elem "--interface=floatlab-lan:routable" cfg.systemd.network.wait-online.extraArgs;
            pkgs.runCommand "floatlab-installer-boot-config" {} ''
+             grep -F 'floatlab-unattended-install.service' ${cfg.systemd.services.floatlab-install-discovery.serviceConfig.ExecStart} >/dev/null
              grep -F '${pkgs.nftables}/bin' ${installed.systemd.services.floatlab-core-stack.serviceConfig.ExecStart} >/dev/null
              touch "$out"
            '';
       };
 
       devShells.${system}.default = pkgs.mkShell {
-        packages = with pkgs; [ just qemu_kvm libvirt virt-manager coreutils jq python3 docker-client go gh ];
+        FLOATLAB_OVMF = "${pkgs.OVMF.fd}/FV";
+        packages = with pkgs; [ just qemu_kvm libvirt virt-manager coreutils jq python3 docker-client go gh xorriso ];
       };
     };
 }

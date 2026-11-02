@@ -11,7 +11,7 @@ import (
 func (c *apiClient) assertRecoveryWorkload() {
 	t := c.t
 	name := fmt.Sprintf("recovery-%d", time.Now().UnixNano())
-	source := composeFixture(name, name, "alpine:3.20", "v1")
+	source := c.composeFixture(name, name, "alpine:3.20", "v1")
 	// Keep the fixture's data file stable across container recreation.
 	source = strings.Replace(source, "echo v1 > /data/revision.txt", "test -f /data/revision.txt || echo v1 > /data/revision.txt", 1)
 	source = strings.Replace(source, "x-fl-health-timeout: 90s", "x-fl-health-timeout: 15s", 1)

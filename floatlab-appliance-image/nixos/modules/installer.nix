@@ -1,8 +1,13 @@
-{ config, lib, pkgs, floatlab-installer-binaries, floatlab-development ? false, ... }:
+{ config, lib, pkgs, floatlab-installer-binaries, ... }:
 let
   root = "/run/floatlab-installer/root";
   chroot = "${pkgs.coreutils}/bin/chroot ${root} /run/current-system/sw/bin";
   rootSetup = pkgs.writeShellScript "floatlab-installer-root" (builtins.readFile ./installer-root.sh);
+  answers = pkgs.writeShellApplication {
+    name = "floatlab-find-install-answers";
+    runtimeInputs = [ pkgs.coreutils pkgs.util-linux ];
+    text = builtins.readFile ./installer-answers.sh;
+  };
   gate = pkgs.writeShellScript "floatlab-installed-gate" ''
     test -e /floatlab/system/etc/installed || test -e /run/floatlab-installer/finalizing ||
       { test -e /floatlab/system/docker-compose.yml && ! test -e /floatlab/system/etc/install-operation.json; }
@@ -28,7 +33,16 @@ let
         if [ -f /floatlab/system/etc/install-status.json ]; then
           install -m 0600 /floatlab/system/etc/install-status.json /run/floatlab-installer/status.json
         fi
-        systemctl start --no-block floatlab-installer-display.service floatlab-installer-console@ttyS0.service
+        if ${answers}/bin/floatlab-find-install-answers /iso /run/floatlab-installer; then
+          systemctl start --no-block floatlab-unattended-install.service
+        else
+          result=$?
+          if [ "$result" = 1 ]; then
+            systemctl start --no-block floatlab-installer-display.service floatlab-installer-console@ttyS0.service
+          else
+            exit "$result"
+          fi
+        fi
       fi
     '';
   };
@@ -52,13 +66,13 @@ in {
     serviceConfig = { Type = "oneshot"; RemainAfterExit = true; ExecStart = "${identity}/bin/floatlab-restore-identity"; };
   };
   systemd.services.floatlab-network-config = {
-    environment.SYSTEMD_OFFLINE = lib.mkIf (!floatlab-development) "0";
+    environment.SYSTEMD_OFFLINE = "0";
     wants = [ "floatlab-host-identity.service" ];
-    after = [ "floatlab-host-identity.service" ] ++ lib.optionals (!floatlab-development) [ "floatlab-installer-root.service" ];
-    wantedBy = lib.mkIf (!floatlab-development) (lib.mkForce []);
-    requires = lib.mkIf (!floatlab-development) [ "floatlab-installer-root.service" ];
-    serviceConfig.ExecStart = lib.mkIf (!floatlab-development) (lib.mkForce "${chroot}/floatlab-installer-hostd network init");
-    serviceConfig.ExecCondition = lib.mkIf (!floatlab-development) gate;
+    after = [ "floatlab-host-identity.service" "floatlab-installer-root.service" ];
+    wantedBy = lib.mkForce [];
+    requires = [ "floatlab-installer-root.service" ];
+    serviceConfig.ExecStart = lib.mkForce "${chroot}/floatlab-installer-hostd network init";
+    serviceConfig.ExecCondition = gate;
   };
   systemd.services."floatlab-installer-console@" = {
     description = "FloatLab installer console on %I";
@@ -83,7 +97,19 @@ in {
     };
   };
   systemd.services.floatlab-installer-display.path = [ pkgs.floatlab-zbm-kcl ];
-  systemd.services.floatlab-install-discovery = lib.mkIf (!floatlab-development) {
+  # Answers media opts into the same installer with exact disk confirmation.
+  systemd.services.floatlab-unattended-install = {
+    description = "Install FloatLab from private answers media";
+    after = [ "systemd-udev-settle.service" "floatlab-installer-network.service" ];
+    path = with pkgs; [ coreutils util-linux dosfstools gnutar gzip nix floatlab-zbm-kcl zfs systemd inetutils iproute2 ];
+    script = ''
+      set -euo pipefail
+      if ${gate}; then exit 0; fi
+      ${floatlab-installer-binaries}/bin/install-service --answers /run/floatlab-installer/answers.toml --reboot
+    '';
+    serviceConfig = { Type = "oneshot"; UMask = "0077"; TimeoutStartSec = "infinity"; TimeoutStopSec = "infinity"; };
+  };
+  systemd.services.floatlab-install-discovery = {
     wantedBy = [ "multi-user.target" ];
     wants = [ "floatlab-datasets.service" ];
     after = [ "floatlab-datasets.service" ];
@@ -91,7 +117,7 @@ in {
   };
   # Initial DHCP does not depend on storage. Remove it before hostd's bridge owns
   # the adapters, so it cannot compete with the confirmed installed settings.
-  systemd.services.floatlab-installer-network = lib.mkIf (!floatlab-development) {
+  systemd.services.floatlab-installer-network = {
     wantedBy = [ "multi-user.target" ];
     wants = [ "systemd-networkd.service" "floatlab-datasets.service" ];
     after = [ "systemd-networkd.service" "floatlab-datasets.service" ];
@@ -107,16 +133,16 @@ in {
     '';
     serviceConfig = { Type = "oneshot"; RemainAfterExit = true; };
   };
-  systemd.services.floatlab-network-config.preStart = lib.mkIf (!floatlab-development) ''
+  systemd.services.floatlab-network-config.preStart = ''
     rm -f /run/systemd/network/90-floatlab-installer.network
     networkctl reload
   '';
 
   # Keep kernel support on the live host; userspace comes from the installed root.
-  boot.kernelModules = lib.mkIf (!floatlab-development) [ "bridge" "veth" "br_netfilter" "xt_nat" ];
-  boot.kernel.sysctl."net.ipv4.conf.all.forwarding" = lib.mkIf (!floatlab-development) true;
-  boot.kernel.sysctl."net.ipv4.conf.default.forwarding" = lib.mkIf (!floatlab-development) true;
-  systemd.services.floatlab-installer-root = lib.mkIf (!floatlab-development) {
+  boot.kernelModules = [ "bridge" "veth" "br_netfilter" "xt_nat" ];
+  boot.kernel.sysctl."net.ipv4.conf.all.forwarding" = true;
+  boot.kernel.sysctl."net.ipv4.conf.default.forwarding" = true;
+  systemd.services.floatlab-installer-root = {
     description = "Temporary installed root for installer verification";
     requires = [ "floatlab-datasets.service" ];
     after = [ "floatlab-datasets.service" ];
@@ -129,7 +155,7 @@ in {
       TimeoutStopSec = "120s";
     };
   };
-  systemd.services.docker = lib.mkIf (!floatlab-development) {
+  systemd.services.docker = {
     description = "Installed Docker daemon for installer verification";
     requires = [ "floatlab-installer-root.service" ];
     after = [ "floatlab-installer-root.service" "floatlab-network-config.service" ];
@@ -148,7 +174,7 @@ in {
       TimeoutStopSec = "120s";
     };
   };
-  systemd.services.floatlab-hostd = lib.mkIf (!floatlab-development) {
+  systemd.services.floatlab-hostd = {
     environment.SYSTEMD_OFFLINE = "0";
     requires = [ "floatlab-installer-root.service" "floatlab-network-config.service" ];
     after = [ "floatlab-installer-root.service" "floatlab-network-config.service" ];
@@ -162,7 +188,7 @@ in {
       RestartSec = 2;
     };
   };
-  systemd.services.floatlab-core-stack = lib.mkIf (!floatlab-development) {
+  systemd.services.floatlab-core-stack = {
     requires = [ "floatlab-installer-root.service" "docker.service" "floatlab-hostd.service" "floatlab-network-config.service" ];
     after = [ "floatlab-installer-root.service" "docker.service" "floatlab-hostd.service" "floatlab-network-config.service" "network-online.target" ];
     wants = [ "network-online.target" ];
