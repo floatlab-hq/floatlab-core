@@ -254,7 +254,7 @@ func TestWizardScreenBoundsAndContextualHelp(t *testing.T) {
 			if strings.Contains(ansi.Strip(rows[len(rows)-2]), "Change Theme") {
 				t.Fatalf("%s: removed theme shortcut remains visible", stage)
 			}
-			if width >= 80 && stage != "timezone" && (strings.Contains(ansi.Strip(m.actionBar()), "Back") != m.canBack() || !strings.Contains(ansi.Strip(m.actionBar()), "Next") && !strings.Contains(ansi.Strip(m.actionBar()), "Reboot") && stage != "confirm" && stage != "review") {
+			if width >= 80 && stage != "timezone" && stage != "waiting" && (strings.Contains(ansi.Strip(m.actionBar()), "Back") != m.canBack() || !strings.Contains(ansi.Strip(m.actionBar()), "Next") && !strings.Contains(ansi.Strip(m.actionBar()), "Reboot") && stage != "confirm" && stage != "review") {
 				t.Fatalf("%s: wizard navigation is missing", stage)
 			}
 		}
@@ -372,5 +372,21 @@ func TestTimezonePickerHasNoWizardButtons(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if m.stage != "settings" || m.config().Timezone != "" {
 		t.Fatal("Esc chose a timezone")
+	}
+}
+
+func TestWaitingHidesNextUntilInstallationCompletes(t *testing.T) {
+	m := New("unused", nil)
+	m.stage = "waiting"
+	if m.actionBar() != "" || strings.Contains(ansi.Strip(m.View()), "Next") {
+		t.Fatal("waiting screen still shows an inactive Next button")
+	}
+	m.Update(key("tab"))
+	if m.actionFocus != 0 {
+		t.Fatal("waiting screen focused a hidden action")
+	}
+	m.stage = "complete"
+	if !strings.Contains(ansi.Strip(m.View()), "Reboot →") {
+		t.Fatal("completed installation lost its reboot action")
 	}
 }

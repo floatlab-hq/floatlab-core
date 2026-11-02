@@ -50,7 +50,7 @@ type Model struct {
 	selected       map[int]bool
 	cursor         int
 	fields         []textinput.Model
-	passwordScore  int
+	passwordScores [2]int
 	labels         []string
 	focus          int
 	actionFocus    int // 0: content, 1: Back, 2: Next, 3: Customise zpool.
@@ -247,7 +247,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.enrollment = nil
 			m.totpCode = ""
-			m.passwordScore = 0
+			m.passwordScores = [2]int{}
 			m.confirmation.SetValue("")
 		case "failed":
 			m.terminal = true
@@ -573,24 +573,30 @@ func (m *Model) updateField(msg tea.Msg) tea.Cmd {
 	if old != m.fields[m.focus].Value() {
 		m.validation = ""
 	}
-	if old != m.fields[m.focus].Value() && (m.focus == 0 || m.focus == 7 || m.focus == 8) {
-		m.passwordScore = 0
-		if m.fields[8].Value() != "" {
-			m.passwordScore = zxcvbn.PasswordStrength(m.fields[8].Value(), []string{m.fields[0].Value(), m.fields[7].Value(), "floatlab"}).Score
+	if old != m.fields[m.focus].Value() && (m.focus == 0 || m.focus == 7 || m.focus == 8 || m.focus == 11) {
+		for slot, index := range []int{8, 11} {
+			m.passwordScores[slot] = 0
+			if m.fields[index].Value() != "" {
+				m.passwordScores[slot] = zxcvbn.PasswordStrength(m.fields[index].Value(), []string{m.fields[0].Value(), m.fields[7].Value(), "floatlab"}).Score
+			}
 		}
 	}
 	return cmd
 }
 
-func (m *Model) passwordStrength() string {
-	if m.fields[8].Value() == "" {
+func (m *Model) passwordStrength(index int) string {
+	if m.fields[index].Value() == "" {
 		return ""
+	}
+	score := m.passwordScores[0]
+	if index == 11 {
+		score = m.passwordScores[1]
 	}
 	labels := []string{"Very weak", "Weak", "Fair", "Strong", "Very strong"}
 	if m.inputColumnWidth() < 40 {
-		return labels[m.passwordScore]
+		return labels[score]
 	}
-	return fmt.Sprintf("[%s%s] %s", strings.Repeat("█", m.passwordScore+1), strings.Repeat("·", 4-m.passwordScore), labels[m.passwordScore])
+	return fmt.Sprintf("[%s%s] %s", strings.Repeat("█", score+1), strings.Repeat("·", 4-score), labels[score])
 }
 
 func (m *Model) inputColumnWidth() int {
@@ -721,8 +727,8 @@ func (m *Model) body() string {
 			}
 			value := m.fields[i].View()
 			indicator := ""
-			if i == 8 {
-				indicator = m.passwordStrength()
+			if i == 8 || i == 11 {
+				indicator = m.passwordStrength(i)
 			} else if (i == 9 || i == 12) && m.fields[i].Value() != "" {
 				indicator = "✗"
 				if m.fields[i-1].Value() == m.fields[i].Value() {

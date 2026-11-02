@@ -254,7 +254,7 @@ func (m *Model) button(label string, action int, enabled bool) string {
 }
 
 func (m *Model) actionBar() string {
-	if m.stage == "timezone" {
+	if m.stage == "timezone" || m.stage == "waiting" {
 		return ""
 	}
 	next := "Next →"

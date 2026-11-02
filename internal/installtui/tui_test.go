@@ -71,30 +71,44 @@ func TestTOTPRadioUpdatesConfiguration(t *testing.T) {
 }
 
 func TestPasswordStrengthUpdatesWithoutExposingPassword(t *testing.T) {
-	m := New("unused", nil)
-	m.settings()
-	m.stage = "account"
-	m.setFocus(8)
-	if m.passwordStrength() != "" {
-		t.Fatal("empty password has a strength indicator")
-	}
-	m.Update(key("password"))
-	weak := m.passwordScore
-	if !strings.Contains(m.View(), "Very weak") || m.fields[8].EchoMode != textinput.EchoPassword || m.fields[9].EchoMode != textinput.EchoPassword {
-		t.Fatal("weak password meter is missing")
-	}
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
-	password := "vN7!qZ2@bL9#sR4$xT6"
-	m.Update(key(password))
-	if m.passwordScore <= weak || !strings.Contains(m.View(), "Very strong") {
-		t.Fatal("meter did not update for a strong password")
-	}
-	if strings.Contains(m.View(), password) || m.fields[8].Value() != password {
-		t.Fatal("password was exposed or changed")
-	}
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
-	if m.passwordStrength() != "" {
-		t.Fatal("meter was not cleared")
+	for slot, index := range []int{8, 11} {
+		t.Run([]string{"administrator", "recovery"}[slot], func(t *testing.T) {
+			m := New("unused", nil)
+			m.settings()
+			m.stage = "account"
+			m.setFocus(index)
+			if m.passwordStrength(index) != "" {
+				t.Fatal("empty password has a strength indicator")
+			}
+			m.Update(key("password"))
+			weak := m.passwordScores[slot]
+			if !strings.Contains(m.View(), "Very weak") || m.fields[index].EchoMode != textinput.EchoPassword || m.fields[index+1].EchoMode != textinput.EchoPassword {
+				t.Fatal("weak password meter is missing")
+			}
+			m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+			password := "vN7!qZ2@bL9#sR4$xT6"
+			m.Update(key(password))
+			if m.passwordScores[slot] <= weak || !strings.Contains(m.View(), "Very strong") {
+				t.Fatal("meter did not update for a strong password")
+			}
+			if strings.Contains(m.View(), password) || m.fields[index].Value() != password {
+				t.Fatal("password was exposed or changed")
+			}
+			other := 8
+			if index == 8 {
+				other = 11
+			}
+			m.setFocus(other)
+			m.Update(key("password"))
+			if !strings.Contains(m.passwordStrength(index), "Very strong") || !strings.Contains(m.passwordStrength(other), "Very weak") {
+				t.Fatal("password meters do not maintain independent scores")
+			}
+			m.setFocus(index)
+			m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+			if m.passwordStrength(index) != "" {
+				t.Fatal("meter was not cleared")
+			}
+		})
 	}
 }
 
