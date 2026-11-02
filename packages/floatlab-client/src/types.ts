@@ -42,10 +42,12 @@ export type CommandResult =
   | { kind: "operation"; action: string; state?: string; operationId?: string; text?: string }
   | { kind: "error"; message: string; status?: number };
 
-export type Completion = { value: string; description?: string; appendSpace?: boolean };
+export type Completion = { value: string; description?: string; appendSpace?: boolean; replaceStart?: number; replaceEnd?: number; kind?: "file" | "directory" };
 
 export interface CommandRuntime {
   interactive: boolean;
+  cli?: boolean;
+  completeFiles?(prefix: string): Promise<Completion[]>;
   signal?: AbortSignal;
   confirm(message: string): Promise<boolean>;
   editCompose(initial: string): Promise<string | undefined>;

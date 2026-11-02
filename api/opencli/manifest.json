@@ -1,0 +1,42 @@
+{
+  "opencli": "0.1",
+  "info": {
+    "title": "FloatLab CLI",
+    "version": "0.1.0"
+  },
+  "command": {
+    "name": "floatlab",
+    "options": [
+      {
+        "name": "--help",
+        "aliases": [
+          "-h"
+        ],
+        "recursive": true
+      },
+      {
+        "name": "--version",
+        "metadata": [
+          {
+            "name": "floatlab",
+            "value": {
+              "capability": "cli"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "modules": [
+    "stacks.json",
+    "stats.json",
+    "logs.json",
+    "config.json",
+    "lab.json",
+    "store.json",
+    "updates.json",
+    "cli.json"
+  ],
+  "schemaRevision": "e42891559d59e84b1da8a8901450fa37784597ed",
+  "schemaSha256": "77dd6a1202534f90476aabaeccb9ae39c6085ffeafc43a9c323f0dfd057c2d5f"
+}

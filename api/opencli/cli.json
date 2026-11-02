@@ -1,0 +1,136 @@
+{
+  "commands": [
+    {
+      "name": "help",
+      "description": "help",
+      "arguments": [
+        {
+          "name": "command",
+          "required": false,
+          "arity": {
+            "minimum": 0
+          }
+        }
+      ],
+      "metadata": [
+        {
+          "name": "floatlab",
+          "value": {
+            "utility": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "exit",
+      "description": "exit",
+      "metadata": [
+        {
+          "name": "floatlab",
+          "value": {
+            "utility": true,
+            "capability": "interactive"
+          }
+        }
+      ]
+    },
+    {
+      "name": "quit",
+      "description": "quit",
+      "metadata": [
+        {
+          "name": "floatlab",
+          "value": {
+            "utility": true,
+            "capability": "interactive"
+          }
+        }
+      ]
+    },
+    {
+      "name": "completion",
+      "description": "completion",
+      "arguments": [
+        {
+          "name": "shell",
+          "required": false,
+          "acceptedValues": [
+            "bash",
+            "zsh",
+            "fish",
+            "powershell",
+            "nushell"
+          ]
+        }
+      ],
+      "commands": [
+        {
+          "name": "resolve",
+          "description": "resolve",
+          "arguments": [
+            {
+              "name": "words",
+              "required": false,
+              "arity": {
+                "minimum": 0
+              }
+            }
+          ],
+          "options": [
+            {
+              "name": "--shell",
+              "arguments": [
+                {
+                  "name": "shell",
+                  "required": true,
+                  "acceptedValues": [
+                    "bash",
+                    "zsh",
+                    "fish",
+                    "powershell",
+                    "nushell"
+                  ]
+                }
+              ],
+              "required": true
+            },
+            {
+              "name": "--index",
+              "arguments": [
+                {
+                  "name": "index",
+                  "required": true
+                }
+              ],
+              "required": true
+            },
+            {
+              "name": "--raw-words",
+              "description": "Decode shell quoting in argument words without evaluating them"
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "capability": "cli",
+                "utility": true,
+                "passthrough": true
+              }
+            }
+          ],
+          "hidden": true
+        }
+      ],
+      "metadata": [
+        {
+          "name": "floatlab",
+          "value": {
+            "utility": true,
+            "capability": "cli"
+          }
+        }
+      ]
+    }
+  ]
+}

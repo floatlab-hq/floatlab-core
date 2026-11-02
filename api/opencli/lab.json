@@ -1,0 +1,243 @@
+{
+  "commands": [
+    {
+      "name": "lab",
+      "description": "lab",
+      "commands": [
+        {
+          "name": "status",
+          "description": "status",
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "getLabStatus",
+                    "inputs": {}
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "members",
+          "description": "members",
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "listLabMembers",
+                    "inputs": {}
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "invite",
+          "description": "invite",
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "createLabInvitation",
+                    "inputs": {}
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "join",
+          "description": "join",
+          "arguments": [
+            {
+              "name": "request-json",
+              "required": true
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "joinLab",
+                    "inputs": {
+                      "body/invitation": "json:request-json",
+                      "body/peer_url": "json:request-json",
+                      "body/raft_address": "json:request-json",
+                      "body/rqlite_address": "json:request-json"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "preview",
+          "description": "preview",
+          "arguments": [
+            {
+              "name": "node",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "nodes"
+                  }
+                }
+              ]
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "previewLabMemberRemoval",
+                    "inputs": {
+                      "path/id": "argument:node"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "remove",
+          "description": "remove",
+          "arguments": [
+            {
+              "name": "node",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "nodes"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "operation",
+              "required": true
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "previewLabMemberRemoval",
+                    "inputs": {
+                      "path/id": "argument:node"
+                    }
+                  },
+                  {
+                    "operationId": "removeLabMember",
+                    "inputs": {
+                      "path/id": "argument:node",
+                      "body/confirm_node_id": "argument:node",
+                      "body/operation_id": "argument:operation"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "rotate",
+          "description": "rotate",
+          "arguments": [
+            {
+              "name": "operation",
+              "required": true
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "rotateLabIdentity",
+                    "inputs": {
+                      "body/operation_id": "argument:operation"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "release-peer-address",
+          "description": "release peer address",
+          "arguments": [
+            {
+              "name": "node",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "nodes"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "operation",
+              "required": true
+            }
+          ],
+          "options": [
+            {
+              "name": "--confirm-fenced",
+              "required": true
+            },
+            {
+              "name": "--confirm-reset",
+              "required": true
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "releaseLabMemberPeerAddress",
+                    "inputs": {
+                      "path/id": "argument:node",
+                      "body/confirm_node_id": "argument:node",
+                      "body/operation_id": "argument:operation",
+                      "body/confirm_fenced": "option:--confirm-fenced",
+                      "body/confirm_reset": "option:--confirm-reset"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

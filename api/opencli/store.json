@@ -1,0 +1,362 @@
+{
+  "commands": [
+    {
+      "name": "backup",
+      "description": "backup",
+      "commands": [
+        {
+          "name": "list",
+          "description": "list",
+          "arguments": [
+            {
+              "name": "stack",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "stacks"
+                  }
+                }
+              ]
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "listBackupTargets",
+                    "inputs": {
+                      "path/stack_id": "argument:stack"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "history",
+          "description": "history",
+          "arguments": [
+            {
+              "name": "stack",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "stacks"
+                  }
+                }
+              ]
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "listReplicationJobs",
+                    "inputs": {
+                      "query/stack_id": "argument:stack"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "set",
+          "description": "set",
+          "arguments": [
+            {
+              "name": "stack",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "stacks"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "dataset",
+              "required": true
+            },
+            {
+              "name": "node",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "nodes"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "policy",
+              "required": true
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "putBackupTarget",
+                    "inputs": {
+                      "path/stack_id": "argument:stack",
+                      "body/node_id": "argument:node",
+                      "body/dataset": "argument:dataset",
+                      "body/schedule": "argument:policy"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "remove",
+          "description": "remove",
+          "arguments": [
+            {
+              "name": "stack",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "stacks"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "dataset",
+              "required": true
+            },
+            {
+              "name": "node",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "nodes"
+                  }
+                }
+              ]
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "deleteBackupTarget",
+                    "inputs": {
+                      "path/stack_id": "argument:stack",
+                      "body/node_id": "argument:node",
+                      "body/dataset": "argument:dataset"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "run",
+          "description": "run",
+          "arguments": [
+            {
+              "name": "stack",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "stacks"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "dataset",
+              "required": true
+            },
+            {
+              "name": "node",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "nodes"
+                  }
+                }
+              ]
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "triggerReplication",
+                    "inputs": {
+                      "path/stack_id": "argument:stack",
+                      "query/dest_node_id": "argument:node",
+                      "query/dataset": "argument:dataset"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "restore",
+          "description": "restore",
+          "arguments": [
+            {
+              "name": "stack",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "stacks"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "new-name",
+              "required": true
+            },
+            {
+              "name": "backup-node",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "nodes"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "destination-node",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "nodes"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "snapshot",
+              "required": true
+            }
+          ],
+          "options": [
+            {
+              "name": "--source",
+              "arguments": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "provider": "nodes"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "--file",
+              "arguments": [
+                {
+                  "name": "path",
+                  "required": true,
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "provider": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "capability": "files"
+                  }
+                }
+              ]
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "getBackupConfig",
+                    "inputs": {
+                      "query/stack_id": "argument:stack"
+                    }
+                  },
+                  {
+                    "operationId": "listBackupSnapshots",
+                    "inputs": {
+                      "query/node_id": "argument:backup-node",
+                      "query/source_node_id": "derived:source",
+                      "query/dataset": "derived:compose"
+                    }
+                  },
+                  {
+                    "operationId": "restoreBackup",
+                    "inputs": {
+                      "body/name": "argument:new-name",
+                      "body/source_node_id": "derived:source",
+                      "body/backup_node_id": "argument:backup-node",
+                      "body/destination_node_id": "argument:destination-node",
+                      "body/compose_file": "editor:compose",
+                      "body/snapshots": "derived:compose-and-snapshot"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

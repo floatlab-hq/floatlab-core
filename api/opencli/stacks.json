@@ -1,0 +1,640 @@
+{
+  "commands": [
+    {
+      "name": "create",
+      "description": "create",
+      "arguments": [
+        {
+          "name": "name",
+          "required": true,
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "prompt": true
+              }
+            }
+          ]
+        }
+      ],
+      "options": [
+        {
+          "name": "--primary",
+          "arguments": [
+            {
+              "name": "node",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "nodes"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "--secondary",
+          "arguments": [
+            {
+              "name": "node",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "nodes"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "--start"
+        },
+        {
+          "name": "--file",
+          "arguments": [
+            {
+              "name": "path",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "files"
+                  }
+                }
+              ]
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "capability": "files"
+              }
+            }
+          ]
+        }
+      ],
+      "aliases": [
+        "new",
+        "add",
+        "mk",
+        "make"
+      ],
+      "metadata": [
+        {
+          "name": "floatlab",
+          "value": {
+            "api": [
+              {
+                "operationId": "createStack",
+                "inputs": {
+                  "body/name": "argument:name",
+                  "body/compose_file": "editor:compose",
+                  "header/Idempotency-Key": "runtime:idempotency"
+                }
+              },
+              {
+                "operationId": "validateStackCompose",
+                "inputs": {
+                  "body/name": "argument:name",
+                  "body/compose_file": "editor:compose"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "config",
+      "description": "config",
+      "arguments": [
+        {
+          "name": "stack",
+          "required": true,
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "provider": "stacks"
+              }
+            }
+          ]
+        }
+      ],
+      "metadata": [
+        {
+          "name": "floatlab",
+          "value": {
+            "api": [
+              {
+                "operationId": "getStackConfig",
+                "inputs": {
+                  "path/id": "argument:stack"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "exec",
+      "description": "exec",
+      "arguments": [
+        {
+          "name": "stack",
+          "required": true,
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "provider": "stacks"
+              }
+            }
+          ]
+        },
+        {
+          "name": "container",
+          "required": true,
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "dependsOn": "stack",
+                "provider": "containers"
+              }
+            }
+          ]
+        },
+        {
+          "name": "command",
+          "required": true,
+          "arity": {
+            "minimum": 1
+          }
+        }
+      ],
+      "metadata": [
+        {
+          "name": "floatlab",
+          "value": {
+            "passthrough": true,
+            "api": [
+              {
+                "operationId": "execStackContainer",
+                "inputs": {
+                  "path/id": "argument:stack",
+                  "path/containerId": "argument:container",
+                  "body/command": "argument:command",
+                  "header/Idempotency-Key": "runtime:idempotency"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "edit",
+      "description": "edit",
+      "arguments": [
+        {
+          "name": "stack",
+          "required": true,
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "provider": "stacks"
+              }
+            }
+          ]
+        }
+      ],
+      "aliases": [
+        "vi",
+        "configure"
+      ],
+      "metadata": [
+        {
+          "name": "floatlab",
+          "value": {
+            "api": [
+              {
+                "operationId": "getStackConfig",
+                "inputs": {
+                  "path/id": "argument:stack"
+                }
+              },
+              {
+                "operationId": "updateStackCompose",
+                "inputs": {
+                  "path/id": "argument:stack",
+                  "body/compose_file": "editor:compose",
+                  "header/Idempotency-Key": "runtime:idempotency"
+                }
+              },
+              {
+                "operationId": "validateStackCompose",
+                "inputs": {
+                  "body/stack_id": "argument:stack",
+                  "body/compose_file": "editor:compose"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "start",
+      "description": "start",
+      "arguments": [
+        {
+          "name": "stack",
+          "required": true,
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "provider": "stacks"
+              }
+            }
+          ]
+        },
+        {
+          "name": "container",
+          "required": false,
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "dependsOn": "stack",
+                "provider": "containers"
+              }
+            }
+          ]
+        }
+      ],
+      "metadata": [
+        {
+          "name": "floatlab",
+          "value": {
+            "api": [
+              {
+                "operationId": "startStack",
+                "inputs": {
+                  "path/id": "argument:stack",
+                  "header/Idempotency-Key": "runtime:idempotency"
+                }
+              },
+              {
+                "operationId": "startStackContainer",
+                "inputs": {
+                  "path/id": "argument:stack",
+                  "path/containerId": "argument:container",
+                  "header/Idempotency-Key": "runtime:idempotency"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "stop",
+      "description": "stop",
+      "arguments": [
+        {
+          "name": "stack",
+          "required": true,
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "provider": "stacks"
+              }
+            }
+          ]
+        },
+        {
+          "name": "container",
+          "required": false,
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "dependsOn": "stack",
+                "provider": "containers"
+              }
+            }
+          ]
+        }
+      ],
+      "aliases": [
+        "shutdown"
+      ],
+      "metadata": [
+        {
+          "name": "floatlab",
+          "value": {
+            "api": [
+              {
+                "operationId": "stopStack",
+                "inputs": {
+                  "path/id": "argument:stack",
+                  "header/Idempotency-Key": "runtime:idempotency"
+                }
+              },
+              {
+                "operationId": "stopStackContainer",
+                "inputs": {
+                  "path/id": "argument:stack",
+                  "path/containerId": "argument:container",
+                  "header/Idempotency-Key": "runtime:idempotency"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "delete",
+      "description": "delete",
+      "arguments": [
+        {
+          "name": "stack",
+          "required": true,
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "provider": "stacks"
+              }
+            }
+          ]
+        }
+      ],
+      "options": [
+        {
+          "name": "--purge"
+        }
+      ],
+      "aliases": [
+        "remove",
+        "rm"
+      ],
+      "metadata": [
+        {
+          "name": "floatlab",
+          "value": {
+            "api": [
+              {
+                "operationId": "deleteStack",
+                "inputs": {
+                  "path/id": "argument:stack",
+                  "query/purge": "option:--purge",
+                  "header/Idempotency-Key": "runtime:idempotency"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "info",
+      "description": "info",
+      "arguments": [
+        {
+          "name": "stack",
+          "required": true,
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "provider": "stacks"
+              }
+            }
+          ]
+        },
+        {
+          "name": "container",
+          "required": false,
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "dependsOn": "stack",
+                "provider": "containers"
+              }
+            }
+          ]
+        }
+      ],
+      "aliases": [
+        "inspect"
+      ],
+      "metadata": [
+        {
+          "name": "floatlab",
+          "value": {
+            "api": [
+              {
+                "operationId": "getStack",
+                "inputs": {
+                  "path/id": "argument:stack"
+                }
+              },
+              {
+                "operationId": "getStackContainers",
+                "inputs": {
+                  "path/id": "argument:stack"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "list",
+      "description": "list",
+      "arguments": [
+        {
+          "name": "stack",
+          "required": false,
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "provider": "stacks"
+              }
+            }
+          ]
+        }
+      ],
+      "options": [
+        {
+          "name": "--containers"
+        }
+      ],
+      "aliases": [
+        "ls"
+      ],
+      "metadata": [
+        {
+          "name": "floatlab",
+          "value": {
+            "api": [
+              {
+                "operationId": "listStacks",
+                "inputs": {}
+              },
+              {
+                "operationId": "getStackContainers",
+                "inputs": {
+                  "path/id": "argument:stack"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "upgrade",
+      "description": "upgrade",
+      "arguments": [
+        {
+          "name": "stack",
+          "required": true,
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "provider": "stacks"
+              }
+            }
+          ]
+        },
+        {
+          "name": "images",
+          "required": false,
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "dependsOn": "stack",
+                "prompt": true,
+                "provider": "images"
+              }
+            }
+          ],
+          "arity": {
+            "minimum": 1
+          }
+        }
+      ],
+      "metadata": [
+        {
+          "name": "floatlab",
+          "value": {
+            "api": [
+              {
+                "operationId": "upgradeStack",
+                "inputs": {
+                  "path/id": "argument:stack",
+                  "body/images": "argument:images",
+                  "header/Idempotency-Key": "runtime:idempotency"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "snapshot",
+      "description": "snapshot",
+      "commands": [
+        {
+          "name": "create",
+          "description": "snapshot",
+          "arguments": [
+            {
+              "name": "stack",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "stacks"
+                  }
+                }
+              ]
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "createStackSnapshot",
+                    "inputs": {
+                      "path/id": "argument:stack",
+                      "header/Idempotency-Key": "runtime:idempotency"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "list",
+          "description": "snapshot",
+          "arguments": [
+            {
+              "name": "stack",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "stacks"
+                  }
+                }
+              ]
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "listStackSnapshots",
+                    "inputs": {
+                      "path/id": "argument:stack"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

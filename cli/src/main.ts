@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
-import { ApiError, CommandEngine, createApiClient, type FloatLabApi } from "@floatlab/client";
+import { CommandError, ApiError, CommandEngine, createApiClient, commandHelp, parseCommand } from "@floatlab/client";
 import { commandInput, credentials, terminalRuntime } from "./terminal";
 import { clearToken, connection, login, saveSession, valid, SecondFactorRequired } from "./session";
+
+import { runCompletion } from "./completion";
 
 const version = typeof __FLOATLAB_VERSION__ === "string" ? __FLOATLAB_VERSION__ : "dev";
 declare const __FLOATLAB_VERSION__: string;
@@ -56,10 +58,15 @@ async function interactive(): Promise<number> {
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
   if (args[0] === "--version") { console.log(version); return 0; }
-  if (args[0] === "--help" || args[0] === "-h") return (await new CommandEngine({} as FloatLabApi, terminalRuntime(false)).dispatch(["help"])).code;
-  if (args.length) return execute(args, false);
+  if (args[0] === "--help" || args[0] === "-h") { console.log(commandHelp()); return 0; }
+  if (args.length) {
+    const parsed = parseCommand(args);
+    if (parsed.name === "help") { console.log(commandHelp(parsed.positionals)); return 0; }
+    if (parsed.name === "completion") { process.stdout.write(await runCompletion(args)); return 0; }
+    return execute(args, false);
+  }
   if (!process.stdin.isTTY) throw new Error("No command supplied; use `floatlab --help`.");
   return interactive();
 }
 
-main().then((code) => { process.exitCode = code; }).catch((error) => { console.error(error instanceof ApiError ? error.message : error instanceof Error ? error.message : String(error)); process.exitCode = 1; });
+main().then((code) => { process.exitCode = code; }).catch((error) => { console.error(error instanceof ApiError ? error.message : error instanceof Error ? error.message : String(error)); process.exitCode = error instanceof CommandError ? error.code : 1; });

@@ -1,0 +1,97 @@
+{
+  "commands": [
+    {
+      "name": "logs",
+      "description": "logs",
+      "arguments": [
+        {
+          "name": "stack",
+          "required": true,
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "provider": "stacks"
+              }
+            }
+          ]
+        },
+        {
+          "name": "container",
+          "required": false,
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "dependsOn": "stack",
+                "provider": "containers"
+              }
+            }
+          ]
+        }
+      ],
+      "options": [
+        {
+          "name": "--search",
+          "arguments": [
+            {
+              "name": "search",
+              "required": true
+            }
+          ]
+        },
+        {
+          "name": "--since",
+          "arguments": [
+            {
+              "name": "since",
+              "required": true
+            }
+          ]
+        },
+        {
+          "name": "--limit",
+          "arguments": [
+            {
+              "name": "limit",
+              "required": true
+            }
+          ]
+        }
+      ],
+      "metadata": [
+        {
+          "name": "floatlab",
+          "value": {
+            "api": [
+              {
+                "operationId": "getStackLogs",
+                "inputs": {
+                  "path/stack_id": "argument:stack",
+                  "query/since": "option:--since",
+                  "query/tail": "option:--limit"
+                }
+              },
+              {
+                "operationId": "getContainerLogs",
+                "inputs": {
+                  "path/container_id": "argument:container",
+                  "query/since": "option:--since",
+                  "query/tail": "option:--limit"
+                }
+              },
+              {
+                "operationId": "searchLogs",
+                "inputs": {
+                  "query/query": "option:--search",
+                  "query/start": "option:--since",
+                  "query/limit": "option:--limit"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

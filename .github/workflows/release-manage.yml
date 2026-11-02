@@ -58,12 +58,16 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Build CLI release targets
         run: |
+          pnpm commands:check
           mkdir -p release-dist
           for target in linux-x64-baseline linux-arm64 darwin-x64-baseline darwin-arm64; do
             name="${target%-baseline}"
             bun build --compile --define "__FLOATLAB_VERSION__=\"$VERSION\"" --target="bun-$target" cli/src/main.ts --outfile "release-dist/floatlab-$name"
           done
           test "$(release-dist/floatlab-linux-x64 --version)" = "$VERSION"
+          release-dist/floatlab-linux-x64 completion bash > /tmp/floatlab.bash
+          cmp /tmp/floatlab.bash cli/completions/floatlab.bash
+          tar -czf "release-dist/floatlab-completions-$VERSION.tar.gz" -C cli completions
       - name: Build management image once
         run: |
           docker buildx build --platform linux/amd64 --load --provenance=false --sbom=false \

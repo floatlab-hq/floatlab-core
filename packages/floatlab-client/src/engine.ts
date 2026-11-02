@@ -4,70 +4,8 @@ import type { AlertsApi, AlertRuleUpdate } from "./types";
 import { backupRestoreDatasets } from "./backups";
 import type { CommandResult, CommandRuntime, Completion, Container, FloatLabApi, Node, Stack, UpdateApi, UpdateAction, UpdateComponent, LabApi, LabJoinRequest, BackupApi, BackupRestoreApi } from "./types";
 
-export class CommandError extends Error { constructor(message: string, readonly code = 2) { super(message); } }
-
-export function tokenize(input: string): string[] {
-  const tokens: string[] = []; let token = ""; let quote = ""; let escaped = false; let started = false;
-  const push = () => { if (started) tokens.push(token); token = ""; started = false; };
-  for (const char of input) {
-    if (escaped) { token += char; escaped = false; started = true; continue; }
-    if (char === "\\") { escaped = true; started = true; continue; }
-    if (quote) { if (char === quote) quote = ""; else token += char; started = true; continue; }
-    if (char === "'" || char === '"') { quote = char; started = true; continue; }
-    if (/\s/.test(char)) { push(); continue; }
-    if ("|;&<>`$".includes(char)) throw new CommandError(`Unsupported shell operator: ${char}`);
-    token += char; started = true;
-  }
-  if (escaped || quote) throw new CommandError("Unterminated escape or quote");
-  push(); return tokens;
-}
-
-type Parsed = { name: string; positionals: string[]; flags: Record<string, string | boolean> };
-const commands = [
-  ["alerts", [], "alerts [list [active|silenced|resolved|all]] | alerts show <id> | alerts mute <id> <duration: 30m|1h|1d>"],
-  ["alert-rules", [], "alert-rules [list] | alert-rules show|enable|disable <rule> | alert-rules edit <rule> '<JSON changes>'"],
-  ["backup", [], "backup list|history <stack> | backup set <stack> <dataset> <node> <policy> | backup remove|run <stack> <dataset> <node> | backup restore <stack> <new-name> <backup-node> <destination-node> <snapshot> [--source node] [--file compose.yml]"],
-  ["lab", [], "lab status|members|invite|join <request-json>|preview <node>|remove <node> <operation>|rotate <operation>|release-peer-address <node> <operation> --confirm-fenced --confirm-reset"],
-  ["create", ["new", "add", "mk", "make"], "create <name> [--file path | --primary node] [--secondary node] [--start]"],
-  ["config", [], "config <stack>"],
-  ["stats", [], "stats <stack> [--range 1h|6h|24h|7d]"],
-  ["exec", [], "exec <stack> <container> -- <command> [args...]"],
-  ["edit", ["vi", "configure"], "edit <stack>"],
-  ["start", [], "start <stack> [container]"], ["stop", ["shutdown"], "stop <stack> [container]"],
-  ["delete", ["remove", "rm"], "delete <stack> [--purge]"],
-  ["logs", [], "logs <stack> [container] [--search terms] [--since value] [--limit n]"],
-  ["info", ["inspect"], "info <stack> [container]"], ["list", ["ls"], "list [stack] [--containers]"],
-  ["upgrade", [], "upgrade <stack> [service=image ...]"], ["snapshot", [], "snapshot create|list <stack>"],
-  ["update", [], "update management|host releases|status|start|prepare|activate|commit|rollback|cleanup <node> [release|operation] [--skip-dry-run] [--upstream owner/repo]"],
-] as const;
-const aliases = new Map<string, string>(commands.flatMap(([name, names]) => [name, ...names].map((alias) => [alias, name])));
-const flagValues = new Set(["primary", "secondary", "search", "since", "limit", "file", "range", "source", "upstream"]);
-
-function parse(input: string | string[]): Parsed {
-  const words = typeof input === "string" ? tokenize(input) : input;
-  const raw = words[0]?.toLowerCase();
-  if (!raw) throw new CommandError("Enter a command");
-  if (raw === "help") return { name: "help", positionals: [], flags: {} };
-  const name = aliases.get(raw); if (!name) throw new CommandError(`Unknown command: ${raw}. Try help.`);
-  const positionals: string[] = []; const flags: Record<string, string | boolean> = {};
-  for (let index = 1; index < words.length; index += 1) {
-    const word = words[index]!;
-    if (word === "--" && name === "exec") {
-      if (positionals.length !== 2 || index === words.length - 1) throw new CommandError("Usage: exec <stack> <container> -- <command> [args...]");
-      flags.command = true; positionals.push(...words.slice(index + 1)); break;
-    }
-    if (!word.startsWith("--")) { positionals.push(word); continue; }
-    const equal = word.indexOf("=");
-    const key = word.slice(2, equal < 0 ? undefined : equal);
-    const inline = equal < 0 ? undefined : word.slice(equal + 1);
-    if (!key || !["primary", "secondary", "start", "purge", "search", "since", "limit", "containers", "file", "range", "source", "confirm-fenced", "confirm-reset", "skip-dry-run", "upstream"].includes(key)) throw new CommandError(`Unknown flag: ${word}`);
-    if (flagValues.has(key)) {
-      const value = inline ?? words[++index]; if (!value || value.startsWith("--")) throw new CommandError(`--${key} needs a value`);
-      flags[key] = value;
-    } else { if (inline !== undefined) throw new CommandError(`--${key} does not take a value`); flags[key] = true; }
-  }
-  return { name, positionals, flags };
-}
+import { CommandError, parseCommand, tokenize, scan, completionContext, metadata, commandHelp, type ArgumentDefinition, type ParsedCommand } from "./commands";
+export { CommandError, tokenize } from "./commands";
 
 export { idempotencyKey };
 const isMatch = (value: string, item: { id: string; name: string; service?: string }) => item.id === value || item.name === value || item.service === value || item.id.startsWith(value);
@@ -85,7 +23,7 @@ export class CommandEngine {
 
   async dispatch(input: string | string[]): Promise<{ code: number; result: CommandResult }> {
     try {
-      const result = await this.run(parse(input)); await this.runtime.present(result); return { code: result.kind === "exec" ? result.exit_code : result.kind === "error" ? 1 : 0, result };
+      const result = await this.run(parseCommand(typeof input === "string" ? tokenize(input) : input, this.runtime.interactive)); await this.runtime.present(result); return { code: result.kind === "exec" ? result.exit_code : result.kind === "error" ? 1 : 0, result };
     } catch (error) {
       const result: CommandResult = { kind: "error", message: error instanceof Error ? error.message : "Command failed", status: error instanceof ApiError ? error.status : undefined };
       await this.runtime.present(result); return { code: error instanceof CommandError ? error.code : 1, result };
@@ -93,50 +31,47 @@ export class CommandEngine {
   }
 
   async complete(input: string): Promise<Completion[]> {
-    let words: string[];
-    try { words = tokenize(input); } catch { return []; }
-    const last = input.endsWith(" ") ? "" : words.at(-1) ?? "";
-    const matching = (choices: Completion[]) => choices.filter((choice) => choice.value.toLowerCase().startsWith(last.toLowerCase()));
-    if (words.length <= 1 && !input.endsWith(" ")) return matching([...commands.flatMap(([name, names, description]) => [name, ...names].map((value) => ({ value, description, ...(["update", "alerts", "alert-rules"].includes(name) ? { appendSpace: true } : {}) }))), ...["help", "exit", "quit"].map((value) => ({ value, description: "interactive command" }))]);
-    const name = aliases.get(words[0] ?? ""); if (!name) return [];
-    if (name === "alerts" || name === "alert-rules") {
-      const index = input.endsWith(" ") ? words.length : words.length - 1;
-      if (index === 1) return matching((name === "alerts" ? ["list", "show", "mute"] : ["list", "show", "enable", "disable", "edit"]).map(value => ({value, appendSpace: true})));
-      if (index === 2 && name === "alerts" && words[1] === "list") return matching(["active", "silenced", "resolved", "all"].map(value => ({value})));
-      if (index === 2 && ["show", "mute", "enable", "disable", "edit"].includes(words[1]!)) {
-        if (name === "alerts") return matching((await this.api.listAlerts?.().catch(() => []) ?? []).filter(alert => words[1] !== "mute" || alert.state !== "resolved").map(alert => ({value: alert.id, description: `${alert.state}: ${alert.message}`, appendSpace: words[1] === "mute"})));
-        return matching((await this.api.listAlertRules?.().catch(() => []) ?? []).map(rule => ({value: rule.id, description: rule.name, appendSpace: words[1] === "edit"})));
-      }
-      if (index === 3 && name === "alerts" && words[1] === "mute") return matching(["30m", "1h", "1d"].map(value => ({value})));
-      return [];
+    try {
+      const { words, starts, ends } = scan(input, true);
+      const index = Math.max(0, words.length - 1);
+      const choices = await this.completeTokens(words, index);
+      const start = starts[index] ?? input.length;
+      if (/\s/.test(input.slice(start).trim()) || /[\\'"]/.test(input.slice(start)))
+        return choices.map(choice => ({ ...choice, replaceStart: start, replaceEnd: ends[index] ?? input.length }));
+      return choices;
+    } catch { return []; }
+  }
+
+  async completeTokens(words: string[], index: number): Promise<Completion[]> {
+    if (!Number.isInteger(index) || index < 0 || index > words.length) return [];
+    const context = completionContext(words, index, item => this.available(item));
+    if (!context) return [];
+    const { argument, values, prefix, inline } = context;
+    const choices = [...context.choices];
+    if (argument) {
+      const details = metadata(argument);
+      try { choices.push(...await this.suggest(details.provider, values[details.dependsOn ?? ""], prefix)); } catch { /* Offline and unauthorized resources have no suggestions. */ }
+      if (details.appendSpace) for (const choice of choices) choice.appendSpace = true;
     }
-    if (name === "lab") return words.length <= 2 ? matching(["status", "members", "invite", "join", "preview", "remove", "rotate", "release-peer-address"].map(value => ({ value }))) : [];
-    if (name === "update") {
-      const index = input.endsWith(" ") ? words.length : words.length - 1;
-      if (index === 1) return matching(["management", "host"].map(value => ({ value, appendSpace: true })));
-      if (index === 2) return matching((words[1] === "host" ? ["releases", "status", "prepare", "activate", "commit", "rollback", "cleanup"] : ["releases", "status", "start", "rollback", "cleanup"]).map(value => ({ value, appendSpace: true })));
-      if (index === 3) return matching((await this.getNodes().catch(() => [])).map(node => ({ value: node.name, description: node.status })));
-      if (last.startsWith("--")) return matching((words[2] === "releases" ? ["--upstream"] : ["start", "prepare"].includes(words[2] ?? "") ? ["--skip-dry-run", "--upstream"] : []).map(value => ({ value, appendSpace: true })));
-      return [];
-    }
-    if (name === "snapshot") {
-      if (words.length === 1 && input.endsWith(" ")) return ["create", "list"].map((value) => ({ value, description: "snapshot" }));
-      if (words.length === 2 && !input.endsWith(" ")) return matching(["create", "list"].map((value) => ({ value, description: "snapshot" })));
-      if (words.length === 2 && input.endsWith(" ") && ["create", "list"].includes(words[1]!)) return (await this.getStacks().catch(() => [])).map((stack) => ({ value: stack.name, description: stack.state }));
-      if (words.length === 3 && ["create", "list"].includes(words[1]!)) return matching((await this.getStacks().catch(() => [])).map((stack) => ({ value: stack.name, description: stack.state })));
-      return [];
-    }
-    if (["create"].includes(name) && words.some((word) => word === "--primary" || word === "--secondary")) return matching((await this.getNodes().catch(() => [])).map((node) => ({ value: node.name, description: node.status })));
-    if (["config", "stats", "exec", "edit", "start", "stop", "delete", "logs", "info", "upgrade", "list"].includes(name) && words.length === 2 && !input.endsWith(" ")) return matching((await this.getStacks().catch(() => [])).map((stack) => ({ value: stack.name, description: stack.state })));
-    if (["start", "stop", "logs", "info", "exec"].includes(name) && ((words.length === 2 && input.endsWith(" ")) || words.length === 3)) {
-      const stacks = await this.getStacks().catch(() => []); const stack = stacks.find((item) => isMatch(words[1] ?? "", item));
-      return stack ? matching((await this.api.listContainers(stack.id).catch(() => [])).map((container) => ({ value: container.name, description: `${container.status}${container.health ? `, ${container.health}` : ""}` }))) : [];
-    }
-    if (name === "upgrade" && ((words.length === 2 && input.endsWith(" ")) || words.length === 3)) {
-      const stack = (await this.getStacks().catch(() => [])).find((item) => isMatch(words[1] ?? "", item));
-      if (!stack) return [];
-      const containers = await this.api.listContainers(stack.id).catch(() => []);
-      return matching([...new Map(containers.map((container) => [container.service ?? container.name, container])).values()].map((container) => ({ value: `${container.service ?? container.name}=`, description: container.image })));
+    return choices.filter(choice => choice.value.toLowerCase().startsWith(prefix.toLowerCase())).map(choice => inline ? { ...choice, value: inline + choice.value } : choice);
+  }
+
+  private available(item: ArgumentDefinition): boolean {
+    const capability = metadata(item).capability;
+    return !capability || capability === "files" && !!this.runtime.readCompose || capability === "cli" && !!this.runtime.cli || capability === "interactive" && this.runtime.interactive;
+  }
+
+  private async suggest(provider: string | undefined, dependency: string | undefined, prefix: string): Promise<Completion[]> {
+    if (provider === "files") return this.runtime.completeFiles?.(prefix) ?? [];
+    if (provider === "stacks") return (await this.getStacks()).map(stack => ({ value: stack.name, description: stack.state }));
+    if (provider === "nodes") return (await this.getNodes()).map(node => ({ value: node.name, description: node.status }));
+    if (provider === "alerts" || provider === "active-alerts") return (await this.api.listAlerts?.() ?? []).filter(alert => provider !== "active-alerts" || alert.state !== "resolved").map(alert => ({ value: alert.id, description: `${alert.state}: ${alert.message}` }));
+    if (provider === "rules") return (await this.api.listAlertRules?.() ?? []).map(rule => ({ value: rule.id, description: rule.name }));
+    if ((provider === "containers" || provider === "images") && dependency) {
+      const stack = await this.stack(dependency);
+      const containers = await this.api.listContainers(stack.id);
+      if (provider === "containers") return containers.map(container => ({ value: container.name, description: `${container.status}${container.health ? `, ${container.health}` : ""}` }));
+      return [...new Map(containers.map(container => [container.service ?? container.name, container])).values()].map(container => ({ value: `${container.service ?? container.name}=`, description: container.image }));
     }
     return [];
   }
@@ -161,8 +96,8 @@ export class CommandEngine {
   private async confirm(message: string): Promise<boolean> { return !this.runtime.interactive || await this.runtime.confirm(message); }
   private changed() { this.stacks = undefined; this.nodes = undefined; }
 
-  private async run(parsed: Parsed): Promise<CommandResult> {
-    if (parsed.name === "help") return { kind: "text", text: commands.map(([, aliases, help]) => `${help}${aliases.length ? ` (${aliases.join(", ")})` : ""}`).join("\n") + "\nhelp, exit, quit" };
+  private async run(parsed: ParsedCommand): Promise<CommandResult> {
+    if (parsed.name === "help") return { kind: "text", text: commandHelp(parsed.positionals) };
     const { name, positionals: args, flags } = parsed;
     if (name === "alerts" || name === "alert-rules") {
       if (Object.keys(flags).length) throw new CommandError("Alert commands do not accept flags");

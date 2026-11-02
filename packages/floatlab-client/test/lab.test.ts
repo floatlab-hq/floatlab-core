@@ -38,7 +38,7 @@ test("lab commands preview removal, preserve retry ID, and require reset confirm
   expect((await engine.dispatch("lab release-peer-address host release-1")).code).toBe(2);
   expect((await engine.dispatch("lab release-peer-address host release-1 --confirm-fenced --confirm-reset")).code).toBe(0);
   expect(calls.at(-1)).toBe("release");
-  expect(await engine.complete("lab sta")).toEqual([{ value: "status" }]);
+  expect(await engine.complete("lab sta")).toEqual([{ value: "status", description: "status" }]);
 });
 
 test("duplicate stack names need a node-qualified selection", async () => {

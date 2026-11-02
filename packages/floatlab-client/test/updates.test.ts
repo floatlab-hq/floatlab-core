@@ -42,10 +42,10 @@ test("appliance command resolves nodes, requires targets and keeps workload upgr
   expect((await engine.dispatch("update management commit lab update")).code).toBe(2);
   expect((await engine.dispatch("update management start lab manage-v1.2.3")).code).toBe(0);
   expect(calls).toBe(1);
-  expect(await engine.complete("update management ")).toEqual(["releases", "status", "start", "rollback", "cleanup"].map(value => ({ value, appendSpace: true })));
-  expect(await engine.complete("update management st")).toEqual(["status", "start"].map(value => ({ value, appendSpace: true })));
-  expect(await engine.complete("update host ")).toEqual(["releases", "status", "prepare", "activate", "commit", "rollback", "cleanup"].map(value => ({ value, appendSpace: true })));
-  expect(await engine.complete("update host ac")).toEqual([{ value: "activate", appendSpace: true }]);
+  expect(await engine.complete("update management ")).toEqual(["releases", "status", "start", "rollback", "cleanup"].map(value => ({ value, description: value, appendSpace: true })));
+  expect(await engine.complete("update management st")).toEqual(["status", "start"].map(value => ({ value, description: value, appendSpace: true })));
+  expect(await engine.complete("update host ")).toEqual(["releases", "status", "prepare", "activate", "commit", "rollback", "cleanup"].map(value => ({ value, description: value, appendSpace: true })));
+  expect(await engine.complete("update host ac")).toEqual([{ value: "activate", description: "activate", appendSpace: true }]);
   expect(await engine.complete("update management start l")).toEqual([{ value: "lab", description: undefined }]);
 });
 

@@ -397,3 +397,29 @@ FLOATLAB_HOST_UPDATE_INTEGRATION=1 go test -run '^TestHostUpdateAppliance$' -cou
 This builds local source and candidate payloads, installs a disposable UEFI libvirt VM, and tests trial boot, fallback, recovery, and commitment. Only artifact distribution uses local fixtures; ZFS, Docker, firmware, and the boot guard are real. Passing these tests does not qualify a different published Docker or rqlite transition, or physical watchdog behavior.
 
 Snapshot recovery is now `POST /api/v1/stacks/{id}/snapshots/{snapshotId}/restore`. `POST /api/v1/stacks/{id}/restore` performs failback to the primary. Clients of the old snapshot recovery path must migrate. Management requests require an administrator token, except login, public health routes, and the internal metrics webhook; deployments must restrict webhook ingress to trusted alert producers.
+
+## CLI shell completion
+
+The CLI and live command palette share modular definitions in [`api/opencli/`](api/opencli/README.md). Release assets include `floatlab-completions-<version>.tar.gz`; extract it for the five generated scripts. You can also produce each script from the installed binary:
+
+```sh
+floatlab completion bash > floatlab.bash
+floatlab completion zsh > _floatlab
+floatlab completion fish > floatlab.fish
+floatlab completion powershell > floatlab.ps1
+floatlab completion nushell > floatlab.nu
+```
+
+Load the script for your shell:
+
+- **Bash:** add `source /absolute/path/floatlab.bash` to `~/.bashrc`.
+- **Zsh:** add its directory to `fpath` before `autoload -Uz compinit; compinit` in `~/.zshrc`, or source `_floatlab` after `compinit`.
+- **Fish:** copy `floatlab.fish` into `~/.config/fish/completions/`.
+- **PowerShell:** add `. /absolute/path/floatlab.ps1` to `$PROFILE`.
+- **Nushell:** add `source /absolute/path/floatlab.nu` to `config.nu`. It chains the previous external completer for other tools. External completion must be enabled.
+
+Static commands, options, and choices work offline. Live stack/node/container suggestions use `FLOATLAB_URL`/`FLOATLAB_TOKEN` or the saved session. Completion never prompts for credentials or changes state; missing/expired credentials, authorization failures, and requests taking over one second simply produce no live suggestions. PowerShell completion works with the existing Linux/macOS binaries; no Windows binary is supplied.
+
+The scripts call `floatlab completion resolve --shell <shell> --index <n> -- <words...>`. Words exclude the executable and include the current partial or empty word; the index is zero-based. Output is shell-specific, intended for the shipped adapter. No shell evaluates suggestion text as code. FloatLab completion ends at `exec … --`.
+
+Maintainers: run `pnpm commands:generate` after changing modules, `pnpm commands:check` to validate them, and `pnpm commands:coverage` for the report-only OpenAPI mapping report in `dist/command-coverage/`. See the contract README for metadata and mapping rules.

@@ -1,0 +1,318 @@
+{
+  "commands": [
+    {
+      "name": "alerts",
+      "description": "alerts",
+      "commands": [
+        {
+          "name": "list",
+          "description": "list",
+          "arguments": [
+            {
+              "name": "state",
+              "required": false,
+              "acceptedValues": [
+                "active",
+                "silenced",
+                "resolved",
+                "all"
+              ]
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "listAlerts",
+                    "inputs": {
+                      "query/state": "argument:state"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "show",
+          "description": "show",
+          "arguments": [
+            {
+              "name": "id",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "provider": "alerts"
+                  }
+                }
+              ]
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "getAlert",
+                    "inputs": {
+                      "path/id": "argument:id"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "mute",
+          "description": "mute",
+          "arguments": [
+            {
+              "name": "id",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "appendSpace": true,
+                    "provider": "active-alerts"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "duration",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "suggestions": [
+                      "30m",
+                      "1h",
+                      "1d"
+                    ]
+                  }
+                }
+              ]
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "silenceAlert",
+                    "inputs": {
+                      "path/id": "argument:id",
+                      "body/until": "derived:duration"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "metadata": [
+        {
+          "name": "floatlab",
+          "value": {
+            "defaultCommand": "list",
+            "appendSpace": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "alert-rules",
+      "description": "alert rules",
+      "commands": [
+        {
+          "name": "list",
+          "description": "list",
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "listAlertRules",
+                    "inputs": {}
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "show",
+          "description": "show",
+          "arguments": [
+            {
+              "name": "rule",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "appendSpace": false,
+                    "provider": "rules"
+                  }
+                }
+              ]
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "getAlertRule",
+                    "inputs": {
+                      "path/id": "argument:rule"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "enable",
+          "description": "enable",
+          "arguments": [
+            {
+              "name": "rule",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "appendSpace": false,
+                    "provider": "rules"
+                  }
+                }
+              ]
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "updateAlertRule",
+                    "inputs": {
+                      "path/id": "argument:rule",
+                      "body/enabled": "derived:action"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "disable",
+          "description": "disable",
+          "arguments": [
+            {
+              "name": "rule",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "appendSpace": false,
+                    "provider": "rules"
+                  }
+                }
+              ]
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "updateAlertRule",
+                    "inputs": {
+                      "path/id": "argument:rule",
+                      "body/enabled": "derived:action"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "edit",
+          "description": "edit",
+          "arguments": [
+            {
+              "name": "rule",
+              "required": true,
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "appendSpace": true,
+                    "provider": "rules"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "changes",
+              "required": true
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "api": [
+                  {
+                    "operationId": "updateAlertRule",
+                    "inputs": {
+                      "path/id": "argument:rule",
+                      "body/name": "json:changes",
+                      "body/condition": "json:changes",
+                      "body/severity": "json:changes",
+                      "body/for_duration": "json:changes",
+                      "body/freshness_query": "json:changes",
+                      "body/recovery_condition": "json:changes",
+                      "body/recovery_duration": "json:changes",
+                      "body/max_sample_age": "json:changes",
+                      "body/annotations": "json:changes",
+                      "body/enabled": "json:changes"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "metadata": [
+        {
+          "name": "floatlab",
+          "value": {
+            "defaultCommand": "list",
+            "appendSpace": true
+          }
+        }
+      ]
+    }
+  ]
+}

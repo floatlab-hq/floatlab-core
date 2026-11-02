@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { PassThrough } from "node:stream";
 import { configPath, valid } from "../src/session";
-import { commandInput, format, replaceLastToken } from "../src/terminal";
+import { applyCompletion } from "@floatlab/client";
+import { commandInput, format } from "../src/terminal";
 
 test("session paths use XDG config and expiry is enforced", () => {
   expect(configPath({ XDG_CONFIG_HOME: "/tmp/config" })).toBe("/tmp/config/floatlab/config.json");
@@ -13,7 +14,7 @@ test("tables stay pipeable outside the pager", () => {
 });
 
 test("completion replaces only the active token", () => {
-  expect(replaceLastToken("start pl", "plex")).toBe("start plex");
+  expect(applyCompletion("start pl", { value: "plex" })).toBe("start plex");
 });
 
 test("interactive input submits the typed command", async () => {

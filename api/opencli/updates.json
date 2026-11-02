@@ -1,0 +1,588 @@
+{
+  "commands": [
+    {
+      "name": "update",
+      "description": "update",
+      "commands": [
+        {
+          "name": "management",
+          "description": "management",
+          "commands": [
+            {
+              "name": "releases",
+              "description": "releases",
+              "arguments": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "provider": "nodes"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "options": [
+                {
+                  "name": "--upstream",
+                  "arguments": [
+                    {
+                      "name": "repository",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "api": [
+                      {
+                        "operationId": "listUpdateReleases",
+                        "inputs": {
+                          "path/id": "argument:node",
+                          "path/component": "derived:command",
+                          "query/upstream": "option:--upstream"
+                        }
+                      }
+                    ],
+                    "appendSpace": true
+                  }
+                }
+              ]
+            },
+            {
+              "name": "status",
+              "description": "status",
+              "arguments": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "provider": "nodes"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "target",
+                  "required": false
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "api": [
+                      {
+                        "operationId": "getUpdateStatus",
+                        "inputs": {
+                          "path/id": "argument:node",
+                          "path/component": "derived:command",
+                          "query/operation_id": "argument:target"
+                        }
+                      }
+                    ],
+                    "appendSpace": true
+                  }
+                }
+              ]
+            },
+            {
+              "name": "start",
+              "description": "start",
+              "arguments": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "provider": "nodes"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "target",
+                  "required": true
+                }
+              ],
+              "options": [
+                {
+                  "name": "--skip-dry-run"
+                },
+                {
+                  "name": "--upstream",
+                  "arguments": [
+                    {
+                      "name": "repository",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "api": [
+                      {
+                        "operationId": "runUpdateAction",
+                        "inputs": {
+                          "path/id": "argument:node",
+                          "path/component": "derived:command",
+                          "path/action": "derived:command",
+                          "header/Idempotency-Key": "runtime:idempotency",
+                          "body/release": "argument:target",
+                          "body/upstream": "option:--upstream",
+                          "body/skip_dry_run": "option:--skip-dry-run"
+                        }
+                      }
+                    ],
+                    "appendSpace": true
+                  }
+                }
+              ]
+            },
+            {
+              "name": "rollback",
+              "description": "rollback",
+              "arguments": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "provider": "nodes"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "target",
+                  "required": true
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "api": [
+                      {
+                        "operationId": "runUpdateAction",
+                        "inputs": {
+                          "path/id": "argument:node",
+                          "path/component": "derived:command",
+                          "path/action": "derived:command",
+                          "header/Idempotency-Key": "runtime:idempotency",
+                          "body/operation_id": "argument:target"
+                        }
+                      }
+                    ],
+                    "appendSpace": true
+                  }
+                }
+              ]
+            },
+            {
+              "name": "cleanup",
+              "description": "cleanup",
+              "arguments": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "provider": "nodes"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "target",
+                  "required": true
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "api": [
+                      {
+                        "operationId": "runUpdateAction",
+                        "inputs": {
+                          "path/id": "argument:node",
+                          "path/component": "derived:command",
+                          "path/action": "derived:command",
+                          "header/Idempotency-Key": "runtime:idempotency",
+                          "body/operation_id": "argument:target"
+                        }
+                      }
+                    ],
+                    "appendSpace": true
+                  }
+                }
+              ]
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "appendSpace": true
+              }
+            }
+          ]
+        },
+        {
+          "name": "host",
+          "description": "host",
+          "commands": [
+            {
+              "name": "releases",
+              "description": "releases",
+              "arguments": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "provider": "nodes"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "options": [
+                {
+                  "name": "--upstream",
+                  "arguments": [
+                    {
+                      "name": "repository",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "api": [
+                      {
+                        "operationId": "listUpdateReleases",
+                        "inputs": {
+                          "path/id": "argument:node",
+                          "path/component": "derived:command",
+                          "query/upstream": "option:--upstream"
+                        }
+                      }
+                    ],
+                    "appendSpace": true
+                  }
+                }
+              ]
+            },
+            {
+              "name": "status",
+              "description": "status",
+              "arguments": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "provider": "nodes"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "target",
+                  "required": false
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "api": [
+                      {
+                        "operationId": "getUpdateStatus",
+                        "inputs": {
+                          "path/id": "argument:node",
+                          "path/component": "derived:command",
+                          "query/operation_id": "argument:target"
+                        }
+                      }
+                    ],
+                    "appendSpace": true
+                  }
+                }
+              ]
+            },
+            {
+              "name": "prepare",
+              "description": "prepare",
+              "arguments": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "provider": "nodes"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "target",
+                  "required": true
+                }
+              ],
+              "options": [
+                {
+                  "name": "--skip-dry-run"
+                },
+                {
+                  "name": "--upstream",
+                  "arguments": [
+                    {
+                      "name": "repository",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "api": [
+                      {
+                        "operationId": "runUpdateAction",
+                        "inputs": {
+                          "path/id": "argument:node",
+                          "path/component": "derived:command",
+                          "path/action": "derived:command",
+                          "header/Idempotency-Key": "runtime:idempotency",
+                          "body/release": "argument:target",
+                          "body/upstream": "option:--upstream",
+                          "body/skip_dry_run": "option:--skip-dry-run"
+                        }
+                      }
+                    ],
+                    "appendSpace": true
+                  }
+                }
+              ]
+            },
+            {
+              "name": "activate",
+              "description": "activate",
+              "arguments": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "provider": "nodes"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "target",
+                  "required": true
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "api": [
+                      {
+                        "operationId": "runUpdateAction",
+                        "inputs": {
+                          "path/id": "argument:node",
+                          "path/component": "derived:command",
+                          "path/action": "derived:command",
+                          "header/Idempotency-Key": "runtime:idempotency",
+                          "body/operation_id": "argument:target"
+                        }
+                      }
+                    ],
+                    "appendSpace": true
+                  }
+                }
+              ]
+            },
+            {
+              "name": "commit",
+              "description": "commit",
+              "arguments": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "provider": "nodes"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "target",
+                  "required": true
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "api": [
+                      {
+                        "operationId": "runUpdateAction",
+                        "inputs": {
+                          "path/id": "argument:node",
+                          "path/component": "derived:command",
+                          "path/action": "derived:command",
+                          "header/Idempotency-Key": "runtime:idempotency",
+                          "body/operation_id": "argument:target"
+                        }
+                      }
+                    ],
+                    "appendSpace": true
+                  }
+                }
+              ]
+            },
+            {
+              "name": "rollback",
+              "description": "rollback",
+              "arguments": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "provider": "nodes"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "target",
+                  "required": true
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "api": [
+                      {
+                        "operationId": "runUpdateAction",
+                        "inputs": {
+                          "path/id": "argument:node",
+                          "path/component": "derived:command",
+                          "path/action": "derived:command",
+                          "header/Idempotency-Key": "runtime:idempotency",
+                          "body/operation_id": "argument:target"
+                        }
+                      }
+                    ],
+                    "appendSpace": true
+                  }
+                }
+              ]
+            },
+            {
+              "name": "cleanup",
+              "description": "cleanup",
+              "arguments": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "provider": "nodes"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "target",
+                  "required": true
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "api": [
+                      {
+                        "operationId": "runUpdateAction",
+                        "inputs": {
+                          "path/id": "argument:node",
+                          "path/component": "derived:command",
+                          "path/action": "derived:command",
+                          "header/Idempotency-Key": "runtime:idempotency",
+                          "body/operation_id": "argument:target"
+                        }
+                      }
+                    ],
+                    "appendSpace": true
+                  }
+                }
+              ]
+            }
+          ],
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "appendSpace": true
+              }
+            }
+          ]
+        }
+      ],
+      "metadata": [
+        {
+          "name": "floatlab",
+          "value": {
+            "appendSpace": true
+          }
+        }
+      ]
+    }
+  ]
+}

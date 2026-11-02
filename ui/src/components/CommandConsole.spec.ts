@@ -43,6 +43,23 @@ afterEach(() => {
 });
 
 describe("CommandPalette", () => {
+  it("completes quoted resource names and hides CLI-only file options", async () => {
+    mountPalette(api({ listStacks: vi.fn().mockResolvedValue([{ ...stack, name: 'media stack' }]) }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { altKey: true, code: "Slash" }));
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("#palette-input")!;
+    input.value = 'start "media s';
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    await settle();
+    expect(input.value).toBe('start "media stack"');
+    input.value = 'create demo --fi';
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    expect(document.querySelector("#palette-options")).toBeNull();
+  });
+
   it("shows management actions and nodes as update tokens are completed", async () => {
     mountPalette(api({ listNodes: vi.fn().mockResolvedValue([{ id: "node-1", name: "fl-x220", status: "ready" }]) }));
     window.dispatchEvent(new KeyboardEvent("keydown", { altKey: true, code: "Slash" }));

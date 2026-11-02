@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CommandEngine, type CommandResult, type CommandRuntime, type Completion, type FloatLabApi } from "@floatlab/client";
+import { applyCompletion, CommandEngine, type CommandResult, type CommandRuntime, type Completion, type FloatLabApi } from "@floatlab/client";
 import UiInput from "./UiInput.vue";
 import UiButton from "./UiButton.vue";
 import UiTextarea from "./UiTextarea.vue";
@@ -96,7 +96,7 @@ function close() {
 function acceptCompletion() {
   const completion = completions.value[active.value];
   if (!completion) return;
-  query.value = query.value.replace(/\S*$/, completion.value + (completion.appendSpace ? " " : ""));
+  query.value = applyCompletion(query.value, completion);
   active.value = 0;
   if (completion.appendSpace) void updateCompletions();
   else completions.value = [];

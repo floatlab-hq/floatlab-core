@@ -3,7 +3,8 @@ import { createPrompt, isDownKey, isEnterKey, isTabKey, isUpKey, useKeypress, us
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { tokenize, type CommandResult, type CommandRuntime, type Completion } from "@floatlab/client";
+import { completeFiles } from "./completion";
+import { applyCompletion, tokenize, type CommandResult, type CommandRuntime, type Completion } from "@floatlab/client";
 
 export const format = (result: CommandResult): string => {
   if (result.kind === "exec") return result.stdout + result.stderr;
@@ -15,8 +16,6 @@ export const format = (result: CommandResult): string => {
   const row = (values: string[]) => values.map((value, index) => value.padEnd(widths[index]!)).join("  ");
   return [row(result.columns), row(widths.map((width) => "-".repeat(width))), ...result.rows.map(row)].join("\n");
 };
-
-export const replaceLastToken = (input: string, value: string) => input.replace(/\S*$/, value);
 
 async function page(content: string): Promise<boolean> {
   try {
@@ -43,6 +42,8 @@ export function terminalRuntime(interactive: boolean, signal?: AbortSignal): Com
   const editor = composeEditor();
   return {
     interactive,
+    cli: true,
+    completeFiles,
     signal,
     confirm: (message) => confirm({ message, default: false }),
     ask: (message) => input({ message }),
@@ -73,7 +74,7 @@ const commandPrompt = createPrompt<string, CommandInputConfig>((config, done) =>
     if (isDownKey(key)) { if (choices.length) setSelected((selected + 1) % choices.length); else { const index = Math.min(config.history.length, historyIndex + 1); setHistoryIndex(index); replaceLine(config.history[index] ?? ""); } return; }
     if (isTabKey(key) && choices[selected]) {
       const choice = choices[selected]!;
-      const completed = replaceLastToken(value, choice.value + (choice.appendSpace ? " " : ""));
+      const completed = applyCompletion(value, choice);
       replaceLine(completed); setChoices(await config.complete(completed)); setSelected(0); return;
     }
     setValue(next); const matches = await config.complete(next); setChoices(matches); setSelected(0);

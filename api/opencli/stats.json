@@ -1,0 +1,55 @@
+{
+  "commands": [
+    {
+      "name": "stats",
+      "description": "stats",
+      "arguments": [
+        {
+          "name": "stack",
+          "required": true,
+          "metadata": [
+            {
+              "name": "floatlab",
+              "value": {
+                "provider": "stacks"
+              }
+            }
+          ]
+        }
+      ],
+      "options": [
+        {
+          "name": "--range",
+          "arguments": [
+            {
+              "name": "range",
+              "required": true,
+              "acceptedValues": [
+                "1h",
+                "6h",
+                "24h",
+                "7d"
+              ]
+            }
+          ]
+        }
+      ],
+      "metadata": [
+        {
+          "name": "floatlab",
+          "value": {
+            "api": [
+              {
+                "operationId": "getStackStats",
+                "inputs": {
+                  "path/stack_id": "argument:stack",
+                  "query/range": "option:--range"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

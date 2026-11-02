@@ -37,6 +37,31 @@ jobs:
       - name: Install TypeScript workspace
         run: pnpm install --frozen-lockfile
 
+      - name: Validate OpenCLI contracts and generated completions
+        run: pnpm commands:check
+
+      - name: Report API command coverage
+        run: |
+          pnpm commands:coverage
+          cat dist/command-coverage/coverage.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: command-coverage
+          path: dist/command-coverage/
+
+      - name: Install completion test shells
+        run: sudo apt-get update && sudo apt-get install -y zsh fish
+
+      - uses: hustcer/setup-nu@v3
+        with:
+          version: '0.116.1'
+
+      - name: Test all five shell adapters
+        env:
+          REQUIRE_COMPLETION_SHELLS: '1'
+        run: bun test cli/test/completion-shells.test.ts
+
       - name: Generate shared API schema
         run: pnpm --filter @floatlab/client generate:api && git diff --exit-code -- packages/floatlab-client/src/schema.d.ts
 
@@ -47,7 +72,7 @@ jobs:
         run: pnpm --filter @floatlab/client typecheck && pnpm --filter floatlab-cli typecheck && pnpm --recursive test
 
       - name: Check UI
-        run: pnpm --dir ui lint && pnpm --dir ui typecheck
+        run: pnpm --dir ui lint && pnpm --dir ui typecheck && pnpm --dir ui storybook:build
 
       - name: Test release tag validation
         run: bash scripts/check-release-tag.test.sh
