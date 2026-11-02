@@ -6,7 +6,7 @@ import UiNodePlate from './UiNodePlate.vue'
 import UiStatusBadge from './UiStatusBadge.vue'
 import UiAssetIcon from './UiAssetIcon.vue'
 
-defineProps<{ apps: DirectoryApp[]; readonly?: boolean }>()
+defineProps<{ apps: DirectoryApp[]; readonly?: boolean; managed?: boolean }>()
 defineEmits<{ state: [appId: string]; tools: [appId: string]; open: [appId: string]; network: [appId: string]; columns: [] }>()
 </script>
 
@@ -15,7 +15,7 @@ defineEmits<{ state: [appId: string]; tools: [appId: string]; open: [appId: stri
     <div class="app-directory" role="table" aria-label="Apps">
       <div class="app-columns" role="row">
         <span v-for="label in ['App', 'State', 'Network', 'Host', 'HA standby', 'Backup node', 'Security', 'Group']" :key="label" role="columnheader">{{ label }}</span>
-        <span role="columnheader"><UiButton v-if="!readonly" variant="plain" aria-label="Choose app columns" @click="$emit('columns')"><IconColumns2Filled :size="18" aria-hidden="true" /></UiButton></span>
+        <span role="columnheader"><UiButton v-if="!readonly && !managed" variant="plain" aria-label="Choose app columns" @click="$emit('columns')"><IconColumns2Filled :size="18" aria-hidden="true" /></UiButton></span>
       </div>
       <div v-for="app in apps" :key="app.id" class="app-row" role="row">
         <div class="app-identity" role="cell">
@@ -24,7 +24,7 @@ defineEmits<{ state: [appId: string]; tools: [appId: string]; open: [appId: stri
           <UiButton v-if="!readonly" variant="plain" class="app-open" :aria-label="`Open ${app.name}`" @click="$emit('open', app.id)"><IconArrowUpRight :size="18" aria-hidden="true" /></UiButton>
         </div>
         <span role="cell"><UiStatusBadge :disabled="readonly" :state="app.state" @click="$emit('state', app.id)" /></span>
-        <span role="cell"><span v-if="readonly">{{ app.address }}</span><UiButton v-else variant="plain" class="directory-link" @click="$emit('network', app.id)">{{ app.address }}</UiButton></span>
+        <span role="cell"><span v-if="readonly || managed">{{ app.address }}</span><UiButton v-else variant="plain" class="directory-link" @click="$emit('network', app.id)">{{ app.address }}</UiButton></span>
         <span role="cell"><UiNodePlate v-if="app.host" :name="app.host" /><span v-else>—</span></span>
         <span role="cell"><UiNodePlate v-if="app.standby" :name="app.standby" /><span v-else>—</span></span>
         <span role="cell"><UiNodePlate v-if="app.backup" :name="app.backup" /><span v-else>—</span></span>
@@ -32,7 +32,7 @@ defineEmits<{ state: [appId: string]; tools: [appId: string]; open: [appId: stri
         <span class="app-group" role="cell">{{ app.group }}</span>
         <span role="cell"><UiButton v-if="!readonly" variant="plain" class="app-tools" :aria-label="`Tools for ${app.name}`" @click="$emit('tools', app.id)">Tools <IconChevronDownFilled :size="12" aria-hidden="true" /></UiButton></span>
       </div>
-      <p v-if="!apps.length" class="directory-empty">{{ readonly ? 'No apps' : 'No apps match these filters.' }}</p>
+      <p v-if="!apps.length" class="directory-empty">{{ readonly || managed ? 'No apps' : 'No apps match these filters.' }}</p>
     </div>
   </div>
 </template>

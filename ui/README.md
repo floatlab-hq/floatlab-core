@@ -14,6 +14,25 @@ Refresh runs every 30 seconds while visible. Unavailable data is labelled.
 Management workflows remain accessible through the command palette (Alt/Ctrl/Cmd+/),
 including completion, confirmation, prompts and Compose editing.
 
+The live dashboard reuses the Storybook navigation, host/app directories and detail
+panel. App state and Tools open the workload panel: start/stop, logs, metrics,
+Compose, inspection, snapshots, image upgrades and deletion use the shared CLI
+command engine. Containers expose start/stop, logs, inspection and command
+execution. Cached peer entries expose read operations only. Restart, app links,
+network editing, column selection and filters are not exposed without a wired
+implementation.
+
+**Add app** collects the name, primary node, optional standby and start preference,
+then opens the CLI's validated Compose editor. **Host** prepares `lab invite` in
+the command palette; it does not register a fictitious node. **Settings** opens
+the implemented alert-rule list; rule edits and other lab/backup operations remain
+available through the command palette.
+
+Storybook's **Live Dashboard** includes interactive empty, stopped, running,
+creation, workload-action, and cached-peer views. **Create App** and **Workload
+Detail** document their individual states. These use isolated in-memory fixtures;
+they do not contact or mutate a real appliance.
+
 ## Contracts and checks
 
 `pnpm --filter @floatlab/client generate:api` generates TypeScript from the root

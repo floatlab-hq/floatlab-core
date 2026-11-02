@@ -8,6 +8,7 @@ import '../command-console.css';
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 
 const props = defineProps<{ api: FloatLabApi }>();
+const emit = defineEmits<{ completed: [] }>();
 
 const open = ref(false);
 const query = ref("");
@@ -120,6 +121,7 @@ async function execute() {
   result.value = undefined;
   try {
     await engine.dispatch(query.value);
+    emit('completed');
     await updateCompletions();
   } catch (error) {
     result.value = { kind: "error", message: error instanceof Error ? error.message : "Command failed" };
@@ -127,6 +129,15 @@ async function execute() {
     running.value = false;
     controller = undefined;
   }
+}
+
+function launch(args: string[], run = true) {
+  if (running.value || confirmMessage.value || composeOpen.value || promptMessage.value) return;
+  show();
+  query.value = args.map(value => JSON.stringify(value)).join(' ') + (run ? '' : ' ');
+  result.value = undefined;
+  if (run) void execute();
+  else void updateCompletions();
 }
 
 function onInput() {
@@ -249,7 +260,7 @@ function onGlobalKeydown(event: KeyboardEvent) {
 }
 
 onMounted(() => window.addEventListener("keydown", onGlobalKeydown));
-defineExpose({ show });
+defineExpose({ show, launch });
 onBeforeUnmount(() => {
   controller?.abort();
   clearDownload();

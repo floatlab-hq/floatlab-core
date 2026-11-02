@@ -1,10 +1,25 @@
 import type { Meta, StoryObj } from '@storybook/vue3-vite'
 import LiveDashboard from './LiveDashboard.vue'
-import { fixtureApi, stack } from '../../dashboard/live-fixtures'
-const args = { api: fixtureApi() }
-const meta: Meta<typeof LiveDashboard> = { title: '2. Pattern/Live Dashboard', component: LiveDashboard, args, render: args => ({ components: { LiveDashboard }, setup: () => ({ args }), template: '<LiveDashboard v-bind="args" />' }) }
+import { fixtureApi, interactiveFixtureApi, stack } from '../../dashboard/live-fixtures'
+import { userEvent, within } from 'storybook/test'
+const args = { api: interactiveFixtureApi() }
+const meta: Meta<typeof LiveDashboard> = { title: '2. Pattern/Live Dashboard', component: LiveDashboard, args, parameters: { layout: 'fullscreen' }, render: args => ({ components: { LiveDashboard }, setup: () => ({ args }), template: '<LiveDashboard v-bind="args" />' }) }
 export default meta
 export const Default: StoryObj<typeof meta> = {}
+export const Empty: StoryObj<typeof meta> = { args: { api: interactiveFixtureApi([]) } }
+export const Running: StoryObj<typeof meta> = { args: { api: interactiveFixtureApi([stack]) } }
+export const AddApp: StoryObj<typeof meta> = {
+  args: { api: interactiveFixtureApi([]) },
+  play: async ({ canvasElement }) => {
+    await userEvent.click(await within(canvasElement).findByRole('button', { name: 'App' }))
+  },
+}
+export const WorkloadActions: StoryObj<typeof meta> = {
+  args: { api: interactiveFixtureApi([stack]) },
+  play: async ({ canvasElement }) => {
+    await userEvent.click(await within(canvasElement).findByRole('button', { name: 'Tools for plex' }))
+  },
+}
 export const CachedPeerView: StoryObj<typeof meta> = { args: { api: { ...fixtureApi(), listStacks: async () => [stack, { ...stack, id: 'peer-stack', primary_node: 'peer-node', name: 'web', replica: true, stale: true, observed_revision: 42 }] } } }
 const devApi = fixtureApi()
 const raftHealth = devApi.getRaftHealth

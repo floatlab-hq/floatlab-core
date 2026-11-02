@@ -6,6 +6,14 @@ import UiNodePlate from './UiNodePlate.vue'
 import UiStatusBadge from './UiStatusBadge.vue'
 
 describe('App directory', () => {
+  it('keeps app tools available without exposing unsupported column and network controls', () => {
+    const wrapper = mount(AppDirectory, { props: { apps: [apps[0]!], managed: true } })
+    expect(wrapper.find('.app-tools').exists()).toBe(true)
+    expect(wrapper.find('.app-open').exists()).toBe(true)
+    expect(wrapper.get('.status-badge').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('.directory-link').exists()).toBe(false)
+    expect(wrapper.find('[aria-label="Choose app columns"]').exists()).toBe(false)
+  })
   it('hides unsupported controls in the live read-only directory', () => {
     const wrapper = mount(AppDirectory, { props: { apps: [{ ...apps[0]!, logo: '' }], readonly: true } })
     expect(wrapper.find('.asset-icon').exists()).toBe(false)

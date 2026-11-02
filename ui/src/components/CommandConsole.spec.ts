@@ -105,6 +105,18 @@ describe("CommandPalette", () => {
     expect(document.querySelector(".palette-result")?.textContent).toContain("Aborted");
   });
 
+  it("launches dashboard actions with safe arguments and reports completion", async () => {
+    const fake = api({ getStackLogs: vi.fn().mockResolvedValue([]) });
+    const wrapper = mountPalette(fake);
+    wrapper.vm.launch(['logs', 'stack-1']);
+    await settle();
+    expect(fake.getStackLogs).toHaveBeenCalledWith('stack-1', { since: undefined, tail: undefined });
+    expect(wrapper.emitted('completed')).toHaveLength(1);
+    wrapper.vm.launch(['exec', 'stack-1', 'container-1', '--'], false);
+    await settle();
+    expect(document.querySelector<HTMLInputElement>('#palette-input')!.value).toBe('"exec" "stack-1" "container-1" "--" ');
+    expect(fake.execContainer).not.toHaveBeenCalled();
+  });
   it("completes quoted resource names and hides CLI-only file options", async () => {
     mountPalette(api({ listStacks: vi.fn().mockResolvedValue([{ ...stack, name: 'media stack' }]) }));
     window.dispatchEvent(new KeyboardEvent("keydown", { altKey: true, code: "Slash" }));

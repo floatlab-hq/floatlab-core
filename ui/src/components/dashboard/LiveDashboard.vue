@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { IconPlusFilled } from '@tabler/icons-vue'
 import { ApiError, type DashboardApi, type FloatLabApi, type Node, type Stack, type NodeStats, type StorageStats, type Notification, type RaftHealth, type LogLine, type UpdateApi, type BackupApi, type BackupRestoreApi } from '@floatlab/client'
 import { appItem, hostItem, labEvent } from '../../dashboard/live'
 import UiButton from '../UiButton.vue'
 import SplitView from '../SplitView.vue'
 import CommandConsole from '../CommandConsole.vue'
-import UiAssetIcon from './UiAssetIcon.vue'
+import DashboardNavigation from './DashboardNavigation.vue'
+import CreateApp from './CreateApp.vue'
+import WorkloadDetail from './WorkloadDetail.vue'
 import HostDirectory from './HostDirectory.vue'
 import AppDirectory from './AppDirectory.vue'
 import LabEventLog from './LabEventLog.vue'
@@ -26,11 +29,14 @@ const logs = ref<Record<string, LogLine[]>>({})
 const loading = ref(false)
 const errors = ref<string[]>([])
 const selected = ref('')
+const selectedApp = ref('')
+const creating = ref(false)
 const commandConsole = ref<InstanceType<typeof CommandConsole>>()
 const hosts = computed(() => nodes.value.map(node => hostItem(node, stacks.value, stats.value[node.id], storage.value[node.id])))
 const apps = computed(() => stacks.value.map(stack => appItem(stack, nodes.value)))
 const events = computed(() => notifications.value.map(notification => labEvent(notification, nodes.value)))
 const selectedNode = computed(() => nodes.value.find(node => node.id === selected.value))
+const selectedStack = computed(() => stacks.value.find(stack => stack.id === selectedApp.value))
 const selectedApps = computed(() => stacks.value.filter(stack => stack.primary_node === selected.value || stack.secondary_node === selected.value).map(stack => appItem(stack, nodes.value)))
 const cluster = computed(() => raft.value ? `${raft.value.state} · ${raft.value.peers.length} peers` : 'Cluster status unavailable')
 let active = true
@@ -65,10 +71,16 @@ async function refresh() {
 }
 async function inspect(id: string) {
   origin = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
+  selectedApp.value = ''
   selected.value = id
   await read('Host logs', props.api.getNodeLogs(id), value => { logs.value[id] = value })
 }
-async function close() { selected.value = ''; await nextTick(); origin?.focus({ preventScroll: true }) }
+function inspectApp(id: string) {
+  origin = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
+  selected.value = ''; selectedApp.value = id
+}
+async function createApp(args: string[]) { creating.value = false; await nextTick(); commandConsole.value?.launch(args) }
+async function close() { selected.value = ''; selectedApp.value = ''; await nextTick(); origin?.focus({ preventScroll: true }) }
 function restoreFocus() { origin?.focus({ preventScroll: true }) }
 function visibleRefresh() { if (document.visibilityState === 'visible') void refresh() }
 onMounted(() => { void refresh(); timer = setInterval(visibleRefresh, 30_000); document.addEventListener('visibilitychange', visibleRefresh) })
@@ -76,34 +88,40 @@ onBeforeUnmount(() => { active = false; clearInterval(timer); document.removeEve
 </script>
 <template>
   <main id="dashboard" class="live-dashboard">
-    <header>
-      <UiAssetIcon src="/assets/dashboard/imgFloatLabLogo.svg" :size="34" /><h1>FloatLab</h1>
+    <DashboardNavigation @command="commandConsole?.show()" @settings="commandConsole?.launch(['alert-rules', 'list'])" />
+    <div class="dashboard-toolbar">
       <p v-if="raft?.dev_mode" role="status">Development mode</p>
-      <UiButton variant="surface" @click="commandConsole?.show()">Command Palette</UiButton>
+      <p role="status">{{ loading ? 'Refreshing…' : cluster }}</p>
       <UiButton variant="surface" :disabled="loading" @click="refresh">Refresh</UiButton>
       <UiButton variant="surface" @click="emit('logout')">Sign out</UiButton>
-    </header>
-    <p role="status">{{ loading ? 'Refreshing…' : cluster }}</p>
+    </div>
     <div v-if="errors.length" role="alert"><p v-for="error in errors" :key="error">{{ error }}</p></div>
     <LabEventLog :events="events" readonly />
     <p v-if="!events.length && !loading">{{ errors.some(error => error.startsWith('Events:')) ? 'Events unavailable' : 'No recent events' }}</p>
-    <SplitView :open="Boolean(selectedNode)" @closed="restoreFocus">
+    <SplitView :open="Boolean(selectedNode || selectedStack)" @closed="restoreFocus">
       <div>
-        <h2>Hosts</h2><HostDirectory :hosts="hosts" @inspect="inspect" @tools="inspect" @connect="inspect" />
+        <div class="dashboard-section-heading"><h1>Hosts</h1><UiButton variant="surface" @click="commandConsole?.launch(['lab', 'invite'], false)"><IconPlusFilled :size="18" aria-hidden="true" /> Host</UiButton></div>
+        <HostDirectory :hosts="hosts" @inspect="inspect" @tools="inspect" @connect="inspect" />
         <p v-if="!hosts.length && !loading">{{ errors.some(error => error.startsWith('Hosts:')) ? 'Hosts unavailable' : 'No registered hosts' }}</p>
-        <h2>Apps</h2><AppDirectory :apps="apps" readonly />
+        <div class="dashboard-section-heading"><h2>Apps</h2><UiButton variant="surface" :disabled="!nodes.length" @click="creating = true"><IconPlusFilled :size="18" aria-hidden="true" /> App</UiButton></div>
+        <AppDirectory :apps="apps" managed @state="inspectApp" @tools="inspectApp" @open="inspectApp" />
       </div>
       <template #detail>
+        <WorkloadDetail v-if="selectedStack" :key="selectedStack.id" :stack="selectedStack" :api="api" @close="close" @command="(args, run) => commandConsole?.launch(args, run)" />
         <LiveHostDetail v-if="selectedNode" :key="selectedNode.id" :node="selectedNode" :apps="selectedApps" :storage="storage[selected]" :logs="logs[selected]" :loading="loading" @close="close" />
         <ApplianceUpdates v-if="selectedNode && updateApi" :key="selectedNode.id + '-updates'" :api="updateApi" :node-id="selectedNode.id" />
       </template>
     </SplitView>
-    <BackupTargets v-if="backupApi" :api="backupApi" :nodes="nodes" :stacks="stacks" @restored="refresh" />
-    <CommandConsole ref="commandConsole" :api="api" />
+    <BackupTargets v-if="backupApi && stacks.length" :api="backupApi" :nodes="nodes" :stacks="stacks" @restored="refresh" />
+    <CreateApp v-if="creating" :nodes="nodes" @close="creating = false" @create="createApp" />
+    <CommandConsole ref="commandConsole" :api="api" @completed="refresh" />
   </main>
 </template>
 <style scoped>
-.live-dashboard { display: grid; gap: 20px; padding: 32px 48px; }
-header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; } h1 { margin: 0 auto 0 0; }
+.live-dashboard { display: grid; gap: 26px; padding: 32px 48px; }
+.dashboard-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.dashboard-toolbar p:first-child { margin-right: auto; }
+.dashboard-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 24px 0 12px; }
+.dashboard-section-heading h1, .dashboard-section-heading h2 { margin: 0; font-size: var(--text-heading); font-weight: var(--weight-ui); }
 [role="alert"] { color: var(--status-error); } @media (max-width: 900px) { .live-dashboard { padding: 16px; } }
 </style>

@@ -2,10 +2,41 @@ import { flushPromises, mount, enableAutoUnmount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@floatlab/client'
 import LiveDashboard from './LiveDashboard.vue'
-import { fixtureApi } from '../../dashboard/live-fixtures'
+import { fixtureApi, interactiveFixtureApi } from '../../dashboard/live-fixtures'
+import CreateApp from './CreateApp.vue'
+import WorkloadDetail from './WorkloadDetail.vue'
+import CommandConsole from '../CommandConsole.vue'
 enableAutoUnmount(afterEach)
 afterEach(() => vi.useRealTimers())
 describe('Live dashboard', () => {
+  it('opens real workload tools and refreshes after commands complete', async () => {
+    const api = interactiveFixtureApi()
+    const list = vi.spyOn(api, 'listStacks')
+    const wrapper = mount(LiveDashboard, { props: { api } })
+    await flushPromises()
+    await wrapper.get('[aria-label="Tools for plex"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.getComponent(WorkloadDetail).props('stack').id).toBe('stack-1')
+    wrapper.getComponent(CommandConsole).vm.$emit('completed')
+    await flushPromises()
+    expect(list).toHaveBeenCalledTimes(2)
+    await wrapper.get('[aria-label="Close detail panel"]').trigger('click')
+    expect(wrapper.findComponent(WorkloadDetail).exists()).toBe(false)
+  })
+  it('opens and cancels creation, then passes creation options to the shared editor', async () => {
+    const wrapper = mount(LiveDashboard, { props: { api: interactiveFixtureApi() } })
+    await flushPromises()
+    const add = () => wrapper.findAll('button').find(button => button.text() === 'App')!
+    await add().trigger('click')
+    wrapper.getComponent(CreateApp).vm.$emit('close')
+    await flushPromises()
+    expect(wrapper.findComponent(CreateApp).exists()).toBe(false)
+    await add().trigger('click')
+    wrapper.getComponent(CreateApp).vm.$emit('create', ['create', 'web', '--primary', 'node-1'])
+    await flushPromises()
+    expect(document.querySelector('#palette-compose-title')?.textContent).toContain('Edit Compose')
+    wrapper.unmount()
+  })
   it('shows appliance updates for a selected host when the API supports them', async () => {
     const api = { ...fixtureApi(), listUpdateReleases: vi.fn().mockResolvedValue([]), getUpdateStatus: vi.fn().mockResolvedValue(null), runUpdateAction: vi.fn() }
     const wrapper = mount(LiveDashboard, { props: { api } })
