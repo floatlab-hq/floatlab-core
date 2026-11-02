@@ -43,6 +43,43 @@ afterEach(() => {
 });
 
 describe("CommandPalette", () => {
+  it.each([
+    { key: '/', code: 'Slash' },
+    { key: 'k', code: 'KeyK', metaKey: true },
+    { key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true },
+  ])('opens with $key and prevents the browser shortcut', async shortcut => {
+    mountPalette(api());
+    const event = new KeyboardEvent('keydown', { ...shortcut, cancelable: true });
+    window.dispatchEvent(event);
+    await settle();
+    expect(document.querySelector('#palette-input')).not.toBeNull();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it.each(['input', 'textarea', 'select', 'div'])('leaves slash typing alone in %s editors', async tag => {
+    mountPalette(api());
+    const editor = document.createElement(tag);
+    if (tag === 'div') editor.setAttribute('contenteditable', 'true');
+    document.body.append(editor);
+    const event = new KeyboardEvent('keydown', { key: '/', code: 'Slash', bubbles: true, cancelable: true });
+    editor.dispatchEvent(event);
+    await settle();
+    expect(document.querySelector('#palette-input')).toBeNull();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it('allows Cmd+K from an input but ignores composition and unrelated keys', async () => {
+    mountPalette(api());
+    for (const shortcut of [{ key: 'k' }, { key: '?', shiftKey: true }, { key: '/', isComposing: true }, { key: '/', repeat: true }]) {
+      window.dispatchEvent(new KeyboardEvent('keydown', shortcut));
+    }
+    await settle();
+    expect(document.querySelector('#palette-input')).toBeNull();
+    const editor = document.createElement('input'); document.body.append(editor);
+    editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+    await settle();
+    expect(document.querySelector('#palette-input')).not.toBeNull();
+  });
   it("completes API modules and sends direct commands through the shared HTTP client", async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "ok" }), { headers: { "content-type": "application/json" } }));
     mountPalette(createApiClient({ baseUrl: "https://lab.invalid", token: "test", fetch }));

@@ -6,6 +6,17 @@ const args = { api: fixtureApi() }
 const meta: Meta<typeof CommandConsole> = { title: '2. Pattern/Command Console', component: CommandConsole, args, render: args => ({ components: { CommandConsole }, setup: () => ({ args }), template: '<CommandConsole v-bind="args" />' }) }
 export default meta
 export const Default: StoryObj<typeof meta> = {}
+export const KeyboardShortcuts: StoryObj<typeof meta> = {
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement.ownerDocument.body)
+    for (const shortcut of ['/', '{Meta>}k{/Meta}', '{Control>}{Shift>}p{/Shift}{/Control}']) {
+      within(canvasElement).getByRole('button', { name: 'Open command palette' }).focus()
+      await userEvent.keyboard(shortcut)
+      await page.findByRole('combobox', { name: 'Command' })
+      await userEvent.keyboard('{Escape}')
+    }
+  },
+}
 export const ApiModules: StoryObj<typeof meta> = {
   play: async ({ canvasElement }) => {
     await userEvent.click(within(canvasElement).getByRole('button', { name: 'Open command palette' }))

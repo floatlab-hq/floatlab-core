@@ -252,8 +252,13 @@ function onPromptKeydown(event: KeyboardEvent) {
 }
 
 function onGlobalKeydown(event: KeyboardEvent) {
-  if (event.target instanceof HTMLElement && (event.target.matches('input, textarea, select') || event.target.isContentEditable)) return;
-  if ((event.altKey || event.metaKey || event.ctrlKey) && event.code === "Slash" && !open.value && !confirmMessage.value && !composeOpen.value && !promptMessage.value) {
+  if (event.defaultPrevented || event.isComposing || event.repeat) return;
+  const slash = event.key === '/' && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+  const commandK = event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'k';
+  const controlShiftP = event.ctrlKey && event.shiftKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === 'p';
+  const legacySlash = (event.altKey || event.metaKey || event.ctrlKey) && event.code === 'Slash';
+  if ((slash || legacySlash) && event.target instanceof HTMLElement && (event.target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]') || event.target.isContentEditable)) return;
+  if ((slash || commandK || controlShiftP || legacySlash) && !open.value && !confirmMessage.value && !composeOpen.value && !promptMessage.value) {
     event.preventDefault();
     show();
   }
@@ -276,9 +281,11 @@ onBeforeUnmount(() => {
     class="palette-trigger"
     type="button"
     aria-label="Open command palette"
+    aria-keyshortcuts="/ Meta+K Control+Shift+P"
+    title="Command palette: /, ⌘K, Ctrl+Shift+P"
     @click="show"
   >
-    ⌘ <span>Alt</span>/
+    ⌘K <span>/</span>
   </UiButton>
 
   <Teleport to="body">

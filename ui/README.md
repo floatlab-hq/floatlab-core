@@ -13,7 +13,8 @@ Inspect a host for configuration, associated apps, storage and recent logs.
 Refresh runs every 30 seconds while visible. Unavailable data is labelled.
 Recent events combine alert notifications with durable workload audit history,
 newest first, capped at 50 entries. Command completion also refreshes this feed.
-Management workflows remain accessible through the command palette (Alt/Ctrl/Cmd+/),
+Management workflows remain accessible through the command palette (/, Cmd+K,
+Ctrl+Shift+P, or Alt/Ctrl/Cmd+/),
 including completion, confirmation, prompts and Compose editing.
 
 The live dashboard renders the same Lab Dashboard component as Storybook, with
