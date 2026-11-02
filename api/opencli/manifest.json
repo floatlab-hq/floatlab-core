@@ -5,7 +5,7 @@
     "version": "0.1.0"
   },
   "command": {
-    "name": "floatlab",
+    "name": "lab",
     "options": [
       {
         "name": "--help",
@@ -28,11 +28,19 @@
     ]
   },
   "modules": [
+    "auth.json",
+    "config.json",
+    "failover.json",
+    "health.json",
+    "host-network.json",
+    "lab.json",
+    "logs.json",
+    "network.json",
+    "nodes.json",
+    "notify.json",
+    "openapi.json",
     "stacks.json",
     "stats.json",
-    "logs.json",
-    "config.json",
-    "lab.json",
     "store.json",
     "updates.json",
     "cli.json"

@@ -7,6 +7,7 @@ import { completeFiles } from "./completion";
 import { applyCompletion, tokenize, type CommandResult, type CommandRuntime, type Completion } from "@floatlab/client";
 
 export const format = (result: CommandResult): string => {
+  if (result.kind === "binary") return new TextDecoder().decode(result.data);
   if (result.kind === "exec") return result.stdout + result.stderr;
   if (result.kind === "text") return result.text;
   if (result.kind === "error") return result.message;
@@ -45,14 +46,18 @@ export function terminalRuntime(interactive: boolean, signal?: AbortSignal): Com
     cli: true,
     completeFiles,
     signal,
+    async writeChunk(chunk) { process.stdout.write(chunk); },
     confirm: (message) => confirm({ message, default: false }),
     ask: (message) => input({ message }),
     choose: (message, choices) => select({ message, choices: choices.map((choice) => ({ name: `${choice.value}${choice.description ? ` — ${choice.description}` : ""}`, value: choice.value })) }),
     readCompose: (path) => readFile(path, "utf8"),
+    readBody: (path) => readFile(path),
     editCompose: editor.edit,
     cleanupCompose: editor.cleanup,
     async present(result) {
+      if (result.kind === "binary") { process.stdout.write(result.data); return; }
       if (result.kind === "exec") { process.stdout.write(result.stdout); process.stderr.write(result.stderr); return; }
+      if (result.kind === "text" && !result.text) return;
       const output = format(result);
       if (interactive && (result.kind === "logs" || result.kind === "table")) {
         if (!await page(output)) console.warn("less is unavailable; printing output.");
@@ -80,7 +85,7 @@ const commandPrompt = createPrompt<string, CommandInputConfig>((config, done) =>
     setValue(next); const matches = await config.complete(next); setChoices(matches); setSelected(0);
   });
   const suggestion = choices.slice(0, 6).map((choice, index) => `${index === selected ? ">" : " "} ${choice.value}${choice.description ? ` — ${choice.description}` : ""}`).join("\n");
-  return [`? floatlab ${value}`, suggestion || undefined];
+  return [`? lab ${value}`, suggestion || undefined];
 });
 
 export async function commandInput(complete: (value: string) => Promise<Completion[]>, history: string[], context?: Parameters<typeof commandPrompt>[1]): Promise<string | undefined> {

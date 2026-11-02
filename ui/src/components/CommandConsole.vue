@@ -15,6 +15,12 @@ const completions = ref<Completion[]>([]);
 const active = ref(0);
 const result = ref<CommandResult>();
 const running = ref(false);
+const downloadUrl = ref<string>();
+let controller: InstanceType<typeof window.AbortController> | undefined;
+function clearDownload() {
+  if (downloadUrl.value) window.URL.revokeObjectURL(downloadUrl.value);
+  downloadUrl.value = undefined;
+}
 const input = ref<InstanceType<typeof UiInput>>();
 const previousFocus = ref<HTMLElement>();
 const confirmMessage = ref<string>();
@@ -52,6 +58,8 @@ const runtime: CommandRuntime = {
     composeResolve.value = undefined;
   },
   present: async (next) => {
+    clearDownload();
+    if (next.kind === "binary") downloadUrl.value = window.URL.createObjectURL(new window.Blob([new Uint8Array(next.data)], { type: next.contentType }));
     result.value = next;
     if (composeWaiting.value) {
       composeWaiting.value = false;
@@ -106,6 +114,9 @@ function acceptCompletion() {
 async function execute() {
   if (!query.value.trim() || running.value || confirmMessage.value || composeOpen.value || promptMessage.value) return;
   running.value = true;
+  controller = new window.AbortController();
+  runtime.signal = controller.signal;
+  clearDownload();
   result.value = undefined;
   try {
     await engine.dispatch(query.value);
@@ -114,6 +125,7 @@ async function execute() {
     result.value = { kind: "error", message: error instanceof Error ? error.message : "Command failed" };
   } finally {
     running.value = false;
+    controller = undefined;
   }
 }
 
@@ -239,6 +251,8 @@ function onGlobalKeydown(event: KeyboardEvent) {
 onMounted(() => window.addEventListener("keydown", onGlobalKeydown));
 defineExpose({ show });
 onBeforeUnmount(() => {
+  controller?.abort();
+  clearDownload();
   window.removeEventListener("keydown", onGlobalKeydown);
   confirmResolve.value?.(false);
   composeResolve.value?.(undefined);
@@ -327,6 +341,7 @@ onBeforeUnmount(() => {
           aria-live="polite"
         >
           <p v-if="result.kind === 'text'">{{ result.text }}</p>
+          <a v-else-if="result.kind === 'binary'" :href="downloadUrl" download="floatlab-response">Download response ({{ result.data.byteLength }} bytes)</a>
           <table v-else-if="result.kind === 'table'">
             <thead><tr><th
               v-for="column in result.columns"
@@ -354,6 +369,7 @@ onBeforeUnmount(() => {
           role="status"
         >
           Running…
+          <UiButton type="button" @click="controller?.abort()">Stop</UiButton>
         </p>
       </section>
     </div>

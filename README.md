@@ -6,20 +6,24 @@ to orchestrate your workloads.
 
 ## CLI
 
-Download the matching `floatlab` binary from a `manage-vX.Y.Z` release, mark it executable, and put it on your `PATH`:
+Download the matching `lab` binary from a `manage-vX.Y.Z` release, mark it executable, and put it on your `PATH`:
 
 ```bash
-chmod +x floatlab-linux-x64
-mv floatlab-linux-x64 ~/.local/bin/floatlab
+chmod +x lab-linux-x64
+mv lab-linux-x64 ~/.local/bin/lab
 ```
 
-Set `FLOATLAB_URL` and `FLOATLAB_TOKEN` for scripts. Otherwise run `floatlab` in a terminal; it asks for the URL and credentials, then stores only the URL, token, and expiry in `~/.config/floatlab/config.json` (or `$XDG_CONFIG_HOME/floatlab/config.json`). Direct commands do not ask for lifecycle confirmation; interactive commands do.
+Build a standalone binary from source with `pnpm build:cli` (Bun required); the output is `dist/lab` and needs no runtime installed.
+
+Set `FLOATLAB_URL` and `FLOATLAB_TOKEN` for scripts. Otherwise run `lab` in a terminal; it asks for the URL and credentials, then stores only the URL, token, and expiry in `~/.config/floatlab/config.json` (or `$XDG_CONFIG_HOME/floatlab/config.json`). Direct commands do not ask for lifecycle confirmation; interactive commands do.
 
 ```bash
-floatlab list
-floatlab logs plex --limit 100
-floatlab                 # interactive prompt
+lab list
+lab logs plex --limit 100
+lab                 # interactive prompt
 ```
+
+Direct API commands accept `--body` for inline JSON or text and `--body-file` for raw file contents. Use files for large or binary requests, for example `lab api stacks startStack --path-id STACK_ID --content-type application/x-tar --body-file stack.tar`. JSON files work with `--body-file` too. The two body options are mutually exclusive.
 
 The web interface exposes the same commands through the command palette: press <kbd>Alt</kbd>+<kbd>/</kbd>.
 
@@ -400,26 +404,23 @@ Snapshot recovery is now `POST /api/v1/stacks/{id}/snapshots/{snapshotId}/restor
 
 ## CLI shell completion
 
-The CLI and live command palette share modular definitions in [`api/opencli/`](api/opencli/README.md). Release assets include `floatlab-completions-<version>.tar.gz`; extract it for the five generated scripts. You can also produce each script from the installed binary:
+The CLI and live command palette share modular definitions in [`api/opencli/`](api/opencli/README.md). Autocomplete scripts are bundled in the `lab` binary; no separate download is needed.
 
 ```sh
-floatlab completion bash > floatlab.bash
-floatlab completion zsh > _floatlab
-floatlab completion fish > floatlab.fish
-floatlab completion powershell > floatlab.ps1
-floatlab completion nushell > floatlab.nu
+lab install-autocomplete bash
+lab install-autocomplete fish
+lab install-autocomplete ps1
+lab install-autocomplete nu
 ```
 
-Load the script for your shell:
+Omit the shell to use `$SHELL` (or PowerShell when `PSModulePath` is set). Restart your shell after installing. The command works offline without a FloatLab session and can be run again after upgrading `lab`.
 
-- **Bash:** add `source /absolute/path/floatlab.bash` to `~/.bashrc`.
-- **Zsh:** add its directory to `fpath` before `autoload -Uz compinit; compinit` in `~/.zshrc`, or source `_floatlab` after `compinit`.
-- **Fish:** copy `floatlab.fish` into `~/.config/fish/completions/`.
-- **PowerShell:** add `. /absolute/path/floatlab.ps1` to `$PROFILE`.
-- **Nushell:** add `source /absolute/path/floatlab.nu` to `config.nu`. It chains the previous external completer for other tools. External completion must be enabled.
+Bash uses `~/.bashrc`; Fish uses `$XDG_CONFIG_HOME/fish/completions/lab.fish` (default `~/.config/fish/completions/lab.fish`). PowerShell queries `pwsh` for its current-user, all-hosts profile, and Nushell queries `nu` for `config.nu`, so those shells must be on PATH. Installation updates only the marked FloatLab block and preserves the rest of each file. Nushell chains the previous external completer for other tools; external completion must be enabled.
+
+`lab completion <bash|zsh|fish|powershell|nushell>` still prints a script for manual setup. Zsh users can run `source <(lab completion zsh)` after `compinit` in `~/.zshrc`.
 
 Static commands, options, and choices work offline. Live stack/node/container suggestions use `FLOATLAB_URL`/`FLOATLAB_TOKEN` or the saved session. Completion never prompts for credentials or changes state; missing/expired credentials, authorization failures, and requests taking over one second simply produce no live suggestions. PowerShell completion works with the existing Linux/macOS binaries; no Windows binary is supplied.
 
-The scripts call `floatlab completion resolve --shell <shell> --index <n> -- <words...>`. Words exclude the executable and include the current partial or empty word; the index is zero-based. Output is shell-specific, intended for the shipped adapter. No shell evaluates suggestion text as code. FloatLab completion ends at `exec … --`.
+The scripts call `lab completion resolve --shell <shell> --index <n> -- <words...>`. Words exclude the executable and include the current partial or empty word; the index is zero-based. Output is shell-specific, intended for the shipped adapter. No shell evaluates suggestion text as code. FloatLab completion ends at `exec … --`.
 
 Maintainers: run `pnpm commands:generate` after changing modules, `pnpm commands:check` to validate them, and `pnpm commands:coverage` for the report-only OpenAPI mapping report in `dist/command-coverage/`. See the contract README for metadata and mapping rules.

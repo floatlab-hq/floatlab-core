@@ -1,7 +1,7 @@
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { nextTick } from "vue";
-import type { FloatLabApi } from "@floatlab/client";
+import { createApiClient, type FloatLabApi } from "@floatlab/client";
 import CommandPalette from "./CommandConsole.vue";
 
 const stack = { id: "stack-1", name: "plex", state: "idle", primary_node: "node-1", compose_file: "services: {}\n" };
@@ -43,6 +43,68 @@ afterEach(() => {
 });
 
 describe("CommandPalette", () => {
+  it("completes API modules and sends direct commands through the shared HTTP client", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "ok" }), { headers: { "content-type": "application/json" } }));
+    mountPalette(createApiClient({ baseUrl: "https://lab.invalid", token: "test", fetch }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { altKey: true, code: "Slash" }));
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("#palette-input")!;
+    input.value = "api hea";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    expect(document.querySelector("#palette-options code")?.textContent).toBe("health");
+    input.value = "api health getHealth";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await settle();
+    expect(String(fetch.mock.calls[0]?.[0])).toBe("https://lab.invalid/api/v1/health");
+    expect(document.querySelector(".palette-result")?.textContent).toContain('"status": "ok"');
+  });
+
+  it("offers binary responses as downloads and releases their URLs on unmount", async () => {
+    const createObjectURL = vi.fn().mockReturnValue("blob:response");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", class extends URL {
+      static createObjectURL = createObjectURL;
+      static revokeObjectURL = revokeObjectURL;
+    });
+    const wrapper = mountPalette(createApiClient({ baseUrl: "https://lab.invalid", fetch: async () => new Response(new Uint8Array([0, 255]), { headers: { "content-type": "application/octet-stream" } }) }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { altKey: true, code: "Slash" }));
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("#palette-input")!;
+    input.value = "api health getHealth";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await settle();
+    const download = document.querySelector<HTMLAnchorElement>(".palette-result a")!;
+    expect(download.href).toBe("blob:response");
+    expect(download.textContent).toContain("2 bytes");
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    wrapper.unmount();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:response");
+  });
+
+  it("can stop an ongoing API request", async () => {
+    let signal: AbortSignal | null | undefined;
+    const fetch = vi.fn((_url, init?: RequestInit) => {
+      signal = init?.signal;
+      return new Promise<Response>((_resolve, reject) => signal?.addEventListener("abort", () => reject(new Error("Aborted"))));
+    });
+    mountPalette(createApiClient({ baseUrl: "https://lab.invalid", fetch }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { altKey: true, code: "Slash" }));
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("#palette-input")!;
+    input.value = "api health getHealth";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await settle();
+    document.querySelector<HTMLButtonElement>(".palette-running button")!.click();
+    await settle();
+    expect(signal?.aborted).toBe(true);
+    expect(document.querySelector(".palette-running")).toBeNull();
+    expect(document.querySelector(".palette-result")?.textContent).toContain("Aborted");
+  });
+
   it("completes quoted resource names and hides CLI-only file options", async () => {
     mountPalette(api({ listStacks: vi.fn().mockResolvedValue([{ ...stack, name: 'media stack' }]) }));
     window.dispatchEvent(new KeyboardEvent("keydown", { altKey: true, code: "Slash" }));

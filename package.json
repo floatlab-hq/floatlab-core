@@ -4,7 +4,7 @@
   "packageManager": "pnpm@11.18.0",
   "scripts": {
     "test": "pnpm --recursive test",
-    "build:cli": "bun build --compile cli/src/main.ts --outfile dist/floatlab",
+    "build:cli": "bun build --compile cli/src/main.ts --outfile dist/lab",
     "commands:generate": "bun packages/floatlab-client/scripts/commands.ts generate",
     "commands:check": "bun packages/floatlab-client/scripts/commands.ts check",
     "commands:coverage": "bun packages/floatlab-client/scripts/commands.ts coverage"

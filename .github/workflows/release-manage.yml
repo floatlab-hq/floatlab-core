@@ -62,12 +62,11 @@ jobs:
           mkdir -p release-dist
           for target in linux-x64-baseline linux-arm64 darwin-x64-baseline darwin-arm64; do
             name="${target%-baseline}"
-            bun build --compile --define "__FLOATLAB_VERSION__=\"$VERSION\"" --target="bun-$target" cli/src/main.ts --outfile "release-dist/floatlab-$name"
+            bun build --compile --define "__FLOATLAB_VERSION__=\"$VERSION\"" --target="bun-$target" cli/src/main.ts --outfile "release-dist/lab-$name"
           done
-          test "$(release-dist/floatlab-linux-x64 --version)" = "$VERSION"
-          release-dist/floatlab-linux-x64 completion bash > /tmp/floatlab.bash
-          cmp /tmp/floatlab.bash cli/completions/floatlab.bash
-          tar -czf "release-dist/floatlab-completions-$VERSION.tar.gz" -C cli completions
+          test "$(release-dist/lab-linux-x64 --version)" = "$VERSION"
+          release-dist/lab-linux-x64 completion bash > /tmp/lab.bash
+          cmp /tmp/lab.bash cli/completions/lab.bash
       - name: Build management image once
         run: |
           docker buildx build --platform linux/amd64 --load --provenance=false --sbom=false \
@@ -84,7 +83,7 @@ jobs:
           mkdir -p release-dist
           python3 scripts/release.py manage-manifest "$VERSION" "$GITHUB_SHA" "$GHCR" "$DOCKERHUB" release-dist
           cd release-dist
-          sha256sum floatlab-* manage-manifest.json > SHA256SUMS
+          sha256sum floatlab-* lab-* manage-manifest.json > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: release-dist/*

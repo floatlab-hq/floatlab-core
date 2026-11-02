@@ -238,6 +238,560 @@
           ]
         }
       ]
+    },
+    {
+      "name": "api",
+      "description": "Call the HTTP API directly",
+      "commands": [
+        {
+          "name": "lab",
+          "commands": [
+            {
+              "name": "createLabInvitation",
+              "description": "Issue a single-use 15-minute enrollment invitation",
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/lab/invitations",
+                      "parameters": [],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "createLabInvitation",
+                        "inputs": {}
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getLabStatus",
+              "description": "Local workload identity, lab quorum and read-only replica revisions",
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/lab/status",
+                      "parameters": [],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getLabStatus",
+                        "inputs": {}
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "joinLab",
+              "description": "Join an existing lab from an empty local appliance",
+              "options": [
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/lab/join",
+                      "parameters": [],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "invitation",
+                                "peer_url",
+                                "raft_address",
+                                "rqlite_address"
+                              ],
+                              "properties": {
+                                "invitation": {
+                                  "type": "object",
+                                  "required": [
+                                    "lab_id",
+                                    "bootstrap_url",
+                                    "token",
+                                    "fingerprint",
+                                    "expires_at"
+                                  ],
+                                  "properties": {
+                                    "lab_id": {
+                                      "type": "string"
+                                    },
+                                    "bootstrap_url": {
+                                      "type": "string",
+                                      "format": "uri"
+                                    },
+                                    "token": {
+                                      "type": "string"
+                                    },
+                                    "fingerprint": {
+                                      "type": "string"
+                                    },
+                                    "expires_at": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    }
+                                  }
+                                },
+                                "peer_url": {
+                                  "type": "string",
+                                  "format": "uri"
+                                },
+                                "raft_address": {
+                                  "type": "string"
+                                },
+                                "rqlite_address": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "joinLab",
+                        "inputs": {
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listLabMembers",
+              "description": "List cached membership including removed-node tombstones",
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/lab/members",
+                      "parameters": [],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "listLabMembers",
+                        "inputs": {}
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "previewLabMemberRemoval",
+              "description": "Inspect retained workloads, recovery material and address reservations before removal",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/lab/members/{id}/removal",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "previewLabMemberRemoval",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "releaseLabMemberPeerAddress",
+              "description": "Permit a fenced and reset removed appliance's management IP to be enrolled under a fresh identity",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/lab/members/{id}/release-peer-address",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        }
+                      ],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "operation_id",
+                                "confirm_node_id",
+                                "confirm_fenced",
+                                "confirm_reset"
+                              ],
+                              "properties": {
+                                "operation_id": {
+                                  "type": "string"
+                                },
+                                "confirm_node_id": {
+                                  "type": "string"
+                                },
+                                "confirm_fenced": {
+                                  "type": "boolean",
+                                  "enum": [
+                                    true
+                                  ]
+                                },
+                                "confirm_reset": {
+                                  "type": "boolean",
+                                  "enum": [
+                                    true
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "releaseLabMemberPeerAddress",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "removeLabMember",
+              "description": "Explicitly remove a member while lab quorum remains",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/lab/members/{id}/remove",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        }
+                      ],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "confirm_node_id",
+                                "operation_id"
+                              ],
+                              "properties": {
+                                "confirm_node_id": {
+                                  "type": "string"
+                                },
+                                "operation_id": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "removeLabMember",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "rotateLabIdentity",
+              "description": "Rotate this node's TLS certificate and dedicated replication SSH key",
+              "options": [
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/lab/identity/rotate",
+                      "parameters": [],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "operation_id"
+                              ],
+                              "properties": {
+                                "operation_id": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "rotateLabIdentity",
+                        "inputs": {
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
   ]
 }

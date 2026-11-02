@@ -1,0 +1,501 @@
+{
+  "commands": [
+    {
+      "name": "api",
+      "description": "Call the HTTP API directly",
+      "commands": [
+        {
+          "name": "nodes",
+          "commands": [
+            {
+              "name": "deleteNode",
+              "description": "Deregister a node",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "DELETE",
+                      "path": "/nodes/{id}",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "deleteNode",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getNode",
+              "description": "Get a node by ID",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/nodes/{id}",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getNode",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getNodeHealth",
+              "description": "Check live health of a node via IPC ping",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/nodes/{id}/health",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getNodeHealth",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getNodeStacks",
+              "description": "List stacks hosted on this node (primary or secondary)",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/nodes/{id}/stacks",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getNodeStacks",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listNodes",
+              "description": "List all registered nodes",
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/nodes",
+                      "parameters": [],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "listNodes",
+                        "inputs": {}
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "registerNode",
+              "description": "Register a new node",
+              "options": [
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/nodes",
+                      "parameters": [],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "name",
+                                "hostname",
+                                "zfs_pool"
+                              ],
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "hostname": {
+                                  "type": "string"
+                                },
+                                "addresses": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "required": [
+                                      "type",
+                                      "address",
+                                      "interface"
+                                    ],
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": [
+                                          "LAN-6",
+                                          "WAN-6",
+                                          "Overlay-6"
+                                        ],
+                                        "description": "IPv6 address role. All addresses are native IPv6 (no SIIT/NAT64 in MVP — see DEV-002)."
+                                      },
+                                      "address": {
+                                        "type": "string",
+                                        "description": "IPv6 address in CIDR notation.",
+                                        "example": "2001:db8::1/64"
+                                      },
+                                      "interface": {
+                                        "type": "string",
+                                        "example": "eth0"
+                                      }
+                                    }
+                                  }
+                                },
+                                "role": {
+                                  "default": "secondary",
+                                  "type": "string",
+                                  "enum": [
+                                    "primary",
+                                    "secondary"
+                                  ]
+                                },
+                                "zfs_pool": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "registerNode",
+                        "inputs": {
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "updateNode",
+              "description": "Update a node",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "PUT",
+                      "path": "/nodes/{id}",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "hostname": {
+                                  "type": "string"
+                                },
+                                "addresses": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "required": [
+                                      "type",
+                                      "address",
+                                      "interface"
+                                    ],
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": [
+                                          "LAN-6",
+                                          "WAN-6",
+                                          "Overlay-6"
+                                        ],
+                                        "description": "IPv6 address role. All addresses are native IPv6 (no SIIT/NAT64 in MVP — see DEV-002)."
+                                      },
+                                      "address": {
+                                        "type": "string",
+                                        "description": "IPv6 address in CIDR notation.",
+                                        "example": "2001:db8::1/64"
+                                      },
+                                      "interface": {
+                                        "type": "string",
+                                        "example": "eth0"
+                                      }
+                                    }
+                                  }
+                                },
+                                "role": {
+                                  "type": "string",
+                                  "enum": [
+                                    "primary",
+                                    "secondary"
+                                  ]
+                                },
+                                "zfs_pool": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "updateNode",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

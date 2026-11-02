@@ -635,6 +635,2285 @@
           ]
         }
       ]
+    },
+    {
+      "name": "api",
+      "description": "Call the HTTP API directly",
+      "commands": [
+        {
+          "name": "stacks",
+          "commands": [
+            {
+              "name": "createStack",
+              "description": "Create a stack",
+              "options": [
+                {
+                  "name": "--header-idempotency-key",
+                  "arguments": [
+                    {
+                      "name": "Idempotency-Key",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/stacks",
+                      "parameters": [
+                        {
+                          "name": "Idempotency-Key",
+                          "in": "header",
+                          "option": "--header-idempotency-key",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "maxLength": 255
+                          }
+                        }
+                      ],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "name",
+                                "compose_file"
+                              ],
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "primary_node": {
+                                  "type": "string",
+                                  "deprecated": true,
+                                  "description": "Deprecated compatibility field; derived from x-fl-stack.primary_node."
+                                },
+                                "secondary_node": {
+                                  "type": "string",
+                                  "nullable": true,
+                                  "deprecated": true,
+                                  "description": "Deprecated compatibility field; derived from x-fl-stack.secondary_node."
+                                },
+                                "compose_file": {
+                                  "type": "string"
+                                },
+                                "failover_mode": {
+                                  "deprecated": true,
+                                  "description": "Deprecated compatibility field; derived from x-fl-stack.failover.mode.",
+                                  "type": "string",
+                                  "enum": [
+                                    "manual",
+                                    "auto"
+                                  ]
+                                },
+                                "auto_trigger_after": {
+                                  "type": "string",
+                                  "deprecated": true,
+                                  "description": "Deprecated compatibility field; derived from x-fl-stack.failover.auto_trigger_after."
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "createStack",
+                        "inputs": {
+                          "header/Idempotency-Key": "option:--header-idempotency-key",
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "createStackSnapshot",
+              "description": "Create a recursive whole-stack snapshot",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--header-idempotency-key",
+                  "arguments": [
+                    {
+                      "name": "Idempotency-Key",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/stacks/{id}/snapshots",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "Idempotency-Key",
+                          "in": "header",
+                          "option": "--header-idempotency-key",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "maxLength": 255
+                          }
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "createStackSnapshot",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "header/Idempotency-Key": "option:--header-idempotency-key"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "deleteStack",
+              "description": "Delete a stack",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--header-idempotency-key",
+                  "arguments": [
+                    {
+                      "name": "Idempotency-Key",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-purge",
+                  "arguments": [
+                    {
+                      "name": "purge",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "DELETE",
+                      "path": "/stacks/{id}",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "Idempotency-Key",
+                          "in": "header",
+                          "option": "--header-idempotency-key",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "maxLength": 255
+                          }
+                        },
+                        {
+                          "name": "purge",
+                          "in": "query",
+                          "option": "--query-purge",
+                          "schema": {
+                            "type": "boolean",
+                            "default": false
+                          }
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "deleteStack",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "header/Idempotency-Key": "option:--header-idempotency-key",
+                          "query/purge": "option:--query-purge"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "deleteStackSnapshot",
+              "description": "Delete a snapshot or recovery point",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--path-snapshot-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "snapshotId",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--header-idempotency-key",
+                  "arguments": [
+                    {
+                      "name": "Idempotency-Key",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "DELETE",
+                      "path": "/stacks/{id}/snapshots/{snapshotId}",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "snapshotId",
+                          "in": "path",
+                          "option": "--path-snapshot-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "name": "Idempotency-Key",
+                          "in": "header",
+                          "option": "--header-idempotency-key",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "maxLength": 255
+                          }
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "deleteStackSnapshot",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "path/snapshotId": "option:--path-snapshot-id",
+                          "header/Idempotency-Key": "option:--header-idempotency-key"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "execStackContainer",
+              "description": "Run a one-off command in a stack container",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--path-container-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "containerId",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--header-idempotency-key",
+                  "arguments": [
+                    {
+                      "name": "Idempotency-Key",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/stacks/{id}/containers/{containerId}/exec",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "name": "containerId",
+                          "in": "path",
+                          "option": "--path-container-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "name": "Idempotency-Key",
+                          "in": "header",
+                          "option": "--header-idempotency-key",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        }
+                      ],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "command"
+                              ],
+                              "properties": {
+                                "command": {
+                                  "type": "array",
+                                  "minItems": 1,
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "execStackContainer",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "path/containerId": "option:--path-container-id",
+                          "header/Idempotency-Key": "option:--header-idempotency-key",
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getOperation",
+              "description": "Get durable operation progress",
+              "options": [
+                {
+                  "name": "--path-operation-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "operationId",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/operations/{operationId}",
+                      "parameters": [
+                        {
+                          "name": "operationId",
+                          "in": "path",
+                          "option": "--path-operation-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getOperation",
+                        "inputs": {
+                          "path/operationId": "option:--path-operation-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getStack",
+              "description": "Get a stack by ID",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/stacks/{id}",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getStack",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getStackConfig",
+              "description": "Get canonical source Compose configuration",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/stacks/{id}/config",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/yaml"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getStackConfig",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getStackContainers",
+              "description": "List containers for a stack (across all nodes)",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/stacks/{id}/containers",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getStackContainers",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getStackState",
+              "description": "Get current state of a stack",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/stacks/{id}/state",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getStackState",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getStackStatus",
+              "description": "Get lifecycle, operation, network, and container status",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/stacks/{id}/status",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "getStackStatus",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listStackAlerts",
+              "description": "List configured alert rules and current states",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/stacks/{id}/alerts",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "listStackAlerts",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listStackEvents",
+              "description": "List durable lifecycle events using cursor pagination",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-after",
+                  "arguments": [
+                    {
+                      "name": "after",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-limit",
+                  "arguments": [
+                    {
+                      "name": "limit",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/stacks/{id}/events",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "after",
+                          "in": "query",
+                          "option": "--query-after",
+                          "schema": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "name": "limit",
+                          "in": "query",
+                          "option": "--query-limit",
+                          "schema": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 200,
+                            "default": 50
+                          }
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "listStackEvents",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "query/after": "option:--query-after",
+                          "query/limit": "option:--query-limit"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listStacks",
+              "description": "List all stacks",
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/stacks",
+                      "parameters": [],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "listStacks",
+                        "inputs": {}
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listStackSnapshots",
+              "description": "List stack snapshots and recovery points",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/stacks/{id}/snapshots",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "listStackSnapshots",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "openStackTerminal",
+              "description": "Open an interactive container terminal",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--path-container-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "containerId",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-rows",
+                  "arguments": [
+                    {
+                      "name": "rows",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-cols",
+                  "arguments": [
+                    {
+                      "name": "cols",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-command",
+                  "arguments": [
+                    {
+                      "name": "command",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/stacks/{id}/containers/{containerId}/terminal",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "containerId",
+                          "in": "path",
+                          "option": "--path-container-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "name": "rows",
+                          "in": "query",
+                          "option": "--query-rows",
+                          "schema": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 4096,
+                            "default": 24
+                          }
+                        },
+                        {
+                          "name": "cols",
+                          "in": "query",
+                          "option": "--query-cols",
+                          "schema": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 4096,
+                            "default": 80
+                          }
+                        },
+                        {
+                          "name": "command",
+                          "in": "query",
+                          "option": "--query-command",
+                          "schema": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "style": "form",
+                          "explode": true
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "openStackTerminal",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "path/containerId": "option:--path-container-id",
+                          "query/rows": "option:--query-rows",
+                          "query/cols": "option:--query-cols",
+                          "query/command": "option:--query-command"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "restartStack",
+              "description": "Restart a running stack",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--header-idempotency-key",
+                  "arguments": [
+                    {
+                      "name": "Idempotency-Key",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/stacks/{id}/restart",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "Idempotency-Key",
+                          "in": "header",
+                          "option": "--header-idempotency-key",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "maxLength": 255
+                          }
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "restartStack",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "header/Idempotency-Key": "option:--header-idempotency-key"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "restoreStack",
+              "description": "Restore primary (RunningBackup → Restoring → RunningPrimary)",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--header-idempotency-key",
+                  "arguments": [
+                    {
+                      "name": "Idempotency-Key",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/stacks/{id}/restore",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "Idempotency-Key",
+                          "in": "header",
+                          "option": "--header-idempotency-key",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "maxLength": 255
+                          }
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "restoreStack",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "header/Idempotency-Key": "option:--header-idempotency-key"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "restoreStackSnapshot",
+              "description": "Recover stack data and compose configuration from a snapshot",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--path-snapshot-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "snapshotId",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--header-idempotency-key",
+                  "arguments": [
+                    {
+                      "name": "Idempotency-Key",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/stacks/{id}/snapshots/{snapshotId}/restore",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "name": "snapshotId",
+                          "in": "path",
+                          "option": "--path-snapshot-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "name": "Idempotency-Key",
+                          "in": "header",
+                          "option": "--header-idempotency-key",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "maxLength": 255
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "restoreStackSnapshot",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "path/snapshotId": "option:--path-snapshot-id",
+                          "header/Idempotency-Key": "option:--header-idempotency-key"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "startStack",
+              "description": "Create or update and start a stack",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--header-idempotency-key",
+                  "arguments": [
+                    {
+                      "name": "Idempotency-Key",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, base64 for binary media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "--content-type",
+                  "arguments": [
+                    {
+                      "name": "content-type",
+                      "required": true,
+                      "acceptedValues": [
+                        "application/yaml",
+                        "application/x-yaml",
+                        "application/x-tar"
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/stacks/{id}/start",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "Idempotency-Key",
+                          "in": "header",
+                          "option": "--header-idempotency-key",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "maxLength": 255
+                          }
+                        }
+                      ],
+                      "requestBody": {
+                        "required": false,
+                        "content": {
+                          "application/yaml": {
+                            "schema": {
+                              "type": "string"
+                            }
+                          },
+                          "application/x-yaml": {
+                            "schema": {
+                              "type": "string"
+                            }
+                          },
+                          "application/x-tar": {
+                            "schema": {
+                              "type": "string",
+                              "format": "binary"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "api": [
+                      {
+                        "operationId": "startStack",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "header/Idempotency-Key": "option:--header-idempotency-key",
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "startStackContainer",
+              "description": "Start one container in a running stack",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--path-container-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "containerId",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--header-idempotency-key",
+                  "arguments": [
+                    {
+                      "name": "Idempotency-Key",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/stacks/{id}/containers/{containerId}/start",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "containerId",
+                          "in": "path",
+                          "option": "--path-container-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "name": "Idempotency-Key",
+                          "in": "header",
+                          "option": "--header-idempotency-key",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "maxLength": 255
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "startStackContainer",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "path/containerId": "option:--path-container-id",
+                          "header/Idempotency-Key": "option:--header-idempotency-key"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "stopStack",
+              "description": "Stop a stack (RunningPrimary → Stopping → Idle)",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--header-idempotency-key",
+                  "arguments": [
+                    {
+                      "name": "Idempotency-Key",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/stacks/{id}/stop",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "Idempotency-Key",
+                          "in": "header",
+                          "option": "--header-idempotency-key",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "maxLength": 255
+                          }
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "stopStack",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "header/Idempotency-Key": "option:--header-idempotency-key"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "stopStackContainer",
+              "description": "Stop one container in a running stack",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--path-container-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "containerId",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--header-idempotency-key",
+                  "arguments": [
+                    {
+                      "name": "Idempotency-Key",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/stacks/{id}/containers/{containerId}/stop",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "containerId",
+                          "in": "path",
+                          "option": "--path-container-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "name": "Idempotency-Key",
+                          "in": "header",
+                          "option": "--header-idempotency-key",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "maxLength": 255
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "stopStackContainer",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "path/containerId": "option:--path-container-id",
+                          "header/Idempotency-Key": "option:--header-idempotency-key"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "transitionStackAlert",
+              "description": "Atomically update alert status and append its history event",
+              "options": [
+                {
+                  "name": "--header-idempotency-key",
+                  "arguments": [
+                    {
+                      "name": "Idempotency-Key",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/internal/alerts/transition",
+                      "parameters": [
+                        {
+                          "name": "Idempotency-Key",
+                          "in": "header",
+                          "option": "--header-idempotency-key",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "maxLength": 255
+                          }
+                        }
+                      ],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "rule_id",
+                                "state",
+                                "observed",
+                                "observed_at"
+                              ],
+                              "properties": {
+                                "rule_id": {
+                                  "type": "string",
+                                  "format": "uuid"
+                                },
+                                "state": {
+                                  "type": "string",
+                                  "enum": [
+                                    "pending",
+                                    "firing",
+                                    "resolved"
+                                  ]
+                                },
+                                "observed": {
+                                  "type": "number"
+                                },
+                                "observed_at": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "api": [
+                      {
+                        "operationId": "transitionStackAlert",
+                        "inputs": {
+                          "header/Idempotency-Key": "option:--header-idempotency-key",
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "triggerFailover",
+              "description": "Trigger manual failover (RunningPrimary → FailingOver → RunningBackup)",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--header-idempotency-key",
+                  "arguments": [
+                    {
+                      "name": "Idempotency-Key",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/stacks/{id}/failover",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "Idempotency-Key",
+                          "in": "header",
+                          "option": "--header-idempotency-key",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "maxLength": 255
+                          }
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "triggerFailover",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "header/Idempotency-Key": "option:--header-idempotency-key"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "updateStackCompose",
+              "description": "Update the compose file for a stack",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--header-idempotency-key",
+                  "arguments": [
+                    {
+                      "name": "Idempotency-Key",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "PUT",
+                      "path": "/stacks/{id}/compose",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "Idempotency-Key",
+                          "in": "header",
+                          "option": "--header-idempotency-key",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "maxLength": 255
+                          }
+                        }
+                      ],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "compose_file"
+                              ],
+                              "properties": {
+                                "compose_file": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "updateStackCompose",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "header/Idempotency-Key": "option:--header-idempotency-key",
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "upgradeStack",
+              "description": "Upgrade selected service images with automatic rollback",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--header-idempotency-key",
+                  "arguments": [
+                    {
+                      "name": "Idempotency-Key",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/stacks/{id}/upgrade",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "Idempotency-Key",
+                          "in": "header",
+                          "option": "--header-idempotency-key",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "maxLength": 255
+                          }
+                        }
+                      ],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "images"
+                              ],
+                              "properties": {
+                                "images": {
+                                  "type": "object",
+                                  "minProperties": 1,
+                                  "additionalProperties": {
+                                    "type": "string"
+                                  },
+                                  "description": "Compose service names mapped to replacement image references."
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "upgradeStack",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "header/Idempotency-Key": "option:--header-idempotency-key",
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "validateStackCompose",
+              "description": "Validate a stack Compose document without mutating state",
+              "options": [
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/stacks/validate",
+                      "parameters": [],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "compose_file"
+                              ],
+                              "properties": {
+                                "name": {
+                                  "type": "string",
+                                  "description": "Required for a new stack; ignored when stack_id is supplied."
+                                },
+                                "compose_file": {
+                                  "type": "string"
+                                },
+                                "stack_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "description": "Existing stack to validate an edit for."
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "api": [
+                      {
+                        "operationId": "validateStackCompose",
+                        "inputs": {
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
   ]
 }

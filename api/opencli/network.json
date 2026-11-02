@@ -1,0 +1,611 @@
+{
+  "commands": [
+    {
+      "name": "api",
+      "description": "Call the HTTP API directly",
+      "commands": [
+        {
+          "name": "network",
+          "commands": [
+            {
+              "name": "createAllocation",
+              "description": "Allocate an IPv6 address for a container service",
+              "options": [
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/network/allocations",
+                      "parameters": [],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "stack_id",
+                                "service",
+                                "prefix_pool"
+                              ],
+                              "properties": {
+                                "stack_id": {
+                                  "type": "string",
+                                  "format": "uuid"
+                                },
+                                "service": {
+                                  "type": "string"
+                                },
+                                "prefix_pool": {
+                                  "type": "string",
+                                  "format": "uuid"
+                                },
+                                "address": {
+                                  "type": "string",
+                                  "nullable": true,
+                                  "description": "Request a specific address. Omit for auto-allocation."
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "createAllocation",
+                        "inputs": {
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "createNetworkPool",
+              "description": "Create a managed IPv4 pool",
+              "options": [
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/settings/network-pools",
+                      "parameters": [],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "name",
+                                "cidr",
+                                "start_ip",
+                                "end_ip",
+                                "node_ids"
+                              ],
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "cidr": {
+                                  "type": "string"
+                                },
+                                "start_ip": {
+                                  "type": "string"
+                                },
+                                "end_ip": {
+                                  "type": "string"
+                                },
+                                "node_ids": {
+                                  "type": "array",
+                                  "uniqueItems": true,
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "createNetworkPool",
+                        "inputs": {
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "createPrefixPool",
+              "description": "Create a prefix pool",
+              "options": [
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/network/pools",
+                      "parameters": [],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "name",
+                                "prefix"
+                              ],
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "prefix": {
+                                  "type": "string",
+                                  "description": "IPv6 CIDR prefix.",
+                                  "example": "fd00::/48"
+                                },
+                                "stack_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "nullable": true
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "createPrefixPool",
+                        "inputs": {
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "deleteAllocation",
+              "description": "Release an IP reservation",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "DELETE",
+                      "path": "/network/allocations/{id}",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "deleteAllocation",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "deleteNetworkPool",
+              "description": "Delete an unused pool",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "DELETE",
+                      "path": "/settings/network-pools/{id}",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "deleteNetworkPool",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listAllocations",
+              "description": "List all IP reservations",
+              "options": [
+                {
+                  "name": "--query-stack-id",
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/network/allocations",
+                      "parameters": [
+                        {
+                          "name": "stack_id",
+                          "in": "query",
+                          "option": "--query-stack-id",
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "listAllocations",
+                        "inputs": {
+                          "query/stack_id": "option:--query-stack-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listNetworkPools",
+              "description": "List managed IPv4 pools and explicit host membership",
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/settings/network-pools",
+                      "parameters": [],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "listNetworkPools",
+                        "inputs": {}
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listPrefixPools",
+              "description": "List all IPv6 prefix pools",
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/network/pools",
+                      "parameters": [],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "listPrefixPools",
+                        "inputs": {}
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "updateNetworkPool",
+              "description": "Update an IPv4 pool and membership",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "PUT",
+                      "path": "/settings/network-pools/{id}",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        }
+                      ],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "name",
+                                "cidr",
+                                "start_ip",
+                                "end_ip",
+                                "node_ids"
+                              ],
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "cidr": {
+                                  "type": "string"
+                                },
+                                "start_ip": {
+                                  "type": "string"
+                                },
+                                "end_ip": {
+                                  "type": "string"
+                                },
+                                "node_ids": {
+                                  "type": "array",
+                                  "uniqueItems": true,
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "updateNetworkPool",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

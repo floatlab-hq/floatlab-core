@@ -357,6 +357,1392 @@
           ]
         }
       ]
+    },
+    {
+      "name": "api",
+      "description": "Call the HTTP API directly",
+      "commands": [
+        {
+          "name": "store",
+          "commands": [
+            {
+              "name": "createSnapshot",
+              "description": "Create an ad-hoc user snapshot",
+              "options": [
+                {
+                  "name": "--path-stack-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/storage/datasets/{stack_id}/snapshots",
+                      "parameters": [
+                        {
+                          "name": "stack_id",
+                          "in": "path",
+                          "option": "--path-stack-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "label"
+                              ],
+                              "properties": {
+                                "label": {
+                                  "type": "string",
+                                  "description": "Short label appended to the snapshot name.\nFinal name will be: user-YYYYMMDD-HHMMSS-<label>\n",
+                                  "example": "pre-deploy"
+                                },
+                                "recursive": {
+                                  "type": "boolean",
+                                  "default": false,
+                                  "description": "Snapshot all child datasets atomically."
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "createSnapshot",
+                        "inputs": {
+                          "path/stack_id": "option:--path-stack-id",
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "deleteBackupTarget",
+              "description": "Disable a target, release its source holds and rerun source pruning",
+              "options": [
+                {
+                  "name": "--path-stack-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "DELETE",
+                      "path": "/storage/replication/{stack_id}/targets",
+                      "parameters": [
+                        {
+                          "name": "stack_id",
+                          "in": "path",
+                          "option": "--path-stack-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        }
+                      ],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "dataset",
+                                "node_id"
+                              ],
+                              "properties": {
+                                "dataset": {
+                                  "type": "string"
+                                },
+                                "node_id": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "deleteBackupTarget",
+                        "inputs": {
+                          "path/stack_id": "option:--path-stack-id",
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "deleteSnapshot",
+              "description": "Delete a snapshot",
+              "options": [
+                {
+                  "name": "--path-stack-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--path-name",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "name",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "DELETE",
+                      "path": "/storage/datasets/{stack_id}/snapshots/{name}",
+                      "parameters": [
+                        {
+                          "name": "stack_id",
+                          "in": "path",
+                          "option": "--path-stack-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "name",
+                          "in": "path",
+                          "option": "--path-name",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "deleteSnapshot",
+                        "inputs": {
+                          "path/stack_id": "option:--path-stack-id",
+                          "path/name": "option:--path-name"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getBackupConfig",
+              "description": "Read the latest locally cached stack configuration for recovery",
+              "options": [
+                {
+                  "name": "--query-stack-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/storage/backups/config",
+                      "parameters": [
+                        {
+                          "name": "stack_id",
+                          "in": "query",
+                          "option": "--query-stack-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        }
+                      ],
+                      "accept": "application/yaml"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getBackupConfig",
+                        "inputs": {
+                          "query/stack_id": "option:--query-stack-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getPool",
+              "description": "Get a specific pool on a specific node",
+              "options": [
+                {
+                  "name": "--path-node-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "node_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--path-pool",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "pool",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/storage/pools/{node_id}/{pool}",
+                      "parameters": [
+                        {
+                          "name": "node_id",
+                          "in": "path",
+                          "option": "--path-node-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "pool",
+                          "in": "path",
+                          "option": "--path-pool",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "description": "ZFS pool name."
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getPool",
+                        "inputs": {
+                          "path/node_id": "option:--path-node-id",
+                          "path/pool": "option:--path-pool"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getStackDataset",
+              "description": "Get dataset details for a stack",
+              "options": [
+                {
+                  "name": "--path-stack-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/storage/datasets/{stack_id}",
+                      "parameters": [
+                        {
+                          "name": "stack_id",
+                          "in": "path",
+                          "option": "--path-stack-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getStackDataset",
+                        "inputs": {
+                          "path/stack_id": "option:--path-stack-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listBackupSnapshots",
+              "description": "List received snapshots without contacting the original source",
+              "options": [
+                {
+                  "name": "--query-node-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "node_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-source-node-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "source_node_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-dataset",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "dataset",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/storage/backups",
+                      "parameters": [
+                        {
+                          "name": "node_id",
+                          "in": "query",
+                          "option": "--query-node-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "name": "source_node_id",
+                          "in": "query",
+                          "option": "--query-source-node-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "name": "dataset",
+                          "in": "query",
+                          "option": "--query-dataset",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "listBackupSnapshots",
+                        "inputs": {
+                          "query/node_id": "option:--query-node-id",
+                          "query/source_node_id": "option:--query-source-node-id",
+                          "query/dataset": "option:--query-dataset"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listBackupTargets",
+              "description": "List backup targets and pending source cleanup",
+              "options": [
+                {
+                  "name": "--path-stack-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/storage/replication/{stack_id}/targets",
+                      "parameters": [
+                        {
+                          "name": "stack_id",
+                          "in": "path",
+                          "option": "--path-stack-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "listBackupTargets",
+                        "inputs": {
+                          "path/stack_id": "option:--path-stack-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listDatasets",
+              "description": "List all FloatLab-managed datasets",
+              "options": [
+                {
+                  "name": "--query-node-id",
+                  "arguments": [
+                    {
+                      "name": "node_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-stack-id",
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/storage/datasets",
+                      "parameters": [
+                        {
+                          "name": "node_id",
+                          "in": "query",
+                          "option": "--query-node-id",
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "stack_id",
+                          "in": "query",
+                          "option": "--query-stack-id",
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "listDatasets",
+                        "inputs": {
+                          "query/node_id": "option:--query-node-id",
+                          "query/stack_id": "option:--query-stack-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listFaults",
+              "description": "Get active ZFS fault conditions across all nodes",
+              "options": [
+                {
+                  "name": "--query-node-id",
+                  "arguments": [
+                    {
+                      "name": "node_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-include-cleared",
+                  "arguments": [
+                    {
+                      "name": "include_cleared",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/storage/faults",
+                      "parameters": [
+                        {
+                          "name": "node_id",
+                          "in": "query",
+                          "option": "--query-node-id",
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "include_cleared",
+                          "in": "query",
+                          "option": "--query-include-cleared",
+                          "schema": {
+                            "type": "boolean",
+                            "default": false
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "listFaults",
+                        "inputs": {
+                          "query/node_id": "option:--query-node-id",
+                          "query/include_cleared": "option:--query-include-cleared"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listPools",
+              "description": "List all ZFS pools across all nodes",
+              "options": [
+                {
+                  "name": "--query-node-id",
+                  "arguments": [
+                    {
+                      "name": "node_id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/storage/pools",
+                      "parameters": [
+                        {
+                          "name": "node_id",
+                          "in": "query",
+                          "option": "--query-node-id",
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "listPools",
+                        "inputs": {
+                          "query/node_id": "option:--query-node-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listReplicationJobs",
+              "description": "List replication jobs",
+              "options": [
+                {
+                  "name": "--query-stack-id",
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-state",
+                  "arguments": [
+                    {
+                      "name": "state",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-limit",
+                  "arguments": [
+                    {
+                      "name": "limit",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/storage/replication",
+                      "parameters": [
+                        {
+                          "name": "stack_id",
+                          "in": "query",
+                          "option": "--query-stack-id",
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "state",
+                          "in": "query",
+                          "option": "--query-state",
+                          "schema": {
+                            "type": "string",
+                            "enum": [
+                              "idle",
+                              "running",
+                              "complete",
+                              "failed"
+                            ]
+                          }
+                        },
+                        {
+                          "name": "limit",
+                          "in": "query",
+                          "option": "--query-limit",
+                          "schema": {
+                            "type": "integer",
+                            "default": 20,
+                            "maximum": 200
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "listReplicationJobs",
+                        "inputs": {
+                          "query/stack_id": "option:--query-stack-id",
+                          "query/state": "option:--query-state",
+                          "query/limit": "option:--query-limit"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listSnapshots",
+              "description": "List snapshots for a stack's dataset",
+              "options": [
+                {
+                  "name": "--path-stack-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-kind",
+                  "arguments": [
+                    {
+                      "name": "kind",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-limit",
+                  "arguments": [
+                    {
+                      "name": "limit",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/storage/datasets/{stack_id}/snapshots",
+                      "parameters": [
+                        {
+                          "name": "stack_id",
+                          "in": "path",
+                          "option": "--path-stack-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "kind",
+                          "in": "query",
+                          "option": "--query-kind",
+                          "schema": {
+                            "type": "string",
+                            "enum": [
+                              "user",
+                              "scheduled",
+                              "replication"
+                            ]
+                          }
+                        },
+                        {
+                          "name": "limit",
+                          "in": "query",
+                          "option": "--query-limit",
+                          "schema": {
+                            "type": "integer",
+                            "default": 50,
+                            "maximum": 500
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "listSnapshots",
+                        "inputs": {
+                          "path/stack_id": "option:--path-stack-id",
+                          "query/kind": "option:--query-kind",
+                          "query/limit": "option:--query-limit"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "putBackupTarget",
+              "description": "Configure a backup destination for a managed workload mount",
+              "options": [
+                {
+                  "name": "--path-stack-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "PUT",
+                      "path": "/storage/replication/{stack_id}/targets",
+                      "parameters": [
+                        {
+                          "name": "stack_id",
+                          "in": "path",
+                          "option": "--path-stack-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        }
+                      ],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "dataset",
+                                "node_id",
+                                "schedule"
+                              ],
+                              "properties": {
+                                "dataset": {
+                                  "type": "string"
+                                },
+                                "node_id": {
+                                  "type": "string"
+                                },
+                                "schedule": {
+                                  "type": "string",
+                                  "example": "h/24 d/28"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "putBackupTarget",
+                        "inputs": {
+                          "path/stack_id": "option:--path-stack-id",
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "restoreBackup",
+              "description": "Restore received backups into a new stack and start it",
+              "options": [
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/storage/backups/restore",
+                      "parameters": [],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "name",
+                                "source_node_id",
+                                "backup_node_id",
+                                "destination_node_id",
+                                "compose_file",
+                                "snapshots"
+                              ],
+                              "properties": {
+                                "name": {
+                                  "type": "string",
+                                  "description": "New stack name; existing datasets are never replaced."
+                                },
+                                "source_node_id": {
+                                  "type": "string",
+                                  "description": "Original source identity recorded in the backup namespace."
+                                },
+                                "backup_node_id": {
+                                  "type": "string"
+                                },
+                                "destination_node_id": {
+                                  "type": "string"
+                                },
+                                "compose_file": {
+                                  "type": "string",
+                                  "description": "Original Compose configuration with its original name; cached configuration may be edited before restoring."
+                                },
+                                "snapshots": {
+                                  "type": "array",
+                                  "minItems": 1,
+                                  "items": {
+                                    "type": "object",
+                                    "required": [
+                                      "dataset",
+                                      "snapshot"
+                                    ],
+                                    "properties": {
+                                      "dataset": {
+                                        "type": "string",
+                                        "description": "Original managed workload dataset."
+                                      },
+                                      "snapshot": {
+                                        "type": "string"
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "restoreBackup",
+                        "inputs": {
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "restoreSnapshot",
+              "description": "Roll back a dataset to this snapshot",
+              "options": [
+                {
+                  "name": "--path-stack-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--path-name",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "name",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/storage/datasets/{stack_id}/snapshots/{name}/restore",
+                      "parameters": [
+                        {
+                          "name": "stack_id",
+                          "in": "path",
+                          "option": "--path-stack-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "name",
+                          "in": "path",
+                          "option": "--path-name",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        }
+                      ],
+                      "requestBody": {
+                        "required": false,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "properties": {
+                                "destroy_newer": {
+                                  "type": "boolean",
+                                  "default": true,
+                                  "description": "If true, snapshots newer than this one are destroyed.\nIf false, the request is rejected when newer snapshots exist.\n"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "api": [
+                      {
+                        "operationId": "restoreSnapshot",
+                        "inputs": {
+                          "path/stack_id": "option:--path-stack-id",
+                          "path/name": "option:--path-name",
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "triggerReplication",
+              "description": "Trigger an ad-hoc replication run for a stack",
+              "options": [
+                {
+                  "name": "--path-stack-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-dest-node-id",
+                  "arguments": [
+                    {
+                      "name": "dest_node_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-dataset",
+                  "arguments": [
+                    {
+                      "name": "dataset",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/storage/replication/{stack_id}/trigger",
+                      "parameters": [
+                        {
+                          "name": "stack_id",
+                          "in": "path",
+                          "option": "--path-stack-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "dest_node_id",
+                          "in": "query",
+                          "option": "--query-dest-node-id",
+                          "schema": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "name": "dataset",
+                          "in": "query",
+                          "option": "--query-dataset",
+                          "schema": {
+                            "type": "string"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "triggerReplication",
+                        "inputs": {
+                          "path/stack_id": "option:--path-stack-id",
+                          "query/dest_node_id": "option:--query-dest-node-id",
+                          "query/dataset": "option:--query-dataset"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
   ]
 }

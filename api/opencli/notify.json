@@ -1,0 +1,555 @@
+{
+  "commands": [
+    {
+      "name": "api",
+      "description": "Call the HTTP API directly",
+      "commands": [
+        {
+          "name": "notify",
+          "commands": [
+            {
+              "name": "createNotification",
+              "description": "Create a notification (internal use — normally created by the alert engine)",
+              "options": [
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/notifications",
+                      "parameters": [],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "severity",
+                                "title",
+                                "body"
+                              ],
+                              "properties": {
+                                "alert_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "nullable": true
+                                },
+                                "kind": {
+                                  "type": "string"
+                                },
+                                "severity": {
+                                  "type": "string",
+                                  "enum": [
+                                    "info",
+                                    "warning",
+                                    "critical"
+                                  ]
+                                },
+                                "title": {
+                                  "type": "string"
+                                },
+                                "body": {
+                                  "type": "string"
+                                },
+                                "stack_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "nullable": true
+                                },
+                                "node_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "nullable": true
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "createNotification",
+                        "inputs": {
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "deleteNotification",
+              "description": "Delete a notification",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "DELETE",
+                      "path": "/notifications/{id}",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "deleteNotification",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getNotification",
+              "description": "Get a notification by ID",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/notifications/{id}",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getNotification",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listNotifications",
+              "description": "List notifications",
+              "options": [
+                {
+                  "name": "--query-state",
+                  "arguments": [
+                    {
+                      "name": "state",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-severity",
+                  "arguments": [
+                    {
+                      "name": "severity",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-stack-id",
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-since",
+                  "arguments": [
+                    {
+                      "name": "since",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-limit",
+                  "arguments": [
+                    {
+                      "name": "limit",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/notifications",
+                      "parameters": [
+                        {
+                          "name": "state",
+                          "in": "query",
+                          "option": "--query-state",
+                          "schema": {
+                            "type": "string",
+                            "enum": [
+                              "unread",
+                              "read",
+                              "silenced",
+                              "resolved"
+                            ]
+                          }
+                        },
+                        {
+                          "name": "severity",
+                          "in": "query",
+                          "option": "--query-severity",
+                          "schema": {
+                            "type": "string",
+                            "enum": [
+                              "info",
+                              "warning",
+                              "critical"
+                            ]
+                          }
+                        },
+                        {
+                          "name": "stack_id",
+                          "in": "query",
+                          "option": "--query-stack-id",
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "since",
+                          "in": "query",
+                          "option": "--query-since",
+                          "schema": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        },
+                        {
+                          "name": "limit",
+                          "in": "query",
+                          "option": "--query-limit",
+                          "schema": {
+                            "type": "integer",
+                            "default": 50,
+                            "maximum": 500
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "listNotifications",
+                        "inputs": {
+                          "query/state": "option:--query-state",
+                          "query/severity": "option:--query-severity",
+                          "query/stack_id": "option:--query-stack-id",
+                          "query/since": "option:--query-since",
+                          "query/limit": "option:--query-limit"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "markNotificationRead",
+              "description": "Mark a notification as read",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/notifications/{id}/read",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "markNotificationRead",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "resolveNotification",
+              "description": "Mark a notification as resolved",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/notifications/{id}/resolve",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "resolveNotification",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "silenceNotification",
+              "description": "Silence a notification until a given time",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/notifications/{id}/silence",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "until"
+                              ],
+                              "properties": {
+                                "until": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "description": "Silence the notification until this time. Must be in the future."
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "silenceNotification",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

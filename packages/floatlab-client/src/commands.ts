@@ -82,7 +82,7 @@ export function parseCommand(words: string[], interactive = false, root = comman
       if (option.name === "--help") return { name: "help", positionals: path, flags: {}, path: ["help"], command };
       if (option.arguments?.length) {
         const value = equal < 0 ? words[++index] : word.slice(equal + 1);
-        if (!value || value.startsWith("--")) throw new CommandError(`${key} needs a value`);
+        if (value === undefined || (equal < 0 && value.startsWith("--"))) throw new CommandError(`${key} needs a value`);
         validateValue(option.arguments[0]!, value);
         flags[option.name.slice(2)] = value;
       } else {

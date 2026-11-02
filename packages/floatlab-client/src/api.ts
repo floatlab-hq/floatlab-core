@@ -2,6 +2,7 @@ import type { Container, ExecResult, FloatLabApi, HostNetworkApi, HostNetworkSta
 import type { DashboardApi, TokenResponse, RaftHealth, Notification, NodeStats, StorageStats } from "./types";
 import type { LabApi, BackupApi, BackupRestoreApi } from "./types";
 import type { AlertsApi } from "./types";
+import type { HttpApi, HttpRequest } from "./types";
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) { super(message); }
@@ -18,22 +19,43 @@ export function normalizeApiUrl(url: string): string {
   return parsed.toString().replace(/\/$/, "");
 }
 
-export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNetworkApi & DashboardApi & UpdateApi & LabApi & BackupApi & BackupRestoreApi & AlertsApi {
+export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNetworkApi & DashboardApi & UpdateApi & LabApi & BackupApi & BackupRestoreApi & AlertsApi & HttpApi {
   const baseUrl = normalizeApiUrl(options.baseUrl);
-  const send = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
+  const send = async <T>(path: string, init: HttpRequest = {}, negotiated = false): Promise<T> => {
     const headers = new Headers(init.headers);
-    headers.set("accept", "application/json");
-    if (options.token) headers.set("authorization", `Bearer ${options.token}`);
+    if (!headers.has("accept")) headers.set("accept", "application/json");
+    if (options.token && !headers.has("authorization")) headers.set("authorization", `Bearer ${options.token}`);
     if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
     let response: Response;
-    try { response = await (options.fetch ?? fetch)(`${baseUrl}${path}`, { ...init, headers, signal: options.signal }); }
+    const { onChunk, ...request } = init;
+    try { response = await (options.fetch ?? fetch)(`${baseUrl}${path}`, { ...request, headers, signal: init.signal ?? options.signal }); }
     catch (error) { throw new ApiError(error instanceof Error ? error.message : "Network request failed", 0); }
     if (!response.ok) {
-      const body = await response.json().catch(() => ({})) as { message?: string; error?: string; code?: string };
-      throw new ApiError(body.message ?? body.error ?? `${response.status} ${response.statusText}`, response.status, body.code);
+      const raw = await response.text();
+      let body: { message?: string; error?: string; code?: string } = {};
+      try { body = JSON.parse(raw) ?? {}; } catch { /* Plain-text errors are preserved below. */ }
+      throw new ApiError(body.message ?? body.error ?? (raw || `${response.status} ${response.statusText}`), response.status, body.code);
     }
     if (response.status === 204) return undefined as T;
+    const contentType = response.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
+    if (contentType === "text/event-stream" && response.body && onChunk) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      try {
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          const value = decoder.decode(chunk.value, {stream: true});
+          if (value) await onChunk(value);
+        }
+        const remaining = decoder.decode();
+        if (remaining) await onChunk(remaining);
+      } finally { reader.releaseLock(); }
+      return undefined as T;
+    }
+    if (contentType === "application/octet-stream" || contentType === "application/x-tar") return new Uint8Array(await response.arrayBuffer()) as T;
     const body = await response.text(); if (!body) return undefined as T;
+    if (negotiated && contentType && contentType !== "application/json" && !contentType.endsWith("+json")) return body as T;
     try { return JSON.parse(body) as T; } catch { throw new ApiError("Invalid JSON response from FloatLab", response.status); }
   };
   const mutation = <T>(path: string, method: string, key: string, body?: unknown) => send<T>(path, {
@@ -48,6 +70,7 @@ export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNe
   const changePath = (node: string, change: string) => `${hostNetworkPath(node)}/changes/${encodeURIComponent(change)}`;
   const updatePath = (node: string, component: string) => `/nodes/${encodeURIComponent(node)}/updates/${component}`;
   return {
+    request: (path, init) => send(path, init, true),
     listAlerts: state => send(`/alerts${query({state})}`),
     getAlert: id => send(`/alerts/${encodeURIComponent(id)}`),
     silenceAlert: (id, until, key) => mutation(`/alerts/${encodeURIComponent(id)}/silence`, "POST", key, {until}),

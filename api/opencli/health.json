@@ -1,0 +1,87 @@
+{
+  "commands": [
+    {
+      "name": "api",
+      "description": "Call the HTTP API directly",
+      "commands": [
+        {
+          "name": "health",
+          "commands": [
+            {
+              "name": "getHealth",
+              "description": "Basic liveness check",
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/health",
+                      "parameters": [],
+                      "public": true,
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getHealth",
+                        "inputs": {}
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getRaftHealth",
+              "description": "Raft consensus state",
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/health/raft",
+                      "parameters": [],
+                      "public": true,
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getRaftHealth",
+                        "inputs": {}
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getReadiness",
+              "description": "Readiness check — all critical dependencies",
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/health/ready",
+                      "parameters": [],
+                      "public": true,
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getReadiness",
+                        "inputs": {}
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

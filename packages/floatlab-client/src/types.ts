@@ -35,6 +35,7 @@ export type StackMetricSeries = components["schemas"]["StackMetricSeries"];
 export type ExecResult = { stdout: string; stderr: string; exit_code: number };
 
 export type CommandResult =
+  | { kind: "binary"; data: Uint8Array; contentType: string }
   | ({ kind: "exec" } & ExecResult)
   | { kind: "text"; text: string }
   | { kind: "table"; columns: string[]; rows: string[][] }
@@ -44,7 +45,12 @@ export type CommandResult =
 
 export type Completion = { value: string; description?: string; appendSpace?: boolean; replaceStart?: number; replaceEnd?: number; kind?: "file" | "directory" };
 
+export type HttpRequest = RequestInit & { onChunk?(text: string): Promise<void> };
+export interface HttpApi { request(path: string, init?: HttpRequest): Promise<unknown>; }
+
 export interface CommandRuntime {
+  readBody?(path: string): Promise<Uint8Array>;
+  writeChunk?(chunk: string): Promise<void>;
   interactive: boolean;
   cli?: boolean;
   completeFiles?(prefix: string): Promise<Completion[]>;

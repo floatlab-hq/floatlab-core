@@ -92,6 +92,571 @@
           }
         }
       ]
+    },
+    {
+      "name": "api",
+      "description": "Call the HTTP API directly",
+      "commands": [
+        {
+          "name": "logs",
+          "commands": [
+            {
+              "name": "getAuditLog",
+              "description": "Get the audit log",
+              "options": [
+                {
+                  "name": "--query-actor",
+                  "arguments": [
+                    {
+                      "name": "actor",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-action",
+                  "arguments": [
+                    {
+                      "name": "action",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-resource-id",
+                  "arguments": [
+                    {
+                      "name": "resource_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-since",
+                  "arguments": [
+                    {
+                      "name": "since",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-limit",
+                  "arguments": [
+                    {
+                      "name": "limit",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/logs/audit",
+                      "parameters": [
+                        {
+                          "name": "actor",
+                          "in": "query",
+                          "option": "--query-actor",
+                          "schema": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "name": "action",
+                          "in": "query",
+                          "option": "--query-action",
+                          "schema": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "name": "resource_id",
+                          "in": "query",
+                          "option": "--query-resource-id",
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "since",
+                          "in": "query",
+                          "option": "--query-since",
+                          "schema": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        },
+                        {
+                          "name": "limit",
+                          "in": "query",
+                          "option": "--query-limit",
+                          "schema": {
+                            "type": "integer",
+                            "default": 100,
+                            "maximum": 1000
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getAuditLog",
+                        "inputs": {
+                          "query/actor": "option:--query-actor",
+                          "query/action": "option:--query-action",
+                          "query/resource_id": "option:--query-resource-id",
+                          "query/since": "option:--query-since",
+                          "query/limit": "option:--query-limit"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getContainerLogs",
+              "description": "Get or stream logs for a single container",
+              "options": [
+                {
+                  "name": "--path-container-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "container_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-follow",
+                  "arguments": [
+                    {
+                      "name": "follow",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-tail",
+                  "arguments": [
+                    {
+                      "name": "tail",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-since",
+                  "arguments": [
+                    {
+                      "name": "since",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--accept",
+                  "arguments": [
+                    {
+                      "name": "accept",
+                      "required": true,
+                      "acceptedValues": [
+                        "application/json",
+                        "text/event-stream"
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/logs/containers/{container_id}",
+                      "parameters": [
+                        {
+                          "name": "container_id",
+                          "in": "path",
+                          "option": "--path-container-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "description": "Docker container ID or name."
+                          }
+                        },
+                        {
+                          "name": "follow",
+                          "in": "query",
+                          "option": "--query-follow",
+                          "schema": {
+                            "type": "boolean",
+                            "default": false
+                          }
+                        },
+                        {
+                          "name": "tail",
+                          "in": "query",
+                          "option": "--query-tail",
+                          "schema": {
+                            "type": "integer",
+                            "default": 50,
+                            "maximum": 1000
+                          }
+                        },
+                        {
+                          "name": "since",
+                          "in": "query",
+                          "option": "--query-since",
+                          "schema": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getContainerLogs",
+                        "inputs": {
+                          "path/container_id": "option:--path-container-id",
+                          "query/follow": "option:--query-follow",
+                          "query/tail": "option:--query-tail",
+                          "query/since": "option:--query-since"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getNodeLogs",
+              "description": "Get recent system logs from a node (journald / hostd daemon logs)",
+              "options": [
+                {
+                  "name": "--path-node-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "node_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-tail",
+                  "arguments": [
+                    {
+                      "name": "tail",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-since",
+                  "arguments": [
+                    {
+                      "name": "since",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-unit",
+                  "arguments": [
+                    {
+                      "name": "unit",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/logs/nodes/{node_id}",
+                      "parameters": [
+                        {
+                          "name": "node_id",
+                          "in": "path",
+                          "option": "--path-node-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "tail",
+                          "in": "query",
+                          "option": "--query-tail",
+                          "schema": {
+                            "type": "integer",
+                            "default": 200,
+                            "maximum": 5000
+                          }
+                        },
+                        {
+                          "name": "since",
+                          "in": "query",
+                          "option": "--query-since",
+                          "schema": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        },
+                        {
+                          "name": "unit",
+                          "in": "query",
+                          "option": "--query-unit",
+                          "schema": {
+                            "type": "string"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getNodeLogs",
+                        "inputs": {
+                          "path/node_id": "option:--path-node-id",
+                          "query/tail": "option:--query-tail",
+                          "query/since": "option:--query-since",
+                          "query/unit": "option:--query-unit"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getStackLogs",
+              "description": "Get recent logs for all containers in a stack",
+              "options": [
+                {
+                  "name": "--path-stack-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-tail",
+                  "arguments": [
+                    {
+                      "name": "tail",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-since",
+                  "arguments": [
+                    {
+                      "name": "since",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-service",
+                  "arguments": [
+                    {
+                      "name": "service",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/logs/stacks/{stack_id}",
+                      "parameters": [
+                        {
+                          "name": "stack_id",
+                          "in": "path",
+                          "option": "--path-stack-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "tail",
+                          "in": "query",
+                          "option": "--query-tail",
+                          "schema": {
+                            "type": "integer",
+                            "default": 200,
+                            "maximum": 5000
+                          }
+                        },
+                        {
+                          "name": "since",
+                          "in": "query",
+                          "option": "--query-since",
+                          "schema": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        },
+                        {
+                          "name": "service",
+                          "in": "query",
+                          "option": "--query-service",
+                          "schema": {
+                            "type": "string"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getStackLogs",
+                        "inputs": {
+                          "path/stack_id": "option:--path-stack-id",
+                          "query/tail": "option:--query-tail",
+                          "query/since": "option:--query-since",
+                          "query/service": "option:--query-service"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "searchLogs",
+              "description": "Search logs using LogsQL",
+              "options": [
+                {
+                  "name": "--query-query",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "query",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-start",
+                  "arguments": [
+                    {
+                      "name": "start",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-end",
+                  "arguments": [
+                    {
+                      "name": "end",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-limit",
+                  "arguments": [
+                    {
+                      "name": "limit",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/logs/search",
+                      "parameters": [
+                        {
+                          "name": "query",
+                          "in": "query",
+                          "option": "--query-query",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "example": "_stream:{stack_id=\"abc\"} level:error"
+                          }
+                        },
+                        {
+                          "name": "start",
+                          "in": "query",
+                          "option": "--query-start",
+                          "schema": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "name": "end",
+                          "in": "query",
+                          "option": "--query-end",
+                          "schema": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "name": "limit",
+                          "in": "query",
+                          "option": "--query-limit",
+                          "schema": {
+                            "type": "integer",
+                            "default": 500,
+                            "maximum": 5000
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "searchLogs",
+                        "inputs": {
+                          "query/query": "option:--query-query",
+                          "query/start": "option:--query-start",
+                          "query/end": "option:--query-end",
+                          "query/limit": "option:--query-limit"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
   ]
 }

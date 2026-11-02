@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import Ajv from "ajv/dist/2020";
 import { bundle, createConfig } from "@redocly/openapi-core";
 import { parse } from "yaml";
-import { metadata, names, type CommandDefinition, type OpenCLI } from "../src/command-schema";
+import { metadata, names, type CommandDefinition, type OpenCLI, type HttpOperation, type OptionDefinition } from "../src/command-schema";
 import { completionScript, shells, completionFilename } from "../../../cli/src/completion-scripts";
 
 const root = resolve(import.meta.dir, "../../..");
@@ -71,6 +71,13 @@ export async function assemble(directory = resolve(root, "api/opencli")): Promis
       provider: { enum: providers }, dependsOn: { type: "string" }, suggestions: { type: "array", items: { type: "string" } },
       appendSpace: { type: "boolean" }, prompt: { type: "boolean" }, defaultCommand: { type: "string" }, passthrough: { type: "boolean" },
       capability: { enum: ["cli", "files", "interactive"] }, utility: { type: "boolean" },
+      http: { type: "object", additionalProperties: false, required: ["method", "path", "parameters"], properties: {
+        method: { type: "string" }, path: { type: "string" }, public: { type: "boolean" }, accept: { type: "string" },
+        parameters: { type: "array", items: { type: "object", additionalProperties: false, required: ["name", "in", "option"], properties: {
+          name: { type: "string" }, in: { enum: ["path", "query", "header", "cookie"] }, option: { type: "string" }, required: { type: "boolean" }, schema: { type: "object" }, style: { type: "string" }, explode: { type: "boolean" },
+        } } },
+        requestBody: { type: "object", additionalProperties: false, properties: { required: { type: "boolean" }, content: { type: "object", additionalProperties: { type: "object", properties: { schema: { type: "object" } } } } } },
+      } },
       api: { type: "array", items: { type: "object", additionalProperties: false, required: ["operationId", "inputs"], properties: {
         operationId: { type: "string", minLength: 1 }, exclusion: { type: "string", minLength: 1 }, inputs: { type: "object", additionalProperties: { type: "string", pattern: "^(argument|option|json|editor|derived|runtime):.+" } },
       } } },
@@ -95,7 +102,7 @@ export async function assemble(directory = resolve(root, "api/opencli")): Promis
   return document;
 }
 
-export type CoverageOperation = { module: string; operationId: string; method: string; path: string; inputs: string[]; unsupported: string[] };
+export type CoverageOperation = { module: string; operationId: string; method: string; path: string; inputs: string[]; unsupported: string[]; summary?: string; http?: HttpOperation; responseMedia?: string[] };
 export function schemaInputs(schema: any, prefix: string, unsupported: string[], seen = new Set<any>()): string[] {
   if (!schema || schema.readOnly) return [];
   if (seen.has(schema)) { unsupported.push(`${prefix}: recursive schema`); return [prefix]; }
@@ -128,11 +135,87 @@ export async function apiOperations(): Promise<CoverageOperation[]> {
       const inputs = [...parameters.keys()];
       for (const media of Object.values(operation.requestBody?.content ?? {}) as any[]) inputs.push(...schemaInputs(media.schema, "body", unsupported));
       if (!operation.operationId) throw new Error(`Missing operationId: ${method} ${path}`);
-      operations.push({ module: basename(origin), operationId: operation.operationId, method: method.toUpperCase(), path, inputs: [...new Set(inputs)].sort(), unsupported });
+      const responseMedia = [...new Set<string>(Object.entries(operation.responses ?? {}).filter(([status]) => /^2/.test(status)).flatMap(([, response]: any) => Object.keys(response.content ?? {})))];
+      const http: HttpOperation = {
+        method: method.toUpperCase(), path,
+        parameters: [...parameters.values()].map(parameter => ({
+          name: parameter.name, in: parameter.in, option: parameterOption(parameter),
+          ...(parameter.required !== undefined ? { required: parameter.required } : {}),
+          ...(parameter.schema ? { schema: parameter.schema } : {}),
+          ...(parameter.style ? { style: parameter.style } : {}),
+          ...(parameter.explode !== undefined ? { explode: parameter.explode } : {}),
+        })),
+        ...(operation.requestBody ? { requestBody: { required: operation.requestBody.required ?? false, content: Object.fromEntries(Object.entries(operation.requestBody.content).map(([type, media]: any) => [type, { ...(media.schema ? { schema: media.schema } : {}) }])) } } : {}),
+        ...((operation.security ?? result.bundle.parsed.security)?.length === 0 ? { public: true } : {}),
+        ...(responseMedia.length ? { accept: responseMedia[0] } : {}),
+      };
+      operations.push({ module: basename(origin), operationId: operation.operationId, method: method.toUpperCase(), path, inputs: [...new Set(inputs)].sort(), unsupported, summary: operation.summary, http, responseMedia });
     }
   }
   if (new Set(operations.map(op => op.operationId)).size !== operations.length) throw new Error("Duplicate OpenAPI operationId");
   return operations.sort((a, b) => a.module.localeCompare(b.module) || a.operationId.localeCompare(b.operationId));
+}
+
+const kebab = (name: string) => name.replace(/([a-z0-9])([A-Z])/g, "$1-$2").replace(/[^a-zA-Z0-9]+/g, "-").toLowerCase().replace(/^-|-$/g, "");
+const parameterOption = (parameter: { in: string; name: string }) => `--${parameter.in}-${kebab(parameter.name)}`;
+
+export function directCommand(operation: CoverageOperation): CommandDefinition {
+  if (!operation.http) throw new Error(`Missing HTTP metadata: ${operation.operationId}`);
+  const http = operation.http;
+  const inputs: Record<string, string> = {};
+  const options: OptionDefinition[] = http.parameters.map(parameter => {
+    inputs[`${parameter.in}/${parameter.name}`] = `option:${parameter.option}`;
+    const required = (parameter.in === "path" || parameter.required) && parameter.name.toLowerCase() !== "idempotency-key";
+    return { name: parameter.option, ...(required ? { required: true } : {}), arguments: [{ name: parameter.name, required: true }] };
+  });
+  if (http.requestBody) {
+    if (operation.inputs.some(input => input === "body" || input.startsWith("body/"))) inputs.body = "option:--body";
+    const binary = Object.values(http.requestBody.content).some(media => media.schema?.format === "binary");
+    options.push({ name: "--body", description: binary ? "Request body: JSON for JSON media, base64 for binary media, literal text otherwise; mutually exclusive with --body-file" : "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file", arguments: [{ name: "body", required: true }] });
+    options.push({ name: "--body-file", description: "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body", arguments: [{ name: "path", required: true, metadata: [{ name: "floatlab", value: { provider: "files" } }] }], metadata: [{ name: "floatlab", value: { capability: "files" } }] });
+    const media = Object.keys(http.requestBody.content);
+    if (media.length > 1) options.push({ name: "--content-type", arguments: [{ name: "content-type", required: true, acceptedValues: media }] });
+  }
+  if ((operation.responseMedia?.length ?? 0) > 1) options.push({ name: "--accept", arguments: [{ name: "accept", required: true, acceptedValues: operation.responseMedia }] });
+  return { name: operation.operationId, ...(operation.summary ? { description: operation.summary } : {}), ...(options.length ? { options } : {}), metadata: [{ name: "floatlab", value: { http, api: [{ operationId: operation.operationId, inputs }] } }] };
+}
+
+export function apiModuleCommands(operations: CoverageOperation[]): Map<string, CommandDefinition> {
+  const modules = new Map<string, CommandDefinition>();
+  for (const operation of operations) {
+    const module = operation.module.replace(/\.yaml$/, "");
+    let group = modules.get(module);
+    if (!group) { group = { name: "api", description: "Call the HTTP API directly", commands: [{ name: module, commands: [] }] }; modules.set(module, group); }
+    group.commands![0]!.commands!.push(directCommand(operation));
+  }
+  return modules;
+}
+
+export async function synchronizeModules(mode: string, operations: CoverageOperation[], directory = resolve(root, "api/opencli")) {
+  const manifest = await json(resolve(directory, "manifest.json"));
+  const modules = apiModuleCommands(operations);
+  for (const [name, command] of modules) {
+    const file = resolve(directory, `${name}.json`);
+    const fragment = await json(file).catch(() => ({ commands: [] }));
+    fragment.commands = [...fragment.commands.filter((item: CommandDefinition) => item.name !== "api"), command];
+    const content = encode(fragment);
+    if (mode === "generate") await writeFile(file, content);
+    else if (await readFile(file, "utf8").catch(() => "") !== content) throw new Error(`Stale API module: ${name}.json. Run pnpm commands:generate`);
+  }
+  const expectedModules = [...new Set<string>([...manifest.modules.filter((name: string) => name !== "cli.json"), ...[...modules.keys()].map(name => `${name}.json`)])].sort().concat("cli.json");
+  if (!isDeepStrictEqual(manifest.modules, expectedModules)) {
+    if (mode === "generate") { manifest.modules = expectedModules; await writeFile(resolve(directory, "manifest.json"), encode(manifest)); }
+    else throw new Error("Stale OpenCLI manifest modules. Run pnpm commands:generate");
+  }
+}
+
+export function assertComplete(document: OpenCLI, operations: CoverageOperation[]) {
+  const report = coverage(document, operations);
+  for (const operation of report) {
+    const direct = operation.mappings.filter(mapping => !mapping.exclusion && mapping.command === `api ${operation.module.replace(/\.yaml$/, "")} ${operation.operationId}`);
+    if (direct.length !== 1 || operation.inputs.some(input => !Object.entries(direct[0]!.inputs).some(([key, source]) => (input === key || input.startsWith(key + "/")) && /^(argument|option|json|editor):/.test(source)))) throw new Error(`Incomplete API command: ${operation.operationId}`);
+  }
+  return report;
 }
 
 export function coverage(document: OpenCLI, operations: CoverageOperation[]) {
@@ -161,8 +244,10 @@ export function coverage(document: OpenCLI, operations: CoverageOperation[]) {
 
 export async function run(mode: string) {
   if (!["generate", "check", "coverage"].includes(mode)) throw new Error("Use generate, check, or coverage");
+  const operations = await apiOperations();
+  await synchronizeModules(mode, operations);
   const document = await assemble();
-  const report = coverage(document, await apiOperations());
+  const report = assertComplete(document, operations);
   if (mode === "coverage") {
     const directory = resolve(root, "dist/command-coverage"); await mkdir(directory, { recursive: true });
     const lines = ["# OpenAPI → OpenCLI coverage", "", "Report only. Mappings declare coverage; handler tests verify behavior.", ""];

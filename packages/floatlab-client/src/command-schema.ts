@@ -1,8 +1,10 @@
 export type ApiMapping = { operationId: string; inputs: Record<string, string>; exclusion?: string };
+export type HttpParameter = { name: string; in: "path" | "query" | "header" | "cookie"; option: string; required?: boolean; schema?: Record<string, unknown>; style?: string; explode?: boolean };
+export type HttpOperation = { method: string; path: string; parameters: HttpParameter[]; requestBody?: { required?: boolean; content: Record<string, { schema?: Record<string, unknown> }> }; public?: boolean; accept?: string };
 export type CommandMetadata = {
   provider?: string; dependsOn?: string; suggestions?: string[]; appendSpace?: boolean;
   prompt?: boolean; defaultCommand?: string; passthrough?: boolean;
-  capability?: "cli" | "files" | "interactive"; utility?: boolean; api?: ApiMapping[];
+  capability?: "cli" | "files" | "interactive"; utility?: boolean; api?: ApiMapping[]; http?: HttpOperation;
 };
 export type ArgumentDefinition = {
   name: string; description?: string; required?: boolean; hidden?: boolean;

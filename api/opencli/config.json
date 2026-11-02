@@ -313,6 +313,951 @@
           }
         }
       ]
+    },
+    {
+      "name": "api",
+      "description": "Call the HTTP API directly",
+      "commands": [
+        {
+          "name": "config",
+          "commands": [
+            {
+              "name": "createAlertRule",
+              "description": "Create an alert rule",
+              "options": [
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/alert-rules",
+                      "parameters": [],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "name",
+                                "condition",
+                                "recovery_condition",
+                                "freshness_query",
+                                "severity"
+                              ],
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "condition": {
+                                  "type": "string",
+                                  "description": "Filtered MetricsQL predicate. Every returned series is a match, including a zero-valued\nsample. Use filtering comparisons, not the bool modifier. Empty results are unknown,\nnot recovery. Configure recovery_condition to resolve on positive healthy evidence.\nAggregate away volatile labels such as container_id for stable resource identity.\n",
+                                  "example": "cpu_usage_percent > 90"
+                                },
+                                "severity": {
+                                  "type": "string",
+                                  "enum": [
+                                    "info",
+                                    "warning",
+                                    "critical"
+                                  ]
+                                },
+                                "stack_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "nullable": true
+                                },
+                                "node_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "nullable": true
+                                },
+                                "for_duration": {
+                                  "type": "string",
+                                  "example": "5m"
+                                },
+                                "freshness_query": {
+                                  "type": "string",
+                                  "description": "MetricsQL query returning source observation Unix timestamps with the same resource labels. Required for enabled rules; derived queries must return the oldest required source timestamp."
+                                },
+                                "recovery_condition": {
+                                  "type": "string",
+                                  "description": "Filtered healthy predicate with the same resource labels as condition. Required for enabled rules; missing telemetry never resolves an incident.",
+                                  "example": "cpu_usage_percent < 85"
+                                },
+                                "recovery_duration": {
+                                  "type": "string",
+                                  "default": "1m",
+                                  "description": "Duration of fresh healthy evidence required to resolve; Go duration syntax, zero allowed."
+                                },
+                                "max_sample_age": {
+                                  "type": "string",
+                                  "default": "2m",
+                                  "description": "Maximum observation age and implicit MetricsQL lookback; positive Go duration."
+                                },
+                                "annotations": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string"
+                                  }
+                                },
+                                "enabled": {
+                                  "type": "boolean",
+                                  "default": true
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "createAlertRule",
+                        "inputs": {
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "createNetwork",
+              "description": "Create a logical network",
+              "options": [
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/networks",
+                      "parameters": [],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "name",
+                                "cidr"
+                              ],
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "cidr": {
+                                  "type": "string"
+                                },
+                                "stack_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "nullable": true
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "createNetwork",
+                        "inputs": {
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "deleteAlertRule",
+              "description": "Delete an alert rule",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "DELETE",
+                      "path": "/alert-rules/{id}",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "deleteAlertRule",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "deleteNetwork",
+              "description": "Delete a network",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "DELETE",
+                      "path": "/networks/{id}",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "deleteNetwork",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getAlert",
+              "description": "Get an alert by ID",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/alerts/{id}",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getAlert",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getAlertRule",
+              "description": "Get an alert rule by ID",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/alert-rules/{id}",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getAlertRule",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getNetwork",
+              "description": "Get a network by ID",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/networks/{id}",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getNetwork",
+                        "inputs": {
+                          "path/id": "option:--path-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listAlertRules",
+              "description": "List all alert rules",
+              "options": [
+                {
+                  "name": "--query-stack-id",
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-node-id",
+                  "arguments": [
+                    {
+                      "name": "node_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-enabled",
+                  "arguments": [
+                    {
+                      "name": "enabled",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/alert-rules",
+                      "parameters": [
+                        {
+                          "name": "stack_id",
+                          "in": "query",
+                          "option": "--query-stack-id",
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "node_id",
+                          "in": "query",
+                          "option": "--query-node-id",
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "enabled",
+                          "in": "query",
+                          "option": "--query-enabled",
+                          "schema": {
+                            "type": "boolean"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "listAlertRules",
+                        "inputs": {
+                          "query/stack_id": "option:--query-stack-id",
+                          "query/node_id": "option:--query-node-id",
+                          "query/enabled": "option:--query-enabled"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listAlerts",
+              "description": "List alerts",
+              "options": [
+                {
+                  "name": "--query-state",
+                  "arguments": [
+                    {
+                      "name": "state",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-severity",
+                  "arguments": [
+                    {
+                      "name": "severity",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-stack-id",
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-node-id",
+                  "arguments": [
+                    {
+                      "name": "node_id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/alerts",
+                      "parameters": [
+                        {
+                          "name": "state",
+                          "in": "query",
+                          "option": "--query-state",
+                          "schema": {
+                            "type": "string",
+                            "enum": [
+                              "active",
+                              "silenced",
+                              "resolved"
+                            ]
+                          }
+                        },
+                        {
+                          "name": "severity",
+                          "in": "query",
+                          "option": "--query-severity",
+                          "schema": {
+                            "type": "string",
+                            "enum": [
+                              "info",
+                              "warning",
+                              "critical"
+                            ]
+                          }
+                        },
+                        {
+                          "name": "stack_id",
+                          "in": "query",
+                          "option": "--query-stack-id",
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "node_id",
+                          "in": "query",
+                          "option": "--query-node-id",
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "listAlerts",
+                        "inputs": {
+                          "query/state": "option:--query-state",
+                          "query/severity": "option:--query-severity",
+                          "query/stack_id": "option:--query-stack-id",
+                          "query/node_id": "option:--query-node-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listNetworks",
+              "description": "List all logical networks",
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/networks",
+                      "parameters": [],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "listNetworks",
+                        "inputs": {}
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "silenceAlert",
+              "description": "Mute an active alert and its notifications until a given time",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/alerts/{id}/silence",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "until"
+                              ],
+                              "properties": {
+                                "until": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "silenceAlert",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "updateAlertRule",
+              "description": "Update an alert rule",
+              "options": [
+                {
+                  "name": "--path-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "PUT",
+                      "path": "/alert-rules/{id}",
+                      "parameters": [
+                        {
+                          "name": "id",
+                          "in": "path",
+                          "option": "--path-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "condition": {
+                                  "type": "string",
+                                  "description": "Filtered MetricsQL predicate. Every returned series is a match, including a zero-valued\nsample. Use filtering comparisons, not the bool modifier. Empty results are unknown,\nnot recovery. Configure recovery_condition to resolve on positive healthy evidence.\nAggregate away volatile labels such as container_id for stable resource identity.\n",
+                                  "example": "cpu_usage_percent > 90"
+                                },
+                                "severity": {
+                                  "type": "string",
+                                  "enum": [
+                                    "info",
+                                    "warning",
+                                    "critical"
+                                  ]
+                                },
+                                "for_duration": {
+                                  "type": "string"
+                                },
+                                "freshness_query": {
+                                  "type": "string",
+                                  "description": "MetricsQL query returning source observation Unix timestamps with the same resource labels. Required for enabled rules; derived queries must return the oldest required source timestamp."
+                                },
+                                "recovery_condition": {
+                                  "type": "string",
+                                  "description": "Filtered healthy predicate with the same resource labels as condition. Required for enabled rules; missing telemetry never resolves an incident.",
+                                  "example": "cpu_usage_percent < 85"
+                                },
+                                "recovery_duration": {
+                                  "type": "string",
+                                  "default": "1m",
+                                  "description": "Duration of fresh healthy evidence required to resolve; Go duration syntax, zero allowed."
+                                },
+                                "max_sample_age": {
+                                  "type": "string",
+                                  "default": "2m",
+                                  "description": "Maximum observation age and implicit MetricsQL lookback; positive Go duration."
+                                },
+                                "annotations": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string"
+                                  }
+                                },
+                                "enabled": {
+                                  "type": "boolean"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "updateAlertRule",
+                        "inputs": {
+                          "path/id": "option:--path-id",
+                          "body": "option:--body"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
   ]
 }

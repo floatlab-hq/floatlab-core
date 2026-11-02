@@ -35,7 +35,7 @@ test("CLI subprocesses create from a file and keep output pipeable", async () =>
     return new Response("unexpected request", { status: 404 });
   } });
   const run = async (args: string[]) => {
-    const child = Bun.spawn([process.execPath, join(import.meta.dir, "../src/main.ts"), ...args], { env: { ...process.env, FLOATLAB_URL: server.url.origin, FLOATLAB_TOKEN: "test-token", XDG_CONFIG_HOME: directory, EDITOR: "must-not-run" }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const child = Bun.spawn([...(process.env.FLOATLAB_TEST_BINARY ? [process.env.FLOATLAB_TEST_BINARY] : [process.execPath, join(import.meta.dir, "../src/main.ts")]), ...args], { env: { ...process.env, FLOATLAB_URL: server.url.origin, FLOATLAB_TOKEN: "test-token", XDG_CONFIG_HOME: directory, EDITOR: "must-not-run" }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     return { stdout, stderr, code };
   };

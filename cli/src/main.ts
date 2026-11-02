@@ -4,6 +4,7 @@ import { commandInput, credentials, terminalRuntime } from "./terminal";
 import { clearToken, connection, login, saveSession, valid, SecondFactorRequired } from "./session";
 
 import { runCompletion } from "./completion";
+import { installAutocomplete } from "./install-autocomplete";
 
 const version = typeof __FLOATLAB_VERSION__ === "string" ? __FLOATLAB_VERSION__ : "dev";
 declare const __FLOATLAB_VERSION__: string;
@@ -22,7 +23,7 @@ async function interactiveLogin(url: string) {
 
 async function acquire(interactive: boolean) {
   let current = await connection();
-  if ((!current?.url || !valid(current)) && !interactive) throw new Error("No valid FloatLab session. Set FLOATLAB_URL and FLOATLAB_TOKEN, or run floatlab in a terminal to log in.");
+  if ((!current?.url || !valid(current)) && !interactive) throw new Error("No valid FloatLab session. Set FLOATLAB_URL and FLOATLAB_TOKEN, or run lab in a terminal to log in.");
   if (!current?.url) {
     const { input } = await import("@inquirer/prompts"); const url = await input({ message: "FloatLab URL" }); current = { url, source: "config" }; await saveSession(current);
   }
@@ -32,8 +33,13 @@ async function acquire(interactive: boolean) {
   return current;
 }
 
-async function execute(input: string | string[], interactive: boolean): Promise<number> {
-  let current = await acquire(interactive); const runtime = terminalRuntime(interactive);
+async function execute(input: string[], interactive: boolean): Promise<number> {
+  const command = parseCommand(input).command;
+  const publicOperation = command.metadata?.find(entry => entry.name === "floatlab")?.value.http?.public;
+  const selected = publicOperation ? await connection() : await acquire(interactive);
+  if (!selected?.url) throw new Error("No FloatLab URL. Set FLOATLAB_URL or run lab in a terminal to configure it.");
+  let current = selected;
+  const runtime = terminalRuntime(interactive);
   const run = async () => new CommandEngine(createApiClient({ baseUrl: current.url, token: current.token, signal: runtime.signal }), runtime).dispatch(input);
   let result = await run();
   if (result.result.kind === "error" && result.result.status === 401 && current.source === "config" && interactive) {
@@ -63,9 +69,10 @@ async function main(): Promise<number> {
     const parsed = parseCommand(args);
     if (parsed.name === "help") { console.log(commandHelp(parsed.positionals)); return 0; }
     if (parsed.name === "completion") { process.stdout.write(await runCompletion(args)); return 0; }
+    if (parsed.name === "install-autocomplete") { console.log(await installAutocomplete(parsed.positionals[0])); return 0; }
     return execute(args, false);
   }
-  if (!process.stdin.isTTY) throw new Error("No command supplied; use `floatlab --help`.");
+  if (!process.stdin.isTTY) throw new Error("No command supplied; use `lab --help`.");
   return interactive();
 }
 

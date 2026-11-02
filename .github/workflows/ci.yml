@@ -71,6 +71,18 @@ jobs:
       - name: Typecheck and test TypeScript workspace
         run: pnpm --filter @floatlab/client typecheck && pnpm --filter floatlab-cli typecheck && pnpm --recursive test
 
+      - name: Build and test standalone lab binary
+        run: |
+          pnpm build:cli
+          test "$(dist/lab --version)" = dev
+          dist/lab --help
+          FLOATLAB_TEST_BINARY="$PWD/dist/lab" bun test cli/test/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lab-linux-x64
+          path: dist/lab
+
       - name: Check UI
         run: pnpm --dir ui lint && pnpm --dir ui typecheck && pnpm --dir ui storybook:build
 

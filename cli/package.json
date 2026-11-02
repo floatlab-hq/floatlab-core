@@ -3,11 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": "./src/main.ts",
+  "bin": {
+    "lab": "./src/main.ts"
+  },
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "build": "bun build --compile src/main.ts --outfile ../../dist/floatlab"
+    "build": "bun build --compile src/main.ts --outfile ../dist/lab"
   },
   "dependencies": {
     "@floatlab/client": "workspace:*",

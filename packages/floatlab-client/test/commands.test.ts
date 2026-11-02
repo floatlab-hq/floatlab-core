@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { assemble, coverage, mergeCommands, schemaInputs, validateCommands, type CoverageOperation } from "../scripts/commands";
+import { apiOperations, assertComplete, assemble, coverage, directCommand, mergeCommands, schemaInputs, synchronizeModules, validateCommands, type CoverageOperation } from "../scripts/commands";
+import { metadata } from "../src/command-schema";
 import { applyCompletion, commandSpec, parseCommand, tokenize } from "../src/commands";
 import { CommandEngine, type CommandRuntime, type FloatLabApi } from "../src";
 
@@ -18,6 +19,44 @@ test("modules assemble deterministically and shared groups reject conflicts", as
   expect(() => mergeCommands(target, [{ name: "backup", commands: [{ name: "list" }] }])).toThrow("Duplicate executable");
   expect(() => validateCommands({ name: "root", commands: [{ name: "list", aliases: ["ls"] }, { name: "ls" }] })).toThrow("collision");
   expect(() => validateCommands({ name: "root", arguments: [{ name: "node", metadata: [{ name: "floatlab", value: { provider: "typo" } }] }] })).toThrow("Unknown provider");
+});
+
+test("every management OpenAPI module and input has a current direct command", async () => {
+  const operations = await apiOperations();
+  await synchronizeModules("check", operations);
+  const document = await assemble();
+  const report = assertComplete(document, operations);
+  expect(report.length).toBeGreaterThan(100);
+  for (const operation of operations) {
+    const group = document.command.commands!.find(command => command.name === "api")!.commands!.find(command => command.name === operation.module.replace(/\.yaml$/, ""));
+    const command = group!.commands!.find(command => command.name === operation.operationId)!;
+    expect(metadata(command).http).toEqual(operation.http);
+    const mapping = metadata(command).api![0]!;
+    expect(operation.inputs.every(input => Object.keys(mapping.inputs).some(key => input === key || input.startsWith(key + "/")))).toBe(true);
+    expect(operation.http!.parameters.every(parameter => command.options!.some(option => option.name === parameter.option && option.arguments?.[0]?.required))).toBe(true);
+  }
+  const broken = structuredClone(document);
+  broken.command.commands!.find(command => command.name === "api")!.commands![0]!.commands!.pop();
+  expect(() => assertComplete(broken, operations)).toThrow("Incomplete API command");
+});
+
+test("direct command options retain parameter locations, casing and body media", () => {
+  const command = directCommand({ module: "test.yaml", operationId: "example", method: "POST", path: "/example/{nodeId}", inputs: ["path/nodeId", "query/enabled", "header/Idempotency-Key", "body/nested/field"], unsupported: [], responseMedia: ["application/json", "text/plain"], http: {
+    method: "POST", path: "/example/{nodeId}", parameters: [
+      { in: "path", name: "nodeId", option: "--path-node-id", required: true, schema: { type: "string" } },
+      { in: "query", name: "enabled", option: "--query-enabled", schema: { type: "boolean" } },
+      { in: "header", name: "Idempotency-Key", option: "--header-idempotency-key", required: true, schema: { type: "string" } },
+    ], requestBody: { required: true, content: { "application/json": { schema: { type: "object" } }, "text/plain": { schema: { type: "string" } } } },
+  } });
+  expect(command.options!.find(option => option.name === "--path-node-id")!.required).toBe(true);
+  expect(command.options!.find(option => option.name === "--query-enabled")!.arguments).toEqual([{ name: "enabled", required: true }]);
+  expect(command.options!.find(option => option.name === "--header-idempotency-key")!.required).toBeUndefined();
+  expect(command.options!.find(option => option.name === "--body")!.required).toBeUndefined();
+  expect(metadata(command.options!.find(option => option.name === "--body-file")!).capability).toBe("files");
+  expect(metadata(command.options!.find(option => option.name === "--body-file")!.arguments![0]!).provider).toBe("files");
+  expect(command.options!.find(option => option.name === "--content-type")!.arguments![0]!.acceptedValues).toEqual(["application/json", "text/plain"]);
+  expect(command.options!.find(option => option.name === "--accept")!.arguments![0]!.acceptedValues).toEqual(["application/json", "text/plain"]);
+  expect(metadata(command).api![0]!.inputs["header/Idempotency-Key"]).toBe("option:--header-idempotency-key");
 });
 
 test("missing and malformed fragments fail assembly", async () => {

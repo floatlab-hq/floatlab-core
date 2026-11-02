@@ -1,6 +1,12 @@
 {
   "commands": [
     {
+      "name": "install-autocomplete",
+      "description": "Install bundled autocomplete for your shell (defaults to SHELL)",
+      "arguments": [{ "name": "shell", "acceptedValues": ["bash", "fish", "ps1", "nu", "powershell", "nushell", "pwsh"] }],
+      "metadata": [{ "name": "floatlab", "value": { "utility": true, "capability": "cli" } }]
+    },
+    {
       "name": "help",
       "description": "help",
       "arguments": [

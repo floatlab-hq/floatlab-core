@@ -50,6 +50,342 @@
           }
         }
       ]
+    },
+    {
+      "name": "api",
+      "description": "Call the HTTP API directly",
+      "commands": [
+        {
+          "name": "stats",
+          "commands": [
+            {
+              "name": "getNodeStats",
+              "description": "Get time-series metrics for a node",
+              "options": [
+                {
+                  "name": "--path-node-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "node_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-range",
+                  "arguments": [
+                    {
+                      "name": "range",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/stats/nodes/{node_id}",
+                      "parameters": [
+                        {
+                          "name": "node_id",
+                          "in": "path",
+                          "option": "--path-node-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "range",
+                          "in": "query",
+                          "option": "--query-range",
+                          "schema": {
+                            "type": "string",
+                            "enum": [
+                              "1h",
+                              "6h",
+                              "24h",
+                              "7d"
+                            ],
+                            "description": "Pre-defined time range for metric queries. Defaults to 1h.",
+                            "default": "1h"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getNodeStats",
+                        "inputs": {
+                          "path/node_id": "option:--path-node-id",
+                          "query/range": "option:--query-range"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getStackStats",
+              "description": "Get time-series metrics for a stack (aggregated across containers)",
+              "options": [
+                {
+                  "name": "--path-stack-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-range",
+                  "arguments": [
+                    {
+                      "name": "range",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/stats/stacks/{stack_id}",
+                      "parameters": [
+                        {
+                          "name": "stack_id",
+                          "in": "path",
+                          "option": "--path-stack-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "range",
+                          "in": "query",
+                          "option": "--query-range",
+                          "schema": {
+                            "type": "string",
+                            "enum": [
+                              "1h",
+                              "6h",
+                              "24h",
+                              "7d"
+                            ],
+                            "description": "Pre-defined time range for metric queries. Defaults to 1h.",
+                            "default": "1h"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getStackStats",
+                        "inputs": {
+                          "path/stack_id": "option:--path-stack-id",
+                          "query/range": "option:--query-range"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getStorageStats",
+              "description": "Get ZFS and replication metrics for a node",
+              "options": [
+                {
+                  "name": "--path-node-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "node_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-range",
+                  "arguments": [
+                    {
+                      "name": "range",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/stats/storage/{node_id}",
+                      "parameters": [
+                        {
+                          "name": "node_id",
+                          "in": "path",
+                          "option": "--path-node-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "range",
+                          "in": "query",
+                          "option": "--query-range",
+                          "schema": {
+                            "type": "string",
+                            "enum": [
+                              "1h",
+                              "6h",
+                              "24h",
+                              "7d"
+                            ],
+                            "description": "Pre-defined time range for metric queries. Defaults to 1h.",
+                            "default": "1h"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getStorageStats",
+                        "inputs": {
+                          "path/node_id": "option:--path-node-id",
+                          "query/range": "option:--query-range"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "queryMetrics",
+              "description": "Raw MetricsQL query against VictoriaMetrics",
+              "options": [
+                {
+                  "name": "--query-query",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "query",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-start",
+                  "arguments": [
+                    {
+                      "name": "start",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-end",
+                  "arguments": [
+                    {
+                      "name": "end",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-step",
+                  "arguments": [
+                    {
+                      "name": "step",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/stats/query",
+                      "parameters": [
+                        {
+                          "name": "query",
+                          "in": "query",
+                          "option": "--query-query",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "example": "rate(container_cpu_usage_seconds_total{stack_id=\"abc\"}[5m])"
+                          }
+                        },
+                        {
+                          "name": "start",
+                          "in": "query",
+                          "option": "--query-start",
+                          "schema": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "name": "end",
+                          "in": "query",
+                          "option": "--query-end",
+                          "schema": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "name": "step",
+                          "in": "query",
+                          "option": "--query-step",
+                          "schema": {
+                            "type": "string",
+                            "default": "30s"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "queryMetrics",
+                        "inputs": {
+                          "query/query": "option:--query-query",
+                          "query/start": "option:--query-start",
+                          "query/end": "option:--query-end",
+                          "query/step": "option:--query-step"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
   ]
 }

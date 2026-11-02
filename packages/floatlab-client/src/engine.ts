@@ -2,6 +2,8 @@ import { ApiError } from "./api";
 import { v4 as idempotencyKey } from "uuid";
 import type { AlertsApi, AlertRuleUpdate } from "./types";
 import { backupRestoreDatasets } from "./backups";
+import { runHttpCommand } from "./http-command";
+import type { HttpApi } from "./types";
 import type { CommandResult, CommandRuntime, Completion, Container, FloatLabApi, Node, Stack, UpdateApi, UpdateAction, UpdateComponent, LabApi, LabJoinRequest, BackupApi, BackupRestoreApi } from "./types";
 
 import { CommandError, parseCommand, tokenize, scan, completionContext, metadata, commandHelp, type ArgumentDefinition, type ParsedCommand } from "./commands";
@@ -19,7 +21,7 @@ const text = (value: unknown) => typeof value === "string" ? value : JSON.string
 export class CommandEngine {
   private stacks?: { at: number; value: Stack[] };
   private nodes?: { at: number; value: Node[] };
-  constructor(readonly api: FloatLabApi & Partial<UpdateApi & LabApi & BackupApi & BackupRestoreApi & AlertsApi>, readonly runtime: CommandRuntime, private readonly ttlMs = 10_000) {}
+  constructor(readonly api: FloatLabApi & Partial<UpdateApi & LabApi & BackupApi & BackupRestoreApi & AlertsApi & HttpApi>, readonly runtime: CommandRuntime, private readonly ttlMs = 10_000) {}
 
   async dispatch(input: string | string[]): Promise<{ code: number; result: CommandResult }> {
     try {
@@ -98,6 +100,13 @@ export class CommandEngine {
 
   private async run(parsed: ParsedCommand): Promise<CommandResult> {
     if (parsed.name === "help") return { kind: "text", text: commandHelp(parsed.positionals) };
+    const http = metadata(parsed.command).http;
+    if (http) {
+      if (!this.api.request) throw new CommandError("HTTP API unavailable in this client");
+      const result = await runHttpCommand(http, parsed.flags, {request: this.api.request.bind(this.api)}, this.runtime);
+      if (!["GET", "HEAD", "OPTIONS"].includes(http.method.toUpperCase())) this.changed();
+      return result;
+    }
     const { name, positionals: args, flags } = parsed;
     if (name === "alerts" || name === "alert-rules") {
       if (Object.keys(flags).length) throw new CommandError("Alert commands do not accept flags");

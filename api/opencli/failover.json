@@ -1,0 +1,181 @@
+{
+  "commands": [
+    {
+      "name": "api",
+      "description": "Call the HTTP API directly",
+      "commands": [
+        {
+          "name": "failover",
+          "commands": [
+            {
+              "name": "abortFailover",
+              "description": "Abort an in-progress failover",
+              "options": [
+                {
+                  "name": "--path-stack-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/failover/{stack_id}/abort",
+                      "parameters": [
+                        {
+                          "name": "stack_id",
+                          "in": "path",
+                          "option": "--path-stack-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ]
+                    },
+                    "api": [
+                      {
+                        "operationId": "abortFailover",
+                        "inputs": {
+                          "path/stack_id": "option:--path-stack-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "getFailoverLog",
+              "description": "Get step-by-step log of the most recent failover sequence",
+              "options": [
+                {
+                  "name": "--path-stack-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/failover/{stack_id}/log",
+                      "parameters": [
+                        {
+                          "name": "stack_id",
+                          "in": "path",
+                          "option": "--path-stack-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "getFailoverLog",
+                        "inputs": {
+                          "path/stack_id": "option:--path-stack-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "listFailoverStatus",
+              "description": "Get failover status across all stacks",
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/failover/status",
+                      "parameters": [],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "listFailoverStatus",
+                        "inputs": {}
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "triggerStackFailover",
+              "description": "Trigger manual failover for a stack",
+              "options": [
+                {
+                  "name": "--path-stack-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "POST",
+                      "path": "/failover/{stack_id}/trigger",
+                      "parameters": [
+                        {
+                          "name": "stack_id",
+                          "in": "path",
+                          "option": "--path-stack-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "triggerStackFailover",
+                        "inputs": {
+                          "path/stack_id": "option:--path-stack-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
