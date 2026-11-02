@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.2.0
+
+- Share modular OpenCLI command contracts across the CLI and web palette, with generated completions and coverage checks.
+- Establish shared monitoring resource identities, typed evidence, and incident storage; preserve alert recurrence and protect concurrent monitoring updates.
+- Support host versions from 0.1.0 through the 0.2.x series.
+
 - Use SQLite sync protocol 1 with the pinned 3.50.4 tool to avoid its upstream protocol 2 corruption bug during incremental database growth; retain integrity checks and the last verified replica.
 - Exercise alert mute expiry, backup-target metadata, and offline-source recovery configuration in appliance acceptance; send restore tests to the destination node that owns the operation.
 - Add alert and alert-rule CLI/palette commands for listing, inspection, timed muting, enabling/disabling, and validated partial JSON edits, with action and resource completion.

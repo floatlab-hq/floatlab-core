@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0
+
 - Bound update sandboxes to four 384 MiB services with no additional swap, explicit Go/cache budgets, and 512 MiB of extra host headroom; validate cloned-state recovery on 4 GiB appliances with measured cgroup peaks and OOM counters.
 - Reserve memory for management and updates when setting the default ZFS ARC budget at boot; preserve explicitly configured ARC limits.
 - Install the host daemon in the appliance command path so restricted SSH backup receivers can launch it outside systemd's service environment.
