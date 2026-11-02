@@ -189,6 +189,9 @@ func TestPersistentPerResourceLifecycle(t *testing.T) {
 func TestAtomicTransitionAndCompetingWrites(t *testing.T) {
 	db := database(t)
 	ctx := context.Background()
+	broker := notify.NewBroker()
+	events, cancel := broker.Subscribe()
+	defer cancel()
 	rule := testRule()
 	rule.For = 0
 	now := time.Now().UTC()
@@ -197,22 +200,27 @@ func TestAtomicTransitionAndCompetingWrites(t *testing.T) {
 	if err := db.Execute(ctx, []rqlite.Statement{{SQL: `CREATE TRIGGER reject_notification BEFORE INSERT ON notifications BEGIN SELECT RAISE(ABORT,'notification unavailable'); END`}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := save(ctx, db, nil, rule, storedState{}, next, now, "", "observer"); err == nil {
+	if err := save(ctx, db, broker, rule, storedState{}, next, now, "", "observer"); err == nil {
 		t.Fatal("expected failed transaction")
 	}
-	if len(rows(t, db, `SELECT id FROM alerts`)) != 0 {
-		t.Fatal("incident committed without notification")
+	if len(rows(t, db, `SELECT id FROM alerts`)) != 0 || len(rows(t, db, `SELECT id FROM monitoring_observations`)) != 0 || len(events) != 0 {
+		t.Fatal("failed transaction persisted evidence or published an event")
 	}
 	if err := db.Execute(ctx, []rqlite.Statement{{SQL: `DROP TRIGGER reject_notification`}}); err != nil {
 		t.Fatal(err)
 	}
-	for range 2 {
-		if err := save(ctx, db, nil, rule, storedState{}, next, now, "", "observer"); err != nil {
-			t.Fatal(err)
-		}
+	if err := save(ctx, db, broker, rule, storedState{}, next, now, "", "observer"); err != nil {
+		t.Fatal(err)
 	}
-	if len(rows(t, db, `SELECT id FROM alerts`)) != 1 || len(rows(t, db, `SELECT id FROM notifications`)) != 1 {
-		t.Fatal("competing owner duplicated transition")
+	// A later sample with an obsolete evaluator version must lose the transaction guard.
+	later := now.Add(time.Second)
+	observation.At = later
+	losing := advance(rule, State{}, &observation, later)
+	if err := save(ctx, db, broker, rule, storedState{}, losing, later, "", "observer"); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows(t, db, `SELECT id FROM alerts`)) != 1 || len(rows(t, db, `SELECT id FROM notifications`)) != 1 || len(rows(t, db, `SELECT id FROM monitoring_observations`)) != 1 || len(events) != 1 {
+		t.Fatal("losing owner persisted evidence or duplicated delivery")
 	}
 }
 

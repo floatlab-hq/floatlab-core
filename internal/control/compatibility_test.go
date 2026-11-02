@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/floatlab/floatlab-core/internal/testdb"
@@ -69,5 +70,54 @@ func TestCompatibilityAlertLifecycle(t *testing.T) {
 	case <-events:
 	default:
 		t.Fatal("recurrence did not notify")
+	}
+}
+
+func TestConcurrentCompatibilityChecksNotifyOncePerOccurrence(t *testing.T) {
+	db := testdb.Start(t)
+	ctx := context.Background()
+	if err := rqlite.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	broker := notify.NewBroker()
+	events, cancel := broker.Subscribe()
+	defer cancel()
+	incompatible := release.Compatibility{Status: "incompatible", HostVersion: "0.2.0", Required: release.RequiredHost}
+	checkConcurrently := func() {
+		t.Helper()
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				if err := recordHostCompatibility(ctx, db, broker, "node", incompatible); err != nil {
+					t.Error(err)
+				}
+			}()
+		}
+		close(start)
+		wg.Wait()
+	}
+	checkConcurrently()
+	if len(events) != 1 {
+		t.Fatalf("first occurrence broker deliveries: %d", len(events))
+	}
+	<-events
+	if err := recordHostCompatibility(ctx, db, broker, "node", release.Compatibility{Status: "compatible"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("recovery broker deliveries: %d", len(events))
+	}
+	<-events
+	checkConcurrently()
+	rows, err := db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT (SELECT count(*) FROM alerts),(SELECT count(*) FROM alerts WHERE state='active'),(SELECT count(*) FROM notifications)`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rows.Values[0]; got[0] != float64(2) || got[1] != float64(1) || got[2] != float64(3) || len(events) != 1 {
+		t.Fatalf("compatibility recurrence duplicated or lost: rows=%v events=%d", got, len(events))
 	}
 }

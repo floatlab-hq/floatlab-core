@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/floatlab/floatlab-core/internal/testdb"
+	"github.com/floatlab/floatlab-core/pkg/notify"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
 	"go.uber.org/zap"
 )
@@ -52,5 +54,50 @@ func TestWebhookIndependentResourcesRecoveryAndRecurrence(t *testing.T) {
 	rows, err = db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT id FROM alerts WHERE state='active'`})
 	if err != nil || len(rows.Values) != 2 {
 		t.Fatalf("stale recovery resolved recurrence: %v %v", rows, err)
+	}
+}
+
+func TestConcurrentWebhookDeliveriesRetainArbitraryResourceLabels(t *testing.T) {
+	db := testdb.Start(t)
+	ctx := context.Background()
+	if err := rqlite.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	broker := notify.NewBroker()
+	events, cancel := broker.Subscribe()
+	defer cancel()
+	handler := WebhookHandler(db, broker, zap.NewNop())
+	started := time.Now().Add(-time.Minute).UTC()
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, device := range []string{"sda", "sdb"} {
+		body, err := json.Marshal(map[string]interface{}{"alerts": []interface{}{map[string]interface{}{
+			"status": "firing", "startsAt": started,
+			"labels": map[string]string{"alertname": "device-errors", "node_id": "node", "stack_id": "stack", "device": device},
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				w := httptest.NewRecorder()
+				handler(w, httptest.NewRequest("POST", "/webhook", strings.NewReader(string(body))))
+				if w.Code != 200 {
+					t.Errorf("concurrent webhook: %d %s", w.Code, w.Body.String())
+				}
+			}()
+		}
+	}
+	close(start)
+	wg.Wait()
+	rows, err := db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT (SELECT count(*) FROM alerts),(SELECT count(*) FROM notifications),(SELECT count(DISTINCT json_extract(labels,'$.device')) FROM alerts)`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rows.Values[0]; got[0] != float64(2) || got[1] != float64(2) || got[2] != float64(2) || len(events) != 2 {
+		t.Fatalf("resource collision or duplicate delivery: rows=%v events=%d", got, len(events))
 	}
 }
