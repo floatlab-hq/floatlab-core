@@ -21,9 +21,22 @@ func runAlertEvaluator(t testT, c *apiClient) {
 	ruleID := rule["id"].(string)
 	t.Cleanup(func() {
 		c.expect("DELETE", "/api/v1/alert-rules/"+ruleID, nil, 204)
-		c.cleanupSQL("DELETE FROM notifications WHERE alert_id IN (SELECT id FROM alerts WHERE rule_id=?)", ruleID)
-		c.cleanupSQL("DELETE FROM alerts WHERE rule_id=?", ruleID)
-		c.cleanupSQL("DELETE FROM alert_evaluations WHERE rule_id=?", ruleID)
+		waitFor(t, time.Minute, func() error {
+			var own []map[string]interface{}
+			for _, value := range c.expect("GET", "/api/v1/alerts?node_id="+c.nodeID, nil, 200).([]interface{}) {
+				row := value.(map[string]interface{})
+				if row["rule_id"] == ruleID {
+					if row["state"] != "resolved" {
+						return fmt.Errorf("waiting for removed rule incidents to resolve")
+					}
+					own = append(own, row)
+				}
+			}
+			for _, row := range own {
+				c.expect("DELETE", "/api/v1/alerts/"+row["id"].(string), nil, 204)
+			}
+			return nil
+		})
 	})
 	t.Cleanup(func() {
 		if t.Failed() {

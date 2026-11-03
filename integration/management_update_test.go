@@ -23,13 +23,18 @@ func (c *apiClient) assertManagementUpdateAppliance() {
 	run(t, root, []string{"CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64"}, "go", "test", "-c", "-cover", "-coverpkg=./...", "-covermode=atomic", "-tags=appliance,integrationcoverage", "-ldflags=-s -w", "-o", binary, "./internal/managementupdate")
 	remote := "/floatlab/system/updates/appliance-management-tests"
 	uploadUpgradeGuestFile(t, c.vm, binary, remote)
-	installCurrentUpgradeHostd(t, c.vm)
 	c.waitReady()
 	c.login()
+	c.waitNodeReady()
+	workload := c.upgradeWorkload("management-update")
+	workload("printf workload-data > /data/upgrade-marker; sync")
+	assertWorkload := func() { workload(`test "$(cat /data/upgrade-marker)" = workload-data`) }
+	updatePath := "/api/v1/nodes/" + c.nodeID + "/updates/management"
+	scenario := ""
 	runGuestTest := func(name string, wantExit int) {
 		t.Helper()
 		prefix := "/floatlab/system/updates/acceptance-" + name
-		script := fmt.Sprintf("rm -f %[1]s.exit %[1]s.json; coverage_dir=/floatlab/system/integration-coverage/guest-$(basename %[1]s)-$(date +%%s%%N); mkdir -p \"$coverage_dir\"; (GOCOVERDIR=\"$coverage_dir\" FLOATLAB_MANAGEMENT_APPLIANCE=1 %[2]s -test.gocoverdir=\"$coverage_dir\" -test.run='^TestManagementApplianceIntegration$' -ginkgo.focus='%[3]s$' -ginkgo.json-report=%[1]s.json -test.v -test.timeout=20m >%[1]s.log 2>&1; echo $? >%[1]s.exit) </dev/null >/dev/null 2>&1 & echo started", prefix, remote, name)
+		script := fmt.Sprintf("rm -f %[1]s.exit %[1]s.json; coverage_dir=/floatlab/system/integration-coverage/guest-$(basename %[1]s)-$(date +%%s%%N); mkdir -p \"$coverage_dir\"; (GOCOVERDIR=\"$coverage_dir\" FLOATLAB_MANAGEMENT_APPLIANCE=1 FLOATLAB_MANAGEMENT_SCENARIO=%[4]s %[2]s -test.gocoverdir=\"$coverage_dir\" -test.run='^TestManagementApplianceIntegration$' -ginkgo.focus='%[3]s$' -ginkgo.json-report=%[1]s.json -test.v -test.timeout=20m >%[1]s.log 2>&1; echo $? >%[1]s.exit) </dev/null >/dev/null 2>&1 & echo started", prefix, remote, name, hostShellQuote(scenario))
 		if out, err := guestCommand(c.vm, script); err != nil {
 			t.Fatalf("start guest test: %s %v", out, err)
 		}
@@ -56,7 +61,23 @@ func (c *apiClient) assertManagementUpdateAppliance() {
 		})
 	}
 	runGuestTest("TestApplianceSandboxFirewallParser", 0)
-	runGuestTest("TestApplianceManagementTransactions", 0)
+	for _, name := range []string{"preflight-failure", "commit", "rollback"} {
+		scenario = name
+		runGuestTest("TestApplianceManagementTransactions", 0)
+		c.waitReady()
+		c.login()
+		assertWorkload()
+		status := c.object("GET", updatePath+"/status", nil, 200)
+		operationID := status["operation_id"].(string)
+		if name == "commit" {
+			c.object("POST", updatePath+"/rollback", map[string]string{"operation_id": operationID}, 202)
+			c.waitReady()
+			c.login()
+			c.waitUpgrade(updatePath, operationID, "rolled_back", "")
+			assertWorkload()
+		}
+		c.cleanupUpgrade(updatePath, operationID)
+	}
 	c.waitReady()
 	c.login()
 	nodes := c.expect("GET", "/api/v1/nodes", nil, 200).([]interface{})
@@ -77,6 +98,7 @@ func (c *apiClient) assertManagementUpdateAppliance() {
 	c.waitReady()
 	c.login()
 	runGuestTest("TestApplianceManagementCrashRecovered", 0)
+	assertWorkload()
 	runGuestTest("TestApplianceManagementCrashDuringRestore", 87)
 	if out, err := guestCommand(c.vm, "systemctl restart floatlab-hostd.service"); err != nil {
 		t.Fatalf("restart hostd during partial restore: %s %v", out, err)
@@ -84,6 +106,7 @@ func (c *apiClient) assertManagementUpdateAppliance() {
 	c.waitReady()
 	c.login()
 	runGuestTest("TestApplianceManagementCrashRecovered", 0)
+	assertWorkload()
 	// Exercise the authenticated public projection and cleanup against the real hostd journal.
 	releases := c.expect("GET", "/api/v1/nodes/"+nodeID+"/updates/management/releases", nil, 200).([]interface{})
 	if len(releases) == 0 {
@@ -114,19 +137,5 @@ func uploadUpgradeGuestFile(t testT, vm *integrationvm.Guest, source, target str
 	defer cancel()
 	if err := vm.Upload(ctx, source, target); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func installCurrentUpgradeHostd(t testT, vm *integrationvm.Guest) {
-	t.Helper()
-	root, err := filepath.Abs("..")
-	if err != nil {
-		t.Fatal(err)
-	}
-	hostdBinary := filepath.Join(t.TempDir(), "floatlab-hostd-current")
-	run(t, root, []string{"CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64"}, "go", "build", "-cover", "-coverpkg=./...", "-covermode=atomic", "-tags=integrationcoverage", "-ldflags=-s -w", "-o", hostdBinary, "./cmd/floatlab-hostd")
-	uploadUpgradeGuestFile(t, vm, hostdBinary, "/floatlab/system/updates/appliance-hostd-current")
-	if out, err := guestCommand(vm, `mkdir -p /run/systemd/system/floatlab-hostd.service.d; printf '[Service]\nExecStart=\nExecStart=/floatlab/system/updates/appliance-hostd-current\n' >/run/systemd/system/floatlab-hostd.service.d/acceptance.conf; systemctl daemon-reload; systemctl restart floatlab-hostd.service`); err != nil {
-		t.Fatalf("start current hostd acceptance binary: %s %v", out, err)
 	}
 }

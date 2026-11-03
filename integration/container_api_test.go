@@ -301,6 +301,16 @@ func (c *apiClient) assertContainerAPIs(stackID string) string {
 	return container.ID
 }
 
+func (c *apiClient) execInContainer(stackID, containerID string, command []string) string {
+	c.t.Helper()
+	result := c.object("POST", "/api/v1/stacks/"+stackID+"/containers/"+containerID+"/exec", map[string]any{"command": command}, 200)
+	if result["exit_code"] != float64(0) {
+		c.t.Fatalf("container exec %q: %+v", command, result)
+	}
+	stdout, _ := result["stdout"].(string)
+	return stdout
+}
+
 func (c *apiClient) assertTerminal(stackID, containerID string) {
 	c.t.Helper()
 	wsURL := strings.Replace(c.baseURL, "http://", "ws://", 1)

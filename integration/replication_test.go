@@ -41,6 +41,7 @@ func defineReplication(fixture *applianceFixture) {
 		t := integrationT()
 		// Seed actual payload bytes and several available points before the first
 		// backup; initial seeding must preserve intermediate snapshots too.
+		// These automated names and test holds are a retention-history fixture.
 		for i := 0; i < 3; i++ {
 			if i > 0 {
 				// Retention uses actual ZFS creation time. Place points in separate
@@ -51,7 +52,8 @@ func defineReplication(fixture *applianceFixture) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			script := "set -eu; printf %s " + shellQuote(fmt.Sprintf("payload-%d", i)) + " > " + shellQuote("/"+dataset+"/replicated-data") + "; zfs snapshot " + shellQuote(dataset+"@"+name) + "; zfs hold floatlab:acceptance-seed " + shellQuote(dataset+"@"+name)
+			source.execWeb(stack, "printf %s "+shellQuote(fmt.Sprintf("payload-%d", i))+" > /data/replicated-data")
+			script := "set -eu; zfs snapshot " + shellQuote(dataset+"@"+name) + "; zfs hold floatlab:acceptance-seed " + shellQuote(dataset+"@"+name)
 			if out, err := source.guest(script); err != nil {
 				t.Fatalf("seed source snapshot: %s %v", out, err)
 			}
@@ -83,9 +85,7 @@ func defineReplication(fixture *applianceFixture) {
 		// A second run must advance the hold rather than accumulate recovery-point
 		// holds, and received data must match a real source snapshot's bytes.
 		time.Sleep(3 * time.Second)
-		if out, err := source.guest("printf %s second-backup > " + shellQuote("/"+dataset+"/replicated-data")); err != nil {
-			t.Fatalf("change source data: %s %v", out, err)
-		}
+		source.execWeb(stack, "printf %s second-backup > /data/replicated-data")
 		source.replicateAndWait(stack, dataset, backupID)
 		latest = source.recoveryPoint(dataset, backupID)
 		if latest == firstPoint {
@@ -214,33 +214,23 @@ func replicationIncidentID(t testT, source *labGuest, sourceID, stack, dataset, 
 	t.Helper()
 	var incidentID string
 	waitFor(t, time.Minute, func() error {
-		raw, err := source.sql("/floatlab/system/workloads/local.sqlite", "SELECT state_json FROM monitoring_checks WHERE producer='worker'")
-		if err != nil {
-			return err
-		}
 		var rows []struct {
-			State string `json:"state_json"`
+			ID, Kind string
+			Resource monitoring.Resource
 		}
-		if err := json.Unmarshal([]byte(raw), &rows); err != nil {
+		if err := source.json("GET", "/api/v1/alerts?stack_id="+url.QueryEscape(stack)+"&state=active", nil, &rows); err != nil {
 			return err
 		}
-		var matches []monitoring.Check
+		var matches []string
 		for _, row := range rows {
-			var check monitoring.Check
-			if err := json.Unmarshal([]byte(row.State), &check); err != nil {
-				return err
-			}
-			if check.Kind == "replication" && check.Resource == (monitoring.Resource{HostID: sourceID, WorkloadID: stack, Dataset: dataset, SourceID: sourceID, DestinationID: destination}) {
-				matches = append(matches, check)
+			if row.Kind == "replication" && row.Resource == (monitoring.Resource{HostID: sourceID, WorkloadID: stack, Dataset: dataset, SourceID: sourceID, DestinationID: destination}) {
+				matches = append(matches, row.ID)
 			}
 		}
-		if len(matches) != 1 {
-			return fmt.Errorf("expected one replication check for %s on %s to %s, got %d", dataset, sourceID, destination, len(matches))
+		if len(matches) != 1 || matches[0] == "" {
+			return fmt.Errorf("expected one active replication incident for %s on %s to %s, got %v", dataset, sourceID, destination, matches)
 		}
-		if matches[0].IncidentID == "" {
-			return fmt.Errorf("replication check for %s to %s has no incident: status=%s reason=%s", dataset, destination, matches[0].Status, matches[0].Reason)
-		}
-		incidentID = matches[0].IncidentID
+		incidentID = matches[0]
 		return nil
 	})
 	return incidentID
@@ -370,6 +360,7 @@ func assertSnapshotGUID(t testT, source, destination *labGuest, dataset, backupD
 	}
 }
 
+// A temporary read-only clone independently verifies received snapshot bytes.
 func assertBackupContents(t testT, backup *labGuest, dataset, snapshot, expected string) {
 	t.Helper()
 	clone := "floatlab/replication-verification"

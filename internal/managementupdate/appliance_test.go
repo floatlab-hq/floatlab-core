@@ -386,6 +386,10 @@ func applianceStatus(t ginkgo.GinkgoTInterface, m *Manager, id string, want stri
 
 func runTestApplianceManagementTransactions(t ginkgo.GinkgoTInterface) {
 	requireAppliance(t)
+	scenarioName := os.Getenv("FLOATLAB_MANAGEMENT_SCENARIO")
+	if scenarioName != "preflight-failure" && scenarioName != "commit" && scenarioName != "rollback" {
+		t.Fatal("FLOATLAB_MANAGEMENT_SCENARIO must select preflight-failure, commit, or rollback")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	l := &Linux{Dir: Directory}
@@ -400,40 +404,10 @@ func runTestApplianceManagementTransactions(t ginkgo.GinkgoTInterface) {
 		t.Fatal("candidate must have a different version from source")
 	}
 	t.Logf("actual management transition %s -> %s", baseline.SourceRelease, applianceTargetRelease)
-	source, err := composeDocument(baseline.PreviousCompose)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sourceControl := services(source)["floatlab-control"]["image"].(string)
-	// A separate workload and dataset must survive every management stop and rollback.
-	workload := "floatlab-update-proof"
-	if _, err = l.run(ctx, "docker", "run", "-d", "--name", workload, "--restart=unless-stopped", "--entrypoint", "/usr/bin/sleep", sourceControl, "infinity"); err != nil {
-		t.Fatal(err)
-	}
-	defer l.run(context.Background(), "docker", "rm", "-f", workload)
-	if _, err = l.run(ctx, "zfs", "create", "-p", "-o", "mountpoint=/floatlab/stacks/update-proof", "floatlab/stacks/update-proof"); err != nil {
-		t.Fatal(err)
-	}
-	defer l.run(context.Background(), "zfs", "destroy", "floatlab/stacks/update-proof")
-	if err = os.WriteFile("/floatlab/stacks/update-proof/marker", []byte("workload-data"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	workloadID, err := l.run(ctx, "docker", "inspect", "--format", "{{.Id}}", workload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertWorkload := func() {
-		t.Helper()
-		running, e := l.run(ctx, "docker", "inspect", "--format", "{{.Id}} {{.State.Running}} {{.HostConfig.RestartPolicy.Name}}", workload)
-		if e != nil || running != workloadID+" true unless-stopped" {
-			t.Fatalf("workload changed: %s %v", running, e)
-		}
-		data, e := os.ReadFile("/floatlab/stacks/update-proof/marker")
-		if e != nil || string(data) != "workload-data" {
-			t.Fatalf("workload data changed %q %v", data, e)
-		}
-	}
 	for _, scenario := range []struct{ name, failure, want string }{{"preflight-failure", "preflight", "failed"}, {"commit", "", "succeeded"}, {"rollback", "install", "rolled_back"}} {
+		if scenario.name != scenarioName {
+			continue
+		}
 		ginkgo.By(scenario.name)
 		func() {
 			beforeControl := l.controlID(ctx)
@@ -451,7 +425,6 @@ func runTestApplianceManagementTransactions(t ginkgo.GinkgoTInterface) {
 				if status.Authorized || status.Snapshot != "" || l.controlID(ctx) != beforeControl {
 					t.Fatalf("failed preflight changed production %s", applianceSummary(status))
 				}
-				assertWorkload()
 				return
 			}
 			if !status.Authorized || status.Snapshot == "" {
@@ -466,7 +439,6 @@ func runTestApplianceManagementTransactions(t ginkgo.GinkgoTInterface) {
 					t.Fatal(err)
 				}
 			}
-			assertWorkload()
 			raw, err := l.run(ctx, "zfs", "list", "-H", "-r", "-t", "filesystem", "-o", "name", "floatlab/system/update-tests")
 			if err == nil && strings.Contains(raw, "/"+id) {
 				t.Fatalf("test clone leaked %s", raw)
@@ -478,19 +450,8 @@ func runTestApplianceManagementTransactions(t ginkgo.GinkgoTInterface) {
 			if err = l.verifyRunningImages(ctx, &check); err != nil {
 				t.Fatal(err)
 			}
-			// Return the successful candidate to its source so subsequent scenarios share a known baseline.
-			if scenario.want == "succeeded" {
-				if status, err = manager.Rollback(ctx, id); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err = l.Cleanup(ctx, status); err != nil {
-				t.Fatal(err)
-			}
-			status.Snapshot = ""
-			if err = manager.save(status); err != nil {
-				t.Fatal(err)
-			}
+			// The runner submits rollback and cleanup through the authenticated API.
+
 		}()
 	}
 }

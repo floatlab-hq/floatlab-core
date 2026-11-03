@@ -177,6 +177,8 @@ paths:
     $ref: './host-network.yaml#/paths/~1nodes~1{id}~1settings~1network~1changes~1{change}~1rollback'
   /network/pools:
     $ref: './network.yaml#/paths/~1network~1pools'
+  /network/pools/{id}:
+    $ref: './network.yaml#/paths/~1network~1pools~1{id}'
   /settings/network-pools:
     $ref: './network.yaml#/paths/~1settings~1network-pools'
   /settings/network-pools/{id}:

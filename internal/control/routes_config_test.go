@@ -112,6 +112,15 @@ func TestManagementCRUDWithSQLite(t *testing.T) {
 		t.Fatal(err)
 	}
 	alertNotification := call("POST", "/notifications", map[string]interface{}{"alert_id": "mute-test", "title": "incident", "body": "still firing", "severity": "warning"}, 201)
+	call("DELETE", "/alerts/missing", nil, 404)
+	call("DELETE", "/alerts/mute-test", nil, 409)
+	if err := db.Execute(ctx, []rqlite.Statement{{SQL: `INSERT INTO monitoring_checks(id,producer,state_json) VALUES('resource-check','test',?)`, Params: []interface{}{`{"incident_id":"mute-test","resource":{"host_id":"host","workload_id":"stack","dataset":"floatlab/app","source_id":"source","destination_id":"destination"}}`}}}); err != nil {
+		t.Fatal(err)
+	}
+	incident := call("GET", "/alerts/mute-test", nil, 200)
+	if incident["kind"] != "evaluator" || incident["resource"].(map[string]interface{})["dataset"] != "floatlab/app" || incident["resource"].(map[string]interface{})["destination_id"] != "destination" {
+		t.Fatalf("missing incident resource: %+v", incident)
+	}
 	call("POST", "/alerts/mute-test/silence", map[string]string{"until": "invalid"}, 400)
 	call("POST", "/alerts/mute-test/silence", map[string]string{"until": time.Now().Add(-time.Hour).Format(time.RFC3339)}, 400)
 	deadline := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
@@ -140,6 +149,17 @@ func TestManagementCRUDWithSQLite(t *testing.T) {
 		t.Fatal(err)
 	}
 	call("POST", "/alerts/mute-test/silence", map[string]string{"until": deadline}, 409)
+	if err := db.Execute(ctx, []rqlite.Statement{{SQL: `CREATE TRIGGER reject_alert_delete BEFORE DELETE ON alerts BEGIN SELECT RAISE(ABORT,'reject delete'); END`}}); err != nil {
+		t.Fatal(err)
+	}
+	call("DELETE", "/alerts/mute-test", nil, 500)
+	call("GET", "/notifications/"+notificationID, nil, 200)
+	if err := db.Execute(ctx, []rqlite.Statement{{SQL: `DROP TRIGGER reject_alert_delete`}}); err != nil {
+		t.Fatal(err)
+	}
+	call("DELETE", "/alerts/mute-test", nil, 204)
+	call("GET", "/alerts/mute-test", nil, 404)
+	call("GET", "/notifications/"+notificationID, nil, 404)
 	call("DELETE", "/alert-rules/"+rid, nil, 204)
 	call("GET", "/alert-rules/"+rid, nil, 404)
 	notification := call("POST", "/notifications", map[string]interface{}{"title": "test", "body": "message", "severity": "warning", "stack_id": "test-stack"}, 201)
@@ -158,13 +178,35 @@ func TestManagementCRUDWithSQLite(t *testing.T) {
 	call("POST", "/notifications/"+id+"/read", nil, 404)
 	pool := call("POST", "/network/pools", map[string]string{"name": "tiny", "prefix": "fd02::/127"}, 201)
 	pid := pool["id"].(string)
+	call("DELETE", "/network/pools/missing", nil, 404)
 	if err := s.store.CreateStack(ctx, &config.Stack{ID: "test-stack", Name: "test", PrimaryNodeID: "node1"}); err != nil {
 		t.Fatal(err)
 	}
+	var allocations []string
 	for i := 0; i < 2; i++ {
-		call("POST", "/network/allocations", map[string]string{"stack_id": "test-stack", "service": "app", "prefix_pool": pid}, 201)
+		allocation := call("POST", "/network/allocations", map[string]string{"stack_id": "test-stack", "service": "app", "prefix_pool": pid}, 201)
+		allocations = append(allocations, allocation["id"].(string))
 	}
 	call("POST", "/network/allocations", map[string]string{"stack_id": "test-stack", "service": "app", "prefix_pool": pid}, 409)
+	call("DELETE", "/network/pools/"+pid, nil, 409)
+	for _, id := range allocations {
+		call("DELETE", "/network/allocations/"+id, nil, 204)
+	}
+	call("DELETE", "/network/pools/"+pid, nil, 204)
+	call("DELETE", "/network/pools/"+pid, nil, 404)
+	for _, path := range []string{"/alerts/mute-test", "/network/pools/" + pid} {
+		for _, roles := range [][]string{nil, {"viewer"}} {
+			request := httptest.NewRequest("DELETE", "/api/v1"+path, nil)
+			if roles != nil {
+				request.Header.Set("Authorization", "Bearer "+signedToken(t, "test-secret", roles))
+			}
+			response := httptest.NewRecorder()
+			s.router.ServeHTTP(response, request)
+			if response.Code != 401 && response.Code != 403 {
+				t.Fatalf("non-admin delete %s: %d", path, response.Code)
+			}
+		}
+	}
 }
 
 func TestIdempotencyDoesNotOverwriteCompletedAsyncOperation(t *testing.T) {

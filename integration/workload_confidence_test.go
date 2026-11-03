@@ -3,7 +3,6 @@ package integration_test
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -150,8 +149,8 @@ func (c *apiClient) assertManagementContracts() {
 	aid := alerts[0].(map[string]interface{})["id"].(string)
 	c.object("GET", "/api/v1/alerts/"+aid, nil, 200)
 	t.Cleanup(func() {
-		c.cleanupSQL("DELETE FROM alerts WHERE id=?", aid)
-		c.cleanupSQL("DELETE FROM notifications WHERE title=?", name)
+		c.expect("POST", "/api/v1/stats/webhook", map[string]interface{}{"alerts": []interface{}{map[string]interface{}{"status": "resolved", "labels": map[string]string{"alertname": name, "rule_id": rid, "severity": "critical", "node_id": id}, "annotations": map[string]string{"summary": name, "description": "contract alert"}, "endsAt": time.Now().UTC().Format(time.RFC3339)}}}, 200)
+		c.expect("DELETE", "/api/v1/alerts/"+aid, nil, 204)
 	})
 	c.assertNotificationContract(name)
 	c.expect("GET", "/api/v1/storage/replication", nil, 200)
@@ -160,16 +159,6 @@ func (c *apiClient) assertManagementContracts() {
 	c.expect("POST", "/api/v1/storage/backups/restore", map[string]any{}, 400)
 	c.expect("GET", "/api/v1/storage/faults", nil, 200)
 	c.expect("GET", "/api/v1/failover/status", nil, 200)
-}
-
-func (c *apiClient) cleanupSQL(statement string, id string) {
-	c.t.Helper()
-	binding := `.parameter set ?1 "CAST(X'` + hex.EncodeToString([]byte(id)) + `' AS TEXT)"`
-	out, err := guestCommand(c.vm, "sqlite3 -batch -bail -cmd "+shellQuote(".timeout 10000")+" -cmd "+shellQuote(binding)+" /floatlab/system/workloads/local.sqlite "+shellQuote(statement))
-
-	if err != nil || strings.Contains(out, `"error"`) {
-		c.t.Errorf("cleanup owned record: %s %v", out, err)
-	}
 }
 
 func (c *apiClient) assertNotificationContract(name string) {

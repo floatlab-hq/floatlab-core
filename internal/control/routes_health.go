@@ -205,6 +205,7 @@ func registerNetworkRoutes(r chi.Router, s *Server) {
 		r.Delete("/settings/network-pools/{id}", s.labMutation(func(target *Server) http.HandlerFunc { return target.handleDeleteNetworkPool }))
 		r.Get("/network/pools", s.handleListPrefixPools)
 		r.Post("/network/pools", s.labMutation(func(target *Server) http.HandlerFunc { return target.handleCreatePrefixPool }))
+		r.Delete("/network/pools/{id}", s.labMutation(func(target *Server) http.HandlerFunc { return target.handleDeletePrefixPool }))
 		r.Post("/network/allocations", s.handleCreateAllocation)
 		r.Get("/network/allocations", s.handleListAllocations)
 		r.Delete("/network/allocations/{id}", s.handleDeleteAllocation)

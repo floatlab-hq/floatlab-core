@@ -56,10 +56,11 @@ func runHostUpdate(t testT, fixture *applianceFixture) {
 	run(t, root, []string{"CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64"}, "go", "test", "-c", "-cover", "-coverpkg=./...", "-covermode=atomic", "-tags=appliance,integrationcoverage", "-ldflags=-s -w", "-o", hostBinary, "./internal/hostupgrade")
 	uploadUpgradeGuestFile(t, vm, hostBinary, "/floatlab/system/updates/appliance-host-tests")
 	hostDownloadCandidate(t, vm, candidate)
-	// Keep real workload data outside the management rollback tree throughout every host trial.
-	if out, e := guestCommand(vm, `set -eu; zfs create -o mountpoint=/floatlab/host-qualification-workload floatlab/host-qualification-workload; docker image inspect alpine:3.20 >/dev/null 2>&1 || docker pull alpine:3.20; docker run -d --name floatlab-host-qualification-workload --restart unless-stopped -v /floatlab/host-qualification-workload:/data alpine:3.20 sh -ec 'test -f /data/marker || echo baseline > /data/marker; while :; do sleep 30; done'`); e != nil {
-		t.Fatalf("create shared-engine workload fixture: %s %v", out, e)
-	}
+	client.waitReady()
+	client.login()
+	client.waitNodeReady()
+	workload := client.upgradeWorkload("host-update")
+	updatePath := "/api/v1/nodes/" + client.nodeID + "/updates/host"
 	for _, scenario := range []string{"firmware-fallback", "normal-fallback", "power-fallback", "heartbeat-fallback", "commit"} {
 		By(scenario)
 		func() {
@@ -74,22 +75,22 @@ func runHostUpdate(t testT, fixture *applianceFixture) {
 			}
 			before := hostBootID(t, vm)
 			if scenario == "firmware-fallback" {
-				if out, e := guestCommand(vm, `set -eu; printf trial-workload > /floatlab/host-qualification-workload/marker; sync`); e != nil {
-					t.Fatal(out, e)
-				}
+				workload("printf trial-workload > /data/upgrade-marker; sync")
 				hostGuestPhase(t, vm, "/floatlab/system/updates/appliance-host-tests", "TestHostApplianceActivateBadEFI", op, vars, false)
 				hostWaitBoot(t, vm, before, "recovered", sshKey, 15*time.Minute)
 				hostGuestPhase(t, vm, "/floatlab/system/updates/appliance-host-tests", "TestHostApplianceAssertRecovered", op, vars, true)
-				if out, e := guestCommand(vm, `set -eu; test "$(cat /floatlab/host-qualification-workload/marker)" = trial-workload; test "$(docker inspect --format '{{.State.Running}}' floatlab-host-qualification-workload)" = true`); e != nil {
-					t.Fatal(out, e)
-				}
+				client.login()
+				workload(`test "$(cat /data/upgrade-marker)" = trial-workload`)
+				client.cleanupUpgrade(updatePath, op)
 				hostGuestPhase(t, vm, "/floatlab/system/updates/appliance-host-tests", "TestHostApplianceCleanup", op, vars, true)
 				return
 			}
-			hostGuestPhase(t, vm, "/floatlab/system/updates/appliance-host-tests", "TestHostApplianceActivate", op, vars, false)
+			client.object("POST", updatePath+"/activate", map[string]string{"operation_id": op}, 202)
 			hostWaitBoot(t, vm, before, "ready", sshKey, 15*time.Minute)
 			hostGuestPhase(t, vm, "/floatlab/system/updates/appliance-host-tests", "TestHostApplianceAssertTrial", op, vars, true)
-			if out, e := guestCommand(vm, `set -eu; printf trial-write > /floatlab/system/management/raft/host-qualification.marker; printf trial-workload > /floatlab/host-qualification-workload/marker; sync`); e != nil {
+			client.login()
+			workload("printf trial-workload > /data/upgrade-marker; sync")
+			if out, e := guestCommand(vm, `set -eu; printf trial-write > /floatlab/system/management/raft/host-qualification.marker; sync`); e != nil {
 				t.Fatal(out, e)
 			}
 			before = hostBootID(t, vm)
@@ -111,7 +112,8 @@ func runHostUpdate(t testT, fixture *applianceFixture) {
 					t.Fatal(out, e)
 				}
 			case "commit":
-				hostGuestPhase(t, vm, "/floatlab/system/updates/appliance-host-tests", "TestHostApplianceCommit", op, vars, true)
+				client.object("POST", updatePath+"/commit", map[string]string{"operation_id": op}, 202)
+				client.waitUpgrade(updatePath, op, "committed", "")
 				if out, e := guestCommand(vm, "systemd-run --on-active=2s systemctl reboot"); e != nil {
 					t.Fatal(out, e)
 				}
@@ -124,9 +126,9 @@ func runHostUpdate(t testT, fixture *applianceFixture) {
 			}
 			hostWaitBoot(t, vm, before, state, sshKey, 15*time.Minute)
 			hostGuestPhase(t, vm, "/floatlab/system/updates/appliance-host-tests", phase, op, vars, true)
-			if out, e := guestCommand(vm, `set -eu; test "$(cat /floatlab/host-qualification-workload/marker)" = trial-workload; test "$(docker inspect --format '{{.State.Running}}' floatlab-host-qualification-workload)" = true; test "$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' floatlab-host-qualification-workload)" = unless-stopped`); e != nil {
-				t.Fatalf("OS fallback modified workload data or restart policy: %s %v", out, e)
-			}
+			client.login()
+			workload(`test "$(cat /data/upgrade-marker)" = trial-workload`)
+			client.cleanupUpgrade(updatePath, op)
 			hostGuestPhase(t, vm, "/floatlab/system/updates/appliance-host-tests", "TestHostApplianceCleanup", op, vars, true)
 		}()
 		if t.Failed() {
@@ -143,6 +145,58 @@ func assertHostARCBudget(t testT, vm *integrationvm.Guest) {
 		t.Fatalf("test appliance ARC budget: %s %v", out, err)
 	}
 	t.Log(out)
+}
+
+// The proof data lives in an ordinary managed stack, outside management checkpoints.
+func (c *apiClient) upgradeWorkload(name string) func(string) {
+	c.t.Helper()
+	name = fmt.Sprintf("%s-%d", name, time.Now().UnixNano())
+	compose := c.composeFixture(name, name, "alpine:3.20", "baseline")
+	compose = strings.Replace(compose, "echo baseline > /data/revision.txt", "test -f /data/revision.txt || echo baseline > /data/revision.txt", 1)
+	compose = strings.Replace(compose, "    image:", "    restart: unless-stopped\n    image:", 1)
+	started := c.startNewStack(name, compose)
+	c.t.Cleanup(func() { c.cleanupStack(started.StackID) })
+	c.waitOperation(started.OperationID)
+	c.waitStackState(started.StackID, "RunningPrimary")
+	containerID := c.assertContainerAPIs(started.StackID)
+	return func(command string) {
+		c.t.Helper()
+		c.waitStackState(started.StackID, "RunningPrimary")
+		if got := c.assertContainerAPIs(started.StackID); got != containerID {
+			c.t.Fatalf("upgrade replaced workload container: got %s, want %s", got, containerID)
+		}
+		// The public container projection does not expose Docker restart policy.
+		policy, err := guestCommand(c.vm, "docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' "+hostShellQuote(containerID))
+		if err != nil || strings.TrimSpace(policy) != "unless-stopped" {
+			c.t.Fatalf("upgrade changed workload restart policy: %s %v", policy, err)
+		}
+		c.execInContainer(started.StackID, containerID, []string{"sh", "-ec", command})
+	}
+}
+
+func (c *apiClient) waitUpgrade(path, operationID, state, phase string) {
+	c.t.Helper()
+	waitFor(c.t, 15*time.Minute, func() error {
+		var current map[string]any
+		if err := c.doJSON("GET", path+"/status?operation_id="+operationID, c.token, "", nil, &current); err != nil {
+			return err
+		}
+		if current["state"] == state && (phase == "" || current["phase"] == phase) && (state != "committed" || current["commit_finalized"] == true) {
+			return nil
+		}
+		return fmt.Errorf("waiting for update %s/%s: %+v", state, phase, current)
+	})
+}
+
+func (c *apiClient) cleanupUpgrade(path, operationID string) {
+	c.t.Helper()
+	current := c.object("GET", path+"/status?operation_id="+operationID, nil, 200)
+	phase := "cleaned"
+	if strings.HasSuffix(path, "/host") {
+		phase = current["state"].(string)
+	}
+	c.object("POST", path+"/cleanup", map[string]string{"operation_id": operationID}, 202)
+	c.waitUpgrade(path, operationID, current["state"].(string), phase)
 }
 
 func hostGuestPhase(t testT, vm *integrationvm.Guest, binary, phase, operation string, variables []string, wait bool) {

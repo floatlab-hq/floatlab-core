@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/floatlab/floatlab-core/internal/hostnetwork"
+	"github.com/floatlab/floatlab-core/internal/ipam"
 	"github.com/floatlab/floatlab-core/pkg/compose"
 )
 
@@ -66,48 +68,21 @@ func runCLICaddy(t testT, c *apiClient) {
 	name := fmt.Sprintf("cli-it-%d", time.Now().UnixNano())
 	marker := "floatlab-caddy-" + name
 	poolName := name + "-pool"
-	var pools []struct {
-		CIDR string `json:"cidr"`
-	}
+	var pools []ipam.Pool
 	if err := c.doJSON("GET", "/api/v1/settings/network-pools", c.token, "", nil, &pools); err != nil {
 		t.Fatal(err)
 	}
-	subnet := ""
-	for octet := 240; octet < 255; octet++ {
-		candidate := fmt.Sprintf("10.254.%d.0/24", octet)
-		prefix := netip.MustParsePrefix(candidate)
-		overlap := false
-		for _, pool := range pools {
-			existing, err := netip.ParsePrefix(pool.CIDR)
-			if err == nil && (prefix.Contains(existing.Addr()) || existing.Contains(prefix.Addr())) {
-				overlap = true
-			}
-		}
-		if !overlap {
-			subnet = candidate
-			break
-		}
+	var network struct {
+		Live hostnetwork.Live `json:"live"`
 	}
-	if subnet == "" {
-		t.Fatal("no free test subnet in 10.254.240.0/20")
+	if err := c.doJSON("GET", "/api/v1/nodes/"+nodes[0].ID+"/settings/network", c.token, "", nil, &network); err != nil {
+		t.Fatal(err)
 	}
-	prefix := netip.MustParsePrefix(subnet)
-	startIP := prefix.Addr().Next().Next()
-	endIP := startIP.Next().Next()
-	_, err = guestCommand(c.vm, "ip link show dev floatlab-lan")
+	prefix, startIP, endIP, err := caddyPoolRange(network.Live, pools)
 	if err != nil {
-		t.Fatalf("installer did not configure the LAN bridge: %v", err)
+		t.Fatal(err)
 	}
-	// Pools must belong to a node and match one of its actual LAN subnets.
-	lanAddress := prefix.Addr().Next().String() + "/24"
-	if out, err := guestCommand(c.vm, "ip address add "+lanAddress+" dev floatlab-lan"); err != nil {
-		t.Fatalf("add test LAN address: %s %v", out, err)
-	}
-	t.Cleanup(func() {
-		if _, err := guestCommand(c.vm, "ip address del "+lanAddress+" dev floatlab-lan"); err != nil {
-			t.Errorf("remove test LAN address: %v", err)
-		}
-	})
+	subnet := prefix.String()
 	var pool struct {
 		ID string `json:"id"`
 	}
@@ -339,5 +314,55 @@ func TestCaddyComposeFixture(t *testing.T) {
 	}
 	if _, err := compose.RuntimeYAML(source, "demo", "10.254.240.2"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Use the appliance's real LAN without changing host addresses or routes.
+func caddyPoolRange(live hostnetwork.Live, pools []ipam.Pool) (netip.Prefix, netip.Addr, netip.Addr, error) {
+	for _, address := range live.PrimaryAddresses {
+		prefix, err := netip.ParsePrefix(address)
+		if err != nil || !prefix.Addr().Is4() || prefix.Bits() > 29 {
+			continue
+		}
+		prefix = prefix.Masked()
+		for start := prefix.Addr().Next(); prefix.Contains(start); start = start.Next() {
+			end := start.Next().Next()
+			if !prefix.Contains(end.Next()) {
+				break // Reserve the broadcast address.
+			}
+			candidate := ipam.Pool{StartIP: start.String(), EndIP: end.String()}
+			if ipam.ValidateHostRange(candidate, live.PrimaryAddresses, live.Gateways) != nil {
+				continue
+			}
+			overlaps := false
+			for _, pool := range pools {
+				first, firstErr := netip.ParseAddr(pool.StartIP)
+				last, lastErr := netip.ParseAddr(pool.EndIP)
+				if firstErr != nil || lastErr != nil {
+					return netip.Prefix{}, netip.Addr{}, netip.Addr{}, fmt.Errorf("invalid existing pool range: %+v", pool)
+				}
+				if start.Compare(last) <= 0 && first.Compare(end) <= 0 {
+					overlaps = true
+					break
+				}
+			}
+			if !overlaps {
+				return prefix, start, end, nil
+			}
+		}
+	}
+	return netip.Prefix{}, netip.Addr{}, netip.Addr{}, fmt.Errorf("no free three-address range in appliance LAN")
+}
+
+func TestCaddyPoolRange(t *testing.T) {
+	live := hostnetwork.Live{PrimaryAddresses: []string{"192.0.2.2/24"}, Gateways: []string{"192.0.2.1"}}
+	pools := []ipam.Pool{{StartIP: "192.0.2.3", EndIP: "192.0.2.20"}}
+	prefix, start, end, err := caddyPoolRange(live, pools)
+	if err != nil || prefix.String() != "192.0.2.0/24" || start.String() != "192.0.2.21" || end.String() != "192.0.2.23" {
+		t.Fatalf("range=%s %s-%s error=%v", prefix, start, end, err)
+	}
+	pools[0].EndIP = "192.0.2.253"
+	if _, _, _, err := caddyPoolRange(live, pools); err == nil {
+		t.Fatal("accepted a range containing the broadcast address")
 	}
 }

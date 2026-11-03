@@ -1026,6 +1026,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/network/pools/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete an empty IPv6 prefix pool */
+        delete: operations["deletePrefixPool"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/settings/network-pools": {
         parameters: {
             query?: never;
@@ -1211,7 +1230,8 @@ export interface paths {
         get: operations["getAlert"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Delete a resolved alert and its notifications */
+        delete: operations["deleteAlert"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2614,6 +2634,17 @@ export interface components {
             resolution_reason?: string | null;
             /** @enum {string|null} */
             evaluation_state?: "inactive" | "pending" | "firing" | "unknown" | "resolved" | null;
+            /** @description Producer incident kind. */
+            kind?: string;
+            /** @description Exact resource of the currently open monitoring incident; null when unavailable. */
+            resource?: {
+                host_id?: string;
+                workload_id?: string;
+                pool?: string;
+                dataset?: string;
+                source_id?: string;
+                destination_id?: string;
+            } | null;
         };
         /** @enum {string} */
         LogLevel: "trace" | "debug" | "info" | "warn" | "error" | "fatal";
@@ -5077,6 +5108,40 @@ export interface operations {
             };
         };
     };
+    deletePrefixPool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Prefix pool deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Prefix pool not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pool still has allocated addresses. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     listNetworkPools: {
         parameters: {
             query?: never;
@@ -5571,6 +5636,40 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Error"];
                 };
+            };
+        };
+    };
+    deleteAlert: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resolved alert and linked notifications deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Alert not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Alert must be resolved before deletion. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

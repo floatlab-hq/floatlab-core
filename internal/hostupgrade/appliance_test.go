@@ -171,17 +171,6 @@ func runTestHostApplianceStage(t ginkgo.GinkgoTInterface) {
 	t.Logf("real OS staged source=%s target=%s operation=%s (qualification fixture; not a published support claim)", source.Version, target.Version, status.OperationID)
 }
 
-func runTestHostApplianceActivate(t ginkgo.GinkgoTInterface) {
-	m := applianceManager(t)
-	status, err := m.Activate(applianceContext(t), applianceOperation(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status.State != "armed" {
-		t.Fatalf("activation did not arm boot: %+v", status)
-	}
-}
-
 type brokenTrialEFI struct{ Linux }
 
 func (b brokenTrialEFI) Arm(ctx context.Context, s Status) error {
@@ -280,17 +269,6 @@ func runTestHostApplianceAssertTrial(t ginkgo.GinkgoTInterface) {
 	}
 }
 
-func runTestHostApplianceCommit(t ginkgo.GinkgoTInterface) {
-	m := applianceManager(t)
-	s, err := m.Commit(applianceContext(t), applianceOperation(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.State != "committed" || !s.CommitFinalized {
-		t.Fatalf("commit incomplete: %+v", s)
-	}
-}
-
 func runTestHostApplianceAssertRecovered(t ginkgo.GinkgoTInterface) {
 	m := applianceManager(t)
 	ctx := applianceContext(t)
@@ -317,23 +295,10 @@ func runTestHostApplianceAssertRecovered(t ginkgo.GinkgoTInterface) {
 	}
 }
 
-func runTestHostApplianceRollback(t ginkgo.GinkgoTInterface) {
-	m := applianceManager(t)
-	s, err := m.Rollback(applianceContext(t), applianceOperation(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.State != "recovering" {
-		t.Fatalf("rollback not scheduled: %+v", s)
-	}
-}
-
 func runTestHostApplianceCleanup(t ginkgo.GinkgoTInterface) {
 	m := applianceManager(t)
 	r := applianceOperation(t)
-	if _, err := m.Cleanup(applianceContext(t), r); err != nil {
-		t.Fatal(err)
-	}
+	// Cleanup is submitted through the authenticated API by the runner.
 	for _, name := range []string{"floatlab-root.tar.gz", "floatlab-root.tar.gz.partial"} {
 		if _, err := os.Stat(filepath.Join(m.Dir, r.OperationID, name)); !os.IsNotExist(err) {
 			t.Fatalf("terminal operation download remains: %s: %v", name, err)
@@ -389,12 +354,9 @@ func TestHostApplianceIntegration(t *testing.T) {
 
 var _ = ginkgo.DescribeTable("appliance phase", func(run func(ginkgo.GinkgoTInterface)) { run(ginkgo.GinkgoT()) },
 	ginkgo.Entry("TestHostApplianceStage", runTestHostApplianceStage),
-	ginkgo.Entry("TestHostApplianceActivate", runTestHostApplianceActivate),
 	ginkgo.Entry("TestHostApplianceActivateBadEFI", runTestHostApplianceActivateBadEFI),
 	ginkgo.Entry("TestHostApplianceAssertTrial", runTestHostApplianceAssertTrial),
-	ginkgo.Entry("TestHostApplianceCommit", runTestHostApplianceCommit),
 	ginkgo.Entry("TestHostApplianceAssertRecovered", runTestHostApplianceAssertRecovered),
-	ginkgo.Entry("TestHostApplianceRollback", runTestHostApplianceRollback),
 	ginkgo.Entry("TestHostApplianceCleanup", runTestHostApplianceCleanup),
 	ginkgo.Entry("TestHostApplianceAssertCommitted", runTestHostApplianceAssertCommitted),
 )

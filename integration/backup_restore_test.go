@@ -35,9 +35,7 @@ func defineBackupRestore(fixture *applianceFixture) {
 		source.client.waitOperation(started.OperationID)
 		source.client.waitStackState(started.StackID, "RunningPrimary")
 		source.assertWeb(started.StackID, original)
-		if out, err := source.guest("printf %s " + shellQuote(payload) + " > " + shellQuote("/"+dataset+"/replicated-data")); err != nil {
-			t.Fatalf("seed persistent data: %s %v", out, err)
-		}
+		source.execWeb(started.StackID, "printf %s "+shellQuote(payload)+" > /data/replicated-data")
 		if err := source.json("PUT", "/api/v1/storage/replication/"+started.StackID+"/targets", map[string]string{"dataset": dataset, "node_id": backupID, "schedule": "h/24 d/28"}, nil); err != nil {
 			t.Fatal(err)
 		}
@@ -174,8 +172,5 @@ func (n *labGuest) restoreBackupFingerprint(dataset, snapshot string) string {
 
 func assertRestoredWritable(t testT, node *labGuest, stack, payload string) {
 	t.Helper()
-	script := "set -eu; container=$(docker ps -q --filter label=com.docker.compose.project=" + shellQuote(stack) + " --filter label=com.docker.compose.service=web); test -n \"$container\"; docker exec \"$container\" sh -ec " + shellQuote("test \"$(cat /data/replicated-data)\" = "+shellQuote(payload)+"; printf %s restored-writable > /data/restore-write; test \"$(cat /data/restore-write)\" = restored-writable")
-	if out, err := node.guest(script); err != nil {
-		t.Fatalf("restored workload data/writability: %s %v", out, err)
-	}
+	node.execWeb(stack, "test \"$(cat /data/replicated-data)\" = "+shellQuote(payload)+"; printf %s restored-writable > /data/restore-write; test \"$(cat /data/restore-write)\" = restored-writable")
 }

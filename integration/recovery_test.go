@@ -176,20 +176,20 @@ func (c *apiClient) assertRecoveryWorkload() {
 	if err != nil || strings.TrimSpace(out) != dataset {
 		t.Fatalf("retained dataset missing: %s %v", out, err)
 	}
-	t.Cleanup(func() {
-		out, err := guestCommand(c.vm, "zfs list -H -o name -r floatlab | while IFS= read -r ds; do case \"$ds\" in '"+dataset+"'-recovery-*|'"+dataset+"'-restore-*) zfs destroy -r \"$ds\" ;; esac; done; zfs destroy -r '"+dataset+"'")
-		if err != nil {
-			t.Errorf("cleanup retained dataset: %s %v", out, err)
-		}
-	})
+	// The disposable VM owns intentionally retained data until fixture teardown.
 }
 
 func (c *apiClient) assertPrefixAllocation(name, stackID string) {
 	pool := c.object("POST", "/api/v1/network/pools", map[string]string{"name": name, "prefix": "fdfe:200::/127", "stack_id": stackID}, 201)
 	pid := pool["id"].(string)
 	c.t.Cleanup(func() {
-		c.cleanupSQL("DELETE FROM ip_reservations WHERE prefix_pool=?", pid)
-		c.cleanupSQL("DELETE FROM prefix_pools WHERE id=?", pid)
+		for _, value := range c.expect("GET", "/api/v1/network/allocations?stack_id="+stackID, nil, 200).([]interface{}) {
+			allocation := value.(map[string]interface{})
+			if allocation["prefix_pool"] == pid {
+				c.expect("DELETE", "/api/v1/network/allocations/"+allocation["id"].(string), nil, 204)
+			}
+		}
+		c.expect("DELETE", "/api/v1/network/pools/"+pid, nil, 204)
 	})
 	c.expect("GET", "/api/v1/network/pools", nil, 200)
 	allocations := []string{}
@@ -234,6 +234,7 @@ func (c *apiClient) assertDatasetRollback(id string) {
 	c.waitStackState(id, "Idle")
 	writeMarker := func(marker string) {
 		t.Helper()
+		// Container mounts expose child datasets; this fixture verifies the stopped parent.
 		out, err := guestCommand(c.vm, "printf '"+marker+"' > '"+mount+"/rollback-marker'")
 		if err != nil {
 			t.Fatalf("write dataset marker: %s %v", out, err)

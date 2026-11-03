@@ -333,9 +333,18 @@ func newLabGuest(t testT, fixture *applianceFixture, index int) *labGuest {
 		t.Fatal("standalone fixture returned an empty token")
 	}
 	n.client.token = standaloneToken.AccessToken
-	if out, err := n.guest("docker pull caddy:2-alpine"); err != nil {
-		t.Fatalf("preload partition workload image: %s %v", out, err)
-	}
+	n.client.waitNodeReady()
+	preloadName := fmt.Sprintf("image-preload-%d", time.Now().UnixNano())
+	compose := n.client.composeFixture(preloadName, preloadName, "caddy:2-alpine", "preload")
+	compose = strings.Replace(compose, "    image: caddy:2-alpine", "    image: caddy:2-alpine\n    entrypoint: []", 1)
+	preloaded := n.client.startNewStack(preloadName, compose)
+	preloadID := preloaded.StackID
+	t.Cleanup(func() { n.client.cleanupStack(preloadID) })
+	n.client.waitOperation(preloaded.OperationID)
+	n.client.waitStackState(preloadID, "RunningPrimary")
+	n.client.cleanupStack(preloadID)
+	n.client.waitStackDeleted(preloadID)
+	preloadID = ""
 	return n
 }
 
@@ -343,6 +352,8 @@ func (n *labGuest) guest(script string) (string, error) { return guestCommand(n.
 
 func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
 
+// Guest-agent transport keeps the real authenticated API reachable during
+// deliberate NIC partitions, independently of the network under test.
 func (n *labGuest) RoundTrip(request *http.Request) (*http.Response, error) {
 	var body []byte
 	var err error
@@ -483,13 +494,26 @@ func (n *labGuest) createWeb(owner, name string) string {
 	return started.StackID
 }
 
+func (n *labGuest) execWeb(stack, command string) string {
+	n.t.Helper()
+	var containers []struct{ ID, Service string }
+	if err := n.json("GET", "/api/v1/stacks/"+stack+"/containers", nil, &containers); err != nil {
+		n.t.Fatal(err)
+	}
+	for _, container := range containers {
+		if container.Service == "web" {
+			return n.client.execInContainer(stack, container.ID, []string{"sh", "-ec", command})
+		}
+	}
+	n.t.Fatalf("stack %s has no web container: %+v", stack, containers)
+	return ""
+}
+
 func (n *labGuest) assertWeb(id, marker string) {
 	n.t.Helper()
-	// A local HTTP probe proves the service runs, rather than trusting API state.
-	script := "container=$(docker ps -q --filter label=com.docker.compose.project=" + shellQuote(id) + " --filter label=com.docker.compose.service=web); test -n \"$container\"; docker exec \"$container\" wget -qO- http://127.0.0.1:8080/"
-	out, err := n.guest(script)
-	if err != nil || out != marker {
-		n.t.Fatalf("%s HTTP: %q, %v", id, out, err)
+	// Probe real workload HTTP through the supported container exec API.
+	if out := n.execWeb(id, "wget -qO- http://127.0.0.1:8080/"); out != marker {
+		n.t.Fatalf("%s HTTP: %q", id, out)
 	}
 	var status struct {
 		StackIP string `json:"stack_ip"`
@@ -501,7 +525,7 @@ func (n *labGuest) assertWeb(id, marker string) {
 	if err != nil || address.Compare(n.firstIP) < 0 || address.Compare(n.lastIP) > 0 {
 		n.t.Fatalf("stack address %s outside owner range %s-%s: %v", status.StackIP, n.firstIP, n.lastIP, err)
 	}
-	out, err = n.guest("curl --max-time 5 --fail --silent --show-error " + shellQuote("http://"+status.StackIP+":8088/"))
+	out, err := n.guest("curl --max-time 5 --fail --silent --show-error " + shellQuote("http://"+status.StackIP+":8088/"))
 	if err != nil || out != marker {
 		n.t.Fatalf("published HTTP %s: %q %v", status.StackIP, out, err)
 	}
