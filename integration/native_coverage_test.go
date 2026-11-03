@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -121,16 +122,44 @@ var _ = AfterSuite(func(ctx SpecContext) {
 		return
 	}
 	merged := filepath.Join(suiteDirectory, "merged")
-	Expect(os.MkdirAll(merged, 0755)).To(Succeed())
 	t := integrationT()
 	root, err := filepath.Abs("..")
 	Expect(err).NotTo(HaveOccurred())
-	run(t, root, nil, "go", "tool", "covdata", "merge", "-i="+strings.Join(dirs, ","), "-o="+merged)
+	Expect(mergeNativeCoverage(ctx, root, dirs, merged)).To(Succeed())
 	run(t, root, nil, "go", "tool", "covdata", "percent", "-i="+merged)
 	profile := filepath.Join(suiteDirectory, "coverage.out")
 	run(t, root, nil, "go", "tool", "covdata", "textfmt", "-i="+merged, "-o="+profile)
 	run(t, root, nil, "go", "tool", "cover", "-html="+profile, "-o="+filepath.Join(suiteDirectory, "coverage.html"))
 })
+
+func mergeNativeCoverage(ctx context.Context, root string, dirs []string, merged string) error {
+	if err := os.MkdirAll(merged, 0755); err != nil {
+		return err
+	}
+	// Linux limits each argument to 128 KiB, regardless of the total argv budget.
+	if len(strings.Join(dirs, ",")) > 64<<10 && len(dirs) > 1 {
+		partial, err := os.MkdirTemp(filepath.Dir(merged), ".coverage-merge-")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(partial)
+		groups := [][]string{dirs[:len(dirs)/2], dirs[len(dirs)/2:]}
+		dirs = nil
+		for i, group := range groups {
+			target := filepath.Join(partial, fmt.Sprint(i))
+			if err := mergeNativeCoverage(ctx, root, group, target); err != nil {
+				return err
+			}
+			dirs = append(dirs, target)
+		}
+	}
+	command := exec.CommandContext(ctx, "go", "tool", "covdata", "merge", "-i="+strings.Join(dirs, ","), "-o="+merged)
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("merge native coverage: %w: %s", err, output)
+	}
+	return nil
+}
 
 func compactStrings(values []string) []string {
 	var out []string
