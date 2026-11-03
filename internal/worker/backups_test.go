@@ -77,10 +77,23 @@ func TestRemovedBackupSkipsQueuedWorkAndRetriesCleanup(t *testing.T) {
 	daemon := ipc.NewServer(socket, zap.NewNop())
 	daemon.Handle("ping", func(context.Context, json.RawMessage) (any, error) { return nil, nil })
 	created := 0
+	sharedPoint := false
+	var snapshotOwner string
+	sharedCreates := 0
 	daemon.Handle("fs.snapshot.create", func(_ context.Context, raw json.RawMessage) (any, error) {
 		var request ipc.SnapshotCreatePayload
 		if err := json.Unmarshal(raw, &request); err != nil {
 			return nil, err
+		}
+		if sharedPoint {
+			owner := request.Properties["floatlab:operation-id"]
+			if snapshotOwner != "" && owner != snapshotOwner {
+				return nil, errors.New("same-slot automated snapshot name collision")
+			}
+			if snapshotOwner == "" {
+				sharedCreates++
+			}
+			snapshotOwner = owner
 		}
 		if request.Properties["floatlab:transfer-targets"] != "" || request.Properties["floatlab:transfer-generations"] != "" {
 			return nil, errors.New("unsent snapshot pinned for offline target")
@@ -132,6 +145,22 @@ func TestRemovedBackupSkipsQueuedWorkAndRetriesCleanup(t *testing.T) {
 	}
 	if created != 2 {
 		t.Fatalf("queued snapshots created=%d", created)
+	}
+	sharedPoint = true
+	for _, kind := range []string{"scheduled", "replication"} {
+		raw, _ := json.Marshal(map[string]interface{}{"dataset": target.Dataset, "node_id": "source", "stack_id": "app", "snap_type": kind, "name": "fl-000000", "operation_id": kind + "-request"})
+		if err := w.handleSnapshotCreate(ctx, raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sharedCreates != 1 || snapshotOwner == "" || snapshotOwner == "scheduled-request" || snapshotOwner == "replication-request" {
+		t.Fatalf("automatic snapshots kept per-request ownership: %s", snapshotOwner)
+	}
+	for _, kind := range []string{"user", "upgrade", "restore"} {
+		raw, _ := json.Marshal(map[string]interface{}{"dataset": target.Dataset, "node_id": "source", "stack_id": "app", "snap_type": kind, "name": "fl-000000", "operation_id": kind + "-request"})
+		if err := w.handleSnapshotCreate(ctx, raw); err == nil || !strings.Contains(err.Error(), "snapshot name collision") {
+			t.Fatalf("%s snapshot lost ownership guard: %v", kind, err)
+		}
 	}
 
 }

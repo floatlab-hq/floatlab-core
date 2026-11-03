@@ -665,6 +665,10 @@ func (w *Worker) handleSnapshotCreate(ctx context.Context, raw json.RawMessage) 
 		}
 	}
 	properties := map[string]string{"floatlab:operation-id": p.OperationID, "floatlab:purpose": p.SnapType}
+	if p.Name != "" && store.IsAutomatedSnapshot(name) && (p.SnapType == "scheduled" || p.SnapType == "replication") {
+		// Scheduler and manual replication share the same three-second point.
+		properties["floatlab:operation-id"] = "snapshot:" + p.Dataset + "@" + name
+	}
 	if _, err := w.pool.Execute(ctx, p.NodeID, "fs.snapshot.create", ipc.SnapshotCreatePayload{
 		Dataset:    p.Dataset,
 		Name:       name,
