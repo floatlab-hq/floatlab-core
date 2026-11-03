@@ -142,6 +142,18 @@
       };
 
       checks.${system} = {
+        power-management =
+        let
+          staysAwake = cfg:
+            pkgs.lib.all (name: cfg.services.logind.settings.Login.${name} == "ignore")
+              [ "IdleAction" "HandleLidSwitch" "HandleLidSwitchExternalPower" "HandleLidSwitchDocked" ]
+            && pkgs.lib.all (name: cfg.systemd.sleep.settings.Sleep.${name} == false)
+              [ "AllowSuspend" "AllowHibernation" "AllowHybridSleep" "AllowSuspendThenHibernate" ];
+        in assert pkgs.lib.all (name: staysAwake self.nixosConfigurations.${name}.config)
+             [ "floatlab-iso" "floatlab-installed" ];
+           pkgs.runCommand "floatlab-power-management-check" {} ''
+             touch "$out"
+           '';
         installer-answers = pkgs.runCommand "floatlab-installer-answers-check" { nativeBuildInputs = [ pkgs.python3 pkgs.bash pkgs.coreutils ]; } ''
           python3 ${./tests/installer-answers.py} ${./nixos/modules/installer-answers.sh}
           touch "$out"
