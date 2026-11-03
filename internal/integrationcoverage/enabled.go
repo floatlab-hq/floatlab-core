@@ -37,7 +37,7 @@ func ArchiveSandbox(source, operation string) error {
 		if !entry.IsDir() {
 			continue
 		}
-		target := filepath.Join("/floatlab/integration-coverage", "sandbox-"+operation, entry.Name())
+		target := filepath.Join("/floatlab/system/integration-coverage", "sandbox-"+operation, entry.Name())
 		if _, err := os.Stat(target); err == nil {
 			continue
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -56,7 +56,7 @@ func init() {
 		if _, err := os.Stat("/floatlab/system/etc/installed"); err != nil {
 			return
 		}
-		root = "/floatlab/integration-coverage"
+		root = "/floatlab/system/integration-coverage"
 	}
 	if err := os.MkdirAll(root, 0777); err != nil {
 		panic(err)
@@ -89,8 +89,8 @@ func init() {
 		// The independent boot guard starts before persistent datasets mount.
 		if root == "/run/floatlab-boot-recovery/coverage" {
 			mounts, err := os.ReadFile("/proc/self/mountinfo")
-			if err == nil && strings.Contains(string(mounts), " /floatlab/integration-coverage ") {
-				target := filepath.Join("/floatlab/integration-coverage", filepath.Base(dir))
+			if err == nil && strings.Contains(string(mounts), " /floatlab/system/integration-coverage ") {
+				target := filepath.Join("/floatlab/system/integration-coverage", filepath.Base(dir))
 				if err := copyCheckpoint(dir, target); err != nil {
 					fmt.Fprintln(os.Stderr, err)
 					return

@@ -42,6 +42,9 @@ elif name == "umount":
         s["runtime_mounted"] = False
     else:
         s["datasets"]["floatlab/os/installer"]["mounted"] = "no"
+elif name == "install" and args[:1] == ["-d"]:
+    if args[-1].startswith(str(state.parent)):
+        Path(args[-1]).mkdir(exist_ok=True)
 state.write_text(json.dumps(s))
 '''
 
@@ -51,7 +54,8 @@ class InstallerRoot(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         directory = Path(temp.name)
-        for name in ["zfs", "mount", "mountpoint", "umount", "chroot", "mkdir", "rm", "cp", "ln", "touch"]:
+        self.directory = directory
+        for name in ["zfs", "mount", "mountpoint", "umount", "chroot", "mkdir", "rm", "cp", "ln", "touch", "install", "mv", "ssh-keygen", "systemctl"]:
             shim = directory / name
             shim.write_text(SHIM.format(python=sys.executable))
             shim.chmod(0o755)
@@ -64,7 +68,8 @@ class InstallerRoot(unittest.TestCase):
 
     def run_script(self, action, succeeds=True):
         self.state.write_text(json.dumps(self.data))
-        result = subprocess.run(["bash", str(SCRIPT), action], env=self.env, capture_output=True, text=True)
+        script = SCRIPT.read_text().replace("sshdir=/floatlab/system/etc/ssh", f"sshdir={self.directory}/ssh")
+        result = subprocess.run(["bash", "-c", script, str(SCRIPT), action], env=self.env, capture_output=True, text=True)
         self.data = json.loads(self.state.read_text())
         self.assertEqual(result.returncode == 0, succeeds, result.stderr)
 
@@ -92,6 +97,25 @@ class InstallerRoot(unittest.TestCase):
         self.env["INVOCATION_ID"] = "another-invocation"
         self.run_script("cleanup", False)
         self.assertFalse(any(c[:2] == ["zfs", "destroy"] for c in self.data["commands"]))
+
+    def test_ssh_identity_is_adopted_once_and_existing_private_keys_are_kept(self):
+        self.run_script("prepare")
+        for kind in ["rsa", "ed25519"]:
+            name = f"ssh_host_{kind}_key"
+            key = str(self.directory / "ssh" / name)
+            self.assertIn(["install", "-m", "0600", f"/etc/ssh/{name}", key + ".tmp"], self.data["commands"])
+            self.assertIn(["ssh-keygen", "-y", "-f", key], self.data["commands"])
+        reload = self.data["commands"].index(["systemctl", "reload-or-restart", "sshd.service"])
+        chroot = next(i for i, c in enumerate(self.data["commands"]) if c[0] == "chroot")
+        self.assertLess(reload, chroot)
+        self.run_script("cleanup")
+        sshdir = self.directory / "ssh"
+        sshdir.mkdir(exist_ok=True)
+        for kind in ["rsa", "ed25519"]:
+            (sshdir / f"ssh_host_{kind}_key").write_text("existing private key")
+        self.data["commands"] = []
+        self.run_script("prepare")
+        self.assertFalse(any(c[0] == "install" and "/etc/ssh/" in c[-2] for c in self.data["commands"]))
 
     def test_failed_unmount_or_wrong_owner_prevents_destroy(self):
         self.run_script("prepare")

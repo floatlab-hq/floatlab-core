@@ -20,7 +20,7 @@
     wantedBy = [ "multi-user.target" ];
     requires = [ "floatlab-datasets.service" "systemd-networkd.service" "systemd-resolved.service" ] ++ lib.optional integrationCoverage "floatlab-integration-coverage.service";
     after = [ "floatlab-datasets.service" "systemd-networkd.service" "systemd-resolved.service" ] ++ lib.optional integrationCoverage "floatlab-integration-coverage.service";
-    environment = lib.optionalAttrs integrationCoverage { GOCOVERDIR = "/floatlab/integration-coverage"; };
+    environment = lib.optionalAttrs integrationCoverage { GOCOVERDIR = "/floatlab/system/integration-coverage"; };
     before = [ "network-online.target" "floatlab-hostd.service" "floatlab-core-stack.service" ];
     path = with pkgs; [ coreutils systemd ethtool ];
     serviceConfig = {
@@ -38,14 +38,14 @@
     path = [ pkgs.zfs pkgs.coreutils ];
     serviceConfig = { Type = "oneshot"; RemainAfterExit = true; };
     script = ''
-      if ! zfs list -H floatlab/integration-coverage >/dev/null 2>&1; then
-        zfs create -o mountpoint=/floatlab/integration-coverage floatlab/integration-coverage
+      if ! zfs list -H floatlab/system/integration-coverage >/dev/null 2>&1; then
+        zfs create -o mountpoint=/floatlab/system/integration-coverage floatlab/system/integration-coverage
       fi
-      if [ "$(zfs get -H -o value mounted floatlab/integration-coverage)" != yes ]; then
-        zfs mount floatlab/integration-coverage
+      if [ "$(zfs get -H -o value mounted floatlab/system/integration-coverage)" != yes ]; then
+        zfs mount floatlab/system/integration-coverage
       fi
-      mkdir -p /floatlab/integration-coverage
-      chmod 1777 /floatlab/integration-coverage
+      mkdir -p /floatlab/system/integration-coverage
+      chmod 1777 /floatlab/system/integration-coverage
     '';
   };
 }

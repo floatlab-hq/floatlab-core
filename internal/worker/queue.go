@@ -243,6 +243,37 @@ func (w *Worker) handleStackDelete(ctx context.Context, raw json.RawMessage) err
 	}
 	if p.Purge {
 		_ = w.ops.Update(ctx, p.OperationID, "running", "purging", "")
+		operations, err := w.db.Query(ctx, rqlite.Statement{SQL: `SELECT id FROM operations WHERE stack_id=? ORDER BY created_at DESC, id`, Params: []interface{}{p.StackID}})
+		if err != nil {
+			return err
+		}
+		// Promoted restores leave sibling clones that depend on the active tree.
+		var pending []string
+		for _, row := range operations.Values {
+			operationID, ok := row[0].(string)
+			if !ok || operationID == "" {
+				return fmt.Errorf("purge: invalid recovery operation identity")
+			}
+			for _, kind := range []string{"recovery", "restore"} {
+				pending = append(pending, p.DatasetPath+"-"+kind+"-"+operationID)
+			}
+		}
+		for len(pending) > 0 {
+			var blocked []string
+			var firstErr error
+			for _, dataset := range pending {
+				if _, err := w.pool.Execute(ctx, p.NodeID, "fs.dataset.destroy", ipc.DatasetDestroyPayload{Dataset: dataset, Recursive: true}); err != nil {
+					blocked = append(blocked, dataset)
+					if firstErr == nil {
+						firstErr = err
+					}
+				}
+			}
+			if len(blocked) == len(pending) {
+				return firstErr
+			}
+			pending = blocked
+		}
 		if _, err := w.pool.Execute(ctx, p.NodeID, "fs.dataset.destroy", ipc.DatasetDestroyPayload{Dataset: p.DatasetPath, Recursive: true}); err != nil {
 			return err
 		}
@@ -262,29 +293,36 @@ func (w *Worker) handleStackRestore(ctx context.Context, raw json.RawMessage) er
 	if w.operationDone(ctx, p.OperationID) {
 		return nil
 	}
+	op, err := w.ops.Get(ctx, p.OperationID)
+	if err != nil {
+		return err
+	}
+	swapStarted := op.Checkpoint == "activating-snapshot" || op.Checkpoint == "starting"
 	currentCompose := ""
 	if current, err := w.store.GetStack(ctx, p.StackID); err == nil {
 		currentCompose = current.ComposeYAML
 	}
-	if p.WasRunning {
-		_ = w.ops.Update(ctx, p.OperationID, "running", "stopping", "")
+	if p.WasRunning && op.Checkpoint != "activating-snapshot" {
+		if !swapStarted {
+			_ = w.ops.Update(ctx, p.OperationID, "running", "stopping", "")
+		}
 		if _, err := w.pool.Execute(ctx, p.NodeID, "compose.down", ipc.ComposeDownPayload{StackID: p.StackID, DatasetPath: p.DatasetPath}); err != nil {
 			return err
 		}
-	}
-	op, err := w.ops.Get(ctx, p.OperationID)
-	if err != nil {
-		return err
 	}
 	restoreSnapshot, err := store.AutomatedSnapshotName(op.CreatedAt)
 	if err != nil {
 		return err
 	}
-	_ = w.ops.Update(ctx, p.OperationID, "running", "preserving-current", "")
-	if _, err := w.pool.Execute(ctx, p.NodeID, "fs.snapshot.create", ipc.SnapshotCreatePayload{Dataset: p.DatasetPath, Name: restoreSnapshot, Recursive: true, Properties: map[string]string{"floatlab:operation-id": p.OperationID, "floatlab:purpose": "restore"}}); err != nil {
+	if !swapStarted {
+		_ = w.ops.Update(ctx, p.OperationID, "running", "preserving-current", "")
+		if _, err := w.pool.Execute(ctx, p.NodeID, "fs.snapshot.create", ipc.SnapshotCreatePayload{Dataset: p.DatasetPath, Name: restoreSnapshot, Recursive: true, Properties: map[string]string{"floatlab:operation-id": p.OperationID, "floatlab:purpose": "restore"}}); err != nil {
+			return err
+		}
+	}
+	if err := w.ops.Update(ctx, p.OperationID, "running", "activating-snapshot", ""); err != nil {
 		return err
 	}
-	_ = w.ops.Update(ctx, p.OperationID, "running", "activating-snapshot", "")
 	if err := w.restoreDatasets(ctx, p.NodeID, p.DatasetPath, p.Snapshot, p.OperationID); err != nil {
 		return err
 	}
@@ -296,7 +334,9 @@ func (w *Worker) handleStackRestore(ctx context.Context, raw json.RawMessage) er
 		return err
 	}
 	if p.WasRunning {
-		_ = w.ops.Update(ctx, p.OperationID, "running", "starting", "")
+		if err := w.ops.Update(ctx, p.OperationID, "running", "starting", ""); err != nil {
+			return err
+		}
 		if _, err := w.pool.Execute(ctx, p.NodeID, "compose.up", ipc.ComposeUpPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: p.ComposeFile}); err != nil {
 			return err
 		}
@@ -339,11 +379,23 @@ func (w *Worker) restoreDatasets(ctx context.Context, nodeID, root, snapshot, op
 	// The swap completed before the worker stopped. Promoting again is harmless,
 	// but cloning and renaming again would create a second recovery tree.
 	if hasRoot && hasRecovery {
+		if err := w.restoreMountpoints(ctx, nodeID, recovery, recovery, result.Datasets); err != nil {
+			return err
+		}
+		if err := w.restoreMountpoints(ctx, nodeID, root, root, result.Datasets); err != nil {
+			return err
+		}
 		return w.promoteTree(ctx, nodeID, root, result.Datasets)
 	}
 	// The old tree was renamed but the temporary clone was not activated yet.
 	if !hasRoot && hasRecovery && hasTemporary {
+		if err := w.restoreMountpoints(ctx, nodeID, recovery, recovery, result.Datasets); err != nil {
+			return err
+		}
 		if _, err := w.pool.Execute(ctx, nodeID, "fs.dataset.rename", ipc.DatasetRenamePayload{Source: temporary, Target: root}); err != nil {
+			return err
+		}
+		if err := w.restoreMountpoints(ctx, nodeID, temporary, root, result.Datasets); err != nil {
 			return err
 		}
 		return w.promoteTree(ctx, nodeID, root, result.Datasets)
@@ -360,10 +412,47 @@ func (w *Worker) restoreDatasets(ctx context.Context, nodeID, root, snapshot, op
 	if _, err := w.pool.Execute(ctx, nodeID, "fs.dataset.rename", ipc.DatasetRenamePayload{Source: root, Target: recovery}); err != nil {
 		return err
 	}
+	if err := w.restoreMountpoints(ctx, nodeID, root, recovery, current); err != nil {
+		return err
+	}
 	if _, err := w.pool.Execute(ctx, nodeID, "fs.dataset.rename", ipc.DatasetRenamePayload{Source: temporary, Target: root}); err != nil {
 		return err
 	}
+	if err := w.restoreMountpoints(ctx, nodeID, root, root, current); err != nil {
+		return err
+	}
 	return w.promoteTree(ctx, nodeID, root, current)
+}
+
+func (w *Worker) restoreMountpoints(ctx context.Context, nodeID, source, target string, datasets []ipc.DatasetInfoResult) error {
+	// Renames retain explicit mountpoints; clones inherit the pool's none.
+	var names []string
+	for _, dataset := range datasets {
+		if dataset.Name != source && !strings.HasPrefix(dataset.Name, source+"/") {
+			continue
+		}
+		names = append(names, target+strings.TrimPrefix(dataset.Name, source))
+	}
+	sort.Slice(names, func(i, j int) bool {
+		left, right := strings.Count(names[i], "/"), strings.Count(names[j], "/")
+		if left != right {
+			return left < right
+		}
+		return names[i] < names[j]
+	})
+	// Explicit child mounts must be released before their parent can move.
+	for i := len(names) - 1; i >= 0; i-- {
+		name := names[i]
+		if _, err := w.pool.Execute(ctx, nodeID, "fs.dataset.set", ipc.DatasetSetPayload{Dataset: name, Properties: map[string]string{"mountpoint": "none"}}); err != nil {
+			return fmt.Errorf("restore: unmount %s: %w", name, err)
+		}
+	}
+	for _, name := range names {
+		if _, err := w.pool.Execute(ctx, nodeID, "fs.dataset.set", ipc.DatasetSetPayload{Dataset: name, Properties: map[string]string{"mountpoint": "/" + name}}); err != nil {
+			return fmt.Errorf("restore: mount %s at /%s: %w", name, name, err)
+		}
+	}
+	return nil
 }
 
 func (w *Worker) promoteTree(ctx context.Context, nodeID, root string, datasets []ipc.DatasetInfoResult) error {

@@ -29,7 +29,7 @@ var _ = DescribeTableSubtree("Package integration", func(label, pkg, runner, gat
 			const target = "/floatlab/system/updates/package-tests"
 			uploadUpgradeGuestFile(t, client.vm, binary, target)
 			prefix := target + "-" + label
-			script := fmt.Sprintf("mkdir -p /floatlab/integration-coverage/package-%s; (%s=1 %s -test.gocoverdir=/floatlab/integration-coverage/package-%s -test.run='^%s$' -test.v -test.timeout=5m -ginkgo.json-report=%s.json >%s.log 2>&1; echo $? >%s.exit) </dev/null >/dev/null 2>&1 & echo started", label, gate, target, label, runner, prefix, prefix, prefix)
+			script := fmt.Sprintf("mkdir -p /floatlab/system/integration-coverage/package-%s; (%s=1 %s -test.gocoverdir=/floatlab/system/integration-coverage/package-%s -test.run='^%s$' -test.v -test.timeout=5m -ginkgo.json-report=%s.json >%s.log 2>&1; echo $? >%s.exit) </dev/null >/dev/null 2>&1 & echo started", label, gate, target, label, runner, prefix, prefix, prefix)
 			if out, err := guestCommand(client.vm, script); err != nil {
 				t.Fatal(out, err)
 			}

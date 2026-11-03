@@ -28,7 +28,12 @@ func (c *apiClient) assertRecoveryWorkload() {
 	}
 	backup := c.object("POST", "/api/v1/nodes", map[string]string{"name": name + "-backup", "hostname": "unreachable.invalid", "zfs_pool": "floatlab"}, 201)
 	backupID := backup["id"].(string)
-	t.Cleanup(func() { c.expect("DELETE", "/api/v1/nodes/"+backupID, nil, 204) })
+	backupExists := true
+	t.Cleanup(func() {
+		if backupExists {
+			c.expect("DELETE", "/api/v1/nodes/"+backupID, nil, 204)
+		}
+	})
 	targetsPath := "/api/v1/storage/replication/" + id + "/targets"
 	target := map[string]string{"dataset": "floatlab/" + name + "/data", "node_id": backupID, "schedule": "h/24 d/28"}
 	c.object("PUT", targetsPath, target, 200)
@@ -44,6 +49,8 @@ func (c *apiClient) assertRecoveryWorkload() {
 	}
 	c.expect("DELETE", targetsPath, target, 202)
 	targetEnabled = false
+	c.expect("DELETE", "/api/v1/nodes/"+backupID, nil, 204)
+	backupExists = false
 	started := c.mutate(http.MethodPost, stackPath+"/start", nil, "application/json")
 	c.waitOperation(started.OperationID)
 	c.waitStackState(id, "RunningPrimary")

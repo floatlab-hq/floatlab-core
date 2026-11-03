@@ -50,6 +50,7 @@ func runHostUpdate(t testT, fixture *applianceFixture) {
 	fixture.image = iso
 	client := startApplianceWithAnswers(t, fixture, nil)
 	vm := client.vm
+	sshKey := hostSSHKey(t, vm)
 	assertHostARCBudget(t, vm)
 	hostBinary := filepath.Join(work, "host-tests")
 	run(t, root, []string{"CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64"}, "go", "test", "-c", "-cover", "-coverpkg=./...", "-covermode=atomic", "-tags=appliance,integrationcoverage", "-ldflags=-s -w", "-o", hostBinary, "./internal/hostupgrade")
@@ -77,7 +78,7 @@ func runHostUpdate(t testT, fixture *applianceFixture) {
 					t.Fatal(out, e)
 				}
 				hostGuestPhase(t, vm, "/floatlab/system/updates/appliance-host-tests", "TestHostApplianceActivateBadEFI", op, vars, false)
-				hostWaitBoot(t, vm, before, "recovered", 15*time.Minute)
+				hostWaitBoot(t, vm, before, "recovered", sshKey, 15*time.Minute)
 				hostGuestPhase(t, vm, "/floatlab/system/updates/appliance-host-tests", "TestHostApplianceAssertRecovered", op, vars, true)
 				if out, e := guestCommand(vm, `set -eu; test "$(cat /floatlab/host-qualification-workload/marker)" = trial-workload; test "$(docker inspect --format '{{.State.Running}}' floatlab-host-qualification-workload)" = true`); e != nil {
 					t.Fatal(out, e)
@@ -86,7 +87,7 @@ func runHostUpdate(t testT, fixture *applianceFixture) {
 				return
 			}
 			hostGuestPhase(t, vm, "/floatlab/system/updates/appliance-host-tests", "TestHostApplianceActivate", op, vars, false)
-			hostWaitBoot(t, vm, before, "ready", 15*time.Minute)
+			hostWaitBoot(t, vm, before, "ready", sshKey, 15*time.Minute)
 			hostGuestPhase(t, vm, "/floatlab/system/updates/appliance-host-tests", "TestHostApplianceAssertTrial", op, vars, true)
 			if out, e := guestCommand(vm, `set -eu; printf trial-write > /floatlab/system/management/raft/host-qualification.marker; printf trial-workload > /floatlab/host-qualification-workload/marker; sync`); e != nil {
 				t.Fatal(out, e)
@@ -121,7 +122,7 @@ func runHostUpdate(t testT, fixture *applianceFixture) {
 				state = "committed"
 				phase = "TestHostApplianceAssertCommitted"
 			}
-			hostWaitBoot(t, vm, before, state, 15*time.Minute)
+			hostWaitBoot(t, vm, before, state, sshKey, 15*time.Minute)
 			hostGuestPhase(t, vm, "/floatlab/system/updates/appliance-host-tests", phase, op, vars, true)
 			if out, e := guestCommand(vm, `set -eu; test "$(cat /floatlab/host-qualification-workload/marker)" = trial-workload; test "$(docker inspect --format '{{.State.Running}}' floatlab-host-qualification-workload)" = true; test "$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' floatlab-host-qualification-workload)" = unless-stopped`); e != nil {
 				t.Fatalf("OS fallback modified workload data or restart policy: %s %v", out, e)
@@ -152,7 +153,7 @@ func hostGuestPhase(t testT, vm *integrationvm.Guest, binary, phase, operation s
 	for _, v := range variables {
 		environment += " " + hostShellQuote(v)
 	}
-	script := fmt.Sprintf("rm -f %[1]s.exit %[1]s.json; coverage_dir=/floatlab/integration-coverage/guest-$(basename %[1]s)-$(date +%%s%%N); mkdir -p \"$coverage_dir\"; (GOCOVERDIR=\"$coverage_dir\" %[2]s %[3]s -test.gocoverdir=\"$coverage_dir\" -test.run='^TestHostApplianceIntegration$' -ginkgo.focus='%[4]s$' -ginkgo.json-report=%[1]s.json -test.v -test.timeout=25m >%[1]s.log 2>&1; echo $? >%[1]s.exit) </dev/null >/dev/null 2>&1 & echo started", prefix, environment, binary, phase)
+	script := fmt.Sprintf("rm -f %[1]s.exit %[1]s.json; coverage_dir=/floatlab/system/integration-coverage/guest-$(basename %[1]s)-$(date +%%s%%N); mkdir -p \"$coverage_dir\"; (GOCOVERDIR=\"$coverage_dir\" %[2]s %[3]s -test.gocoverdir=\"$coverage_dir\" -test.run='^TestHostApplianceIntegration$' -ginkgo.focus='%[4]s$' -ginkgo.json-report=%[1]s.json -test.v -test.timeout=25m >%[1]s.log 2>&1; echo $? >%[1]s.exit) </dev/null >/dev/null 2>&1 & echo started", prefix, environment, binary, phase)
 	if out, err := guestCommand(vm, script); err != nil {
 		t.Fatalf("start %s: %s %v", phase, out, err)
 	}
@@ -188,7 +189,17 @@ func hostBootID(t testT, vm *integrationvm.Guest) string {
 	}
 	return strings.TrimSpace(out)
 }
-func hostWaitBoot(t testT, vm *integrationvm.Guest, before, state string, timeout time.Duration) {
+func hostSSHKey(t testT, vm *integrationvm.Guest) string {
+	t.Helper()
+	out, err := guestCommand(vm, "cat /etc/ssh/ssh_host_ed25519_key.pub")
+	fields := strings.Fields(out)
+	if err != nil || len(fields) < 2 || fields[0] != "ssh-ed25519" {
+		t.Fatalf("read appliance SSH host identity: %s %v", out, err)
+	}
+	return strings.Join(fields[:2], " ")
+}
+
+func hostWaitBoot(t testT, vm *integrationvm.Guest, before, state, sshKey string, timeout time.Duration) {
 	t.Helper()
 	waitFor(t, timeout, func() error {
 		script := "set -eu; op=$(jq -r .operation_id /floatlab/system/updates/host.json); for phase in TestHostApplianceActivate TestHostApplianceActivateBadEFI; do result=/floatlab/system/updates/acceptance-$op-$phase; if [ -f \"$result.exit\" ] && [ \"$(cat \"$result.exit\")\" != 0 ]; then printf 'HOST_ACTIVATION_FAILED\\n'; cat \"$result.log\"; exit 0; fi; done; test \"$(cat /proc/sys/kernel/random/boot_id)\" != " + hostShellQuote(before) + "; test \"$(jq -r .state /floatlab/system/updates/host.json)\" = " + hostShellQuote(state) + "; curl -fsS http://127.0.0.1:8080/api/v1/health/ready; systemctl is-active --quiet floatlab-core-stack.service; flock -n /floatlab/system/updates/update.lock true"
@@ -201,6 +212,9 @@ func hostWaitBoot(t testT, vm *integrationvm.Guest, before, state string, timeou
 		}
 		return nil
 	})
+	if hostSSHKey(t, vm) != sshKey {
+		t.Fatal("SSH host identity changed across installed OS reboot")
+	}
 }
 
 func hostDownloadCandidate(t testT, vm *integrationvm.Guest, directory string) {

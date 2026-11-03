@@ -144,9 +144,9 @@ in {
   boot.kernel.sysctl."net.ipv4.conf.default.forwarding" = true;
   systemd.services.floatlab-installer-root = {
     description = "Temporary installed root for installer verification";
-    requires = [ "floatlab-datasets.service" ];
-    after = [ "floatlab-datasets.service" ];
-    path = with pkgs; [ coreutils util-linux zfs ];
+    requires = [ "floatlab-datasets.service" "sshd-keygen.service" ];
+    after = [ "floatlab-datasets.service" "sshd-keygen.service" ];
+    path = with pkgs; [ coreutils util-linux zfs openssh systemd ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
@@ -176,7 +176,7 @@ in {
   };
   systemd.services.floatlab-hostd = {
     environment = { SYSTEMD_OFFLINE = "0"; } // lib.optionalAttrs integrationCoverage {
-      GOCOVERDIR = "/floatlab/integration-coverage";
+      GOCOVERDIR = "/floatlab/system/integration-coverage";
     };
     requires = [ "floatlab-installer-root.service" "floatlab-network-config.service" ];
     after = [ "floatlab-installer-root.service" "floatlab-network-config.service" ];
@@ -192,7 +192,7 @@ in {
   };
   systemd.services.floatlab-core-stack = {
     environment = lib.optionalAttrs integrationCoverage {
-      GOCOVERDIR = "/floatlab/integration-coverage";
+      GOCOVERDIR = "/floatlab/system/integration-coverage";
     };
     requires = [ "floatlab-installer-root.service" "docker.service" "floatlab-hostd.service" "floatlab-network-config.service" ];
     after = [ "floatlab-installer-root.service" "docker.service" "floatlab-hostd.service" "floatlab-network-config.service" "network-online.target" ];

@@ -169,7 +169,7 @@ def container_bundle(directory, management, sidecars, expected_manage_id=None):
         if count != 1:
             raise ValueError(f"Missing Compose image for {service}")
     if os.environ.get("FLOATLAB_INTEGRATION_COVERAGE") == "1":
-        compose = compose.replace("      FLOATLAB_ACTIVATION_DIR:", "      GOCOVERDIR: /floatlab/integration-coverage\n      FLOATLAB_ACTIVATION_DIR:")
+        compose = compose.replace("      FLOATLAB_ACTIVATION_DIR:", "      GOCOVERDIR: /floatlab/system/integration-coverage\n      FLOATLAB_ACTIVATION_DIR:")
     (directory / "docker-compose.yml").write_text(compose)
     write(directory / "images.json", images)
 

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -645,7 +646,12 @@ func verifyHashedAccount(ctx context.Context, sub Submission) (string, error) {
 		return "", err
 	}
 	// rqlite is internal to the Compose network; query it through the installed runtime.
-	data, err := exec.CommandContext(ctx, "chroot", Runtime+"/root", "/run/current-system/sw/bin/docker", "compose", "-f", "/floatlab/system/docker-compose.yml", "exec", "-T", "rqlite", "wget", "-qO-", "--header=Content-Type: application/json", "--post-data="+string(query), "http://127.0.0.1:4001/db/query?level=weak").Output()
+	command := exec.CommandContext(ctx, "chroot", Runtime+"/root", "/run/current-system/sw/bin/docker", "compose", "-f", "/floatlab/system/docker-compose.yml", "exec", "-T", "rqlite", "wget", "-qO-", "--header=Content-Type: application/json", "--post-data="+string(query), "http://127.0.0.1:4001/db/query?level=weak")
+	if sub.Host.EnableLab {
+		// Lab startup replaces anonymous HTTP with the local node's mutual TLS endpoint.
+		command = exec.CommandContext(ctx, "chroot", Runtime+"/root", "/run/current-system/sw/bin/curl", "--silent", "--show-error", "--fail", "--max-time", "10", "--cacert", Persistent+"/lab/ca.pem", "--cert", Persistent+"/lab/node.pem", "--key", Persistent+"/lab/node-key.pem", "--header", "Content-Type: application/json", "--data-binary", string(query), "https://"+net.JoinHostPort(sub.Host.Network.IPv4.Address, "4001")+"/db/query?level=weak")
+	}
+	data, err := command.Output()
 	var result struct {
 		Results []struct {
 			Values [][]any `json:"values"`

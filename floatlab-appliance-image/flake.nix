@@ -235,6 +235,14 @@
            assert installed.users.users.root.hashedPasswordFile == "/floatlab/system/etc/root-password.hash";
            assert !installed.users.mutableUsers;
            assert installed.services.openssh.settings.PermitRootLogin == "prohibit-password";
+           assert map (key: key.path) installed.services.openssh.hostKeys == [
+             "/floatlab/system/etc/ssh/ssh_host_rsa_key"
+             "/floatlab/system/etc/ssh/ssh_host_ed25519_key"
+           ];
+           assert installed.environment.etc."ssh/ssh_host_ed25519_key.pub".source == "/floatlab/system/etc/ssh/ssh_host_ed25519_key.pub";
+           assert builtins.elem "sshd-keygen.service" cfg.systemd.services.floatlab-installer-root.requires;
+           assert builtins.elem "floatlab-datasets.service" installed.systemd.services.sshd-keygen.requires;
+           assert builtins.elem "sshd-keygen.service" installed.systemd.services.floatlab-hostd.requires;
            assert installed.hardware.enableAllHardware;
            assert pkgs.lib.all (name: builtins.elem name installed.boot.initrd.availableKernelModules)
              [ "virtio_blk" "virtio_scsi" "nvme" "ahci" "uas" "hpsa" "hv_storvsc" ];

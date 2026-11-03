@@ -13,7 +13,7 @@
   }) ];
   systemd.services.floatlab-hostd = {
     description = "FloatLab host daemon";
-    environment = lib.optionalAttrs integrationCoverage { GOCOVERDIR = "/floatlab/integration-coverage"; };
+    environment = lib.optionalAttrs integrationCoverage { GOCOVERDIR = "/floatlab/system/integration-coverage"; };
     path = with pkgs; [ coreutils docker inetutils iproute2 openssh zfs systemd ethtool util-linux gnutar gzip nix efibootmgr floatlab-zbm-kcl nftables docker-compose sqlite ];
     wantedBy = [ "multi-user.target" ];
     requires = [ "floatlab-network-config.service" "floatlab-datasets.service" "floatlab-lab-quarantine.service" ] ++ lib.optional integrationCoverage "floatlab-integration-coverage.service";

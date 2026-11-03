@@ -223,7 +223,7 @@ func guestCommand(vm *integrationvm.Guest, script string) (string, error) {
 			return out, fmt.Errorf("checkpoint before destructive command: %w", err)
 		}
 	}
-	return vm.Exec(ctx, "export GOCOVERDIR=/floatlab/integration-coverage; "+script)
+	return vm.Exec(ctx, "export GOCOVERDIR=/floatlab/system/integration-coverage; "+script)
 }
 
 func startApplianceWithAnswers(t testT, fixture *applianceFixture, configuration *installer.Answers) *apiClient {

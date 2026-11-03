@@ -23,7 +23,7 @@ for process in /proc/[0-9]*; do
   namespace_pid=$(awk '/^NSpid:/ {print $NF}' "$process/status")
   test -n "$namespace_pid" || namespace_pid=$pid
   start=$(awk '{print $22}' "$process/stat")
-  directory=$(find /floatlab/integration-coverage /run/floatlab-boot-recovery/coverage -mindepth 1 -maxdepth 1 -type d -name "*-$namespace_pid-$start" 2>/dev/null | head -n 1)
+  directory=$(find /floatlab/system/integration-coverage /run/floatlab-boot-recovery/coverage -mindepth 1 -maxdepth 1 -type d -name "*-$namespace_pid-$start" 2>/dev/null | head -n 1)
   test -n "$directory"
   rm -f "$directory/checkpoint"
   kill -USR2 "$pid"
@@ -31,7 +31,7 @@ for process in /proc/[0-9]*; do
   test -e "$directory/checkpoint"
  ;; esac
 done
-if test -d /run/floatlab-boot-recovery/coverage; then cp -a /run/floatlab-boot-recovery/coverage/. /floatlab/integration-coverage/; fi`
+if test -d /run/floatlab-boot-recovery/coverage; then cp -a /run/floatlab-boot-recovery/coverage/. /floatlab/system/integration-coverage/; fi`
 
 func checkpointGuest(t testT, vm *integrationvm.Guest) {
 	t.Helper()
@@ -45,7 +45,7 @@ func collectGuestCoverage(vm *integrationvm.Guest, directory string) error {
 	if _, err := guestCommand(vm, checkpointScript); err != nil {
 		return err
 	}
-	out, err := guestCommand(vm, `find /floatlab/integration-coverage -type f \( -name 'covmeta.*' -o -name 'covcounters.*' \)`)
+	out, err := guestCommand(vm, `find /floatlab/system/integration-coverage -type f \( -name 'covmeta.*' -o -name 'covcounters.*' \)`)
 	if err != nil {
 		return err
 	}
@@ -56,7 +56,7 @@ func collectGuestCoverage(vm *integrationvm.Guest, directory string) error {
 	ctx, cancel := context.WithTimeout(integrationT().Context(), 5*time.Minute)
 	defer cancel()
 	for _, source := range files {
-		rel, err := filepath.Rel("/floatlab/integration-coverage", source)
+		rel, err := filepath.Rel("/floatlab/system/integration-coverage", source)
 		if err != nil || strings.HasPrefix(rel, "..") {
 			return fmt.Errorf("invalid coverage path %q", source)
 		}
@@ -76,7 +76,7 @@ func latestCoverageFiles(paths []string) ([]string, error) {
 	for _, path := range paths {
 		// The runtime also writes root-level exit profiles. The hook's per-boot,
 		// per-process checkpoints avoid PID collisions across guest reboots.
-		if filepath.Dir(path) == "/floatlab/integration-coverage" {
+		if filepath.Dir(path) == "/floatlab/system/integration-coverage" {
 			continue
 		}
 		name := filepath.Base(path)

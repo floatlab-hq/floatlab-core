@@ -2,6 +2,7 @@ set -eu
 runtime=/run/floatlab-installer
 root=$runtime/root
 dataset=floatlab/os/installer
+sshdir=/floatlab/system/etc/ssh
 
 case "$1" in
 prepare)
@@ -20,6 +21,22 @@ prepare)
     echo "Installer runtime already exists; inspect it before retrying" >&2
     exit 1
   fi
+  # Retain the live SSH identity through verification, installed boots and OS upgrades.
+  install -d -m 0700 "$sshdir"
+  for kind in rsa ed25519; do
+    name=ssh_host_${kind}_key
+    key=$sshdir/$name
+    if ! test -s "$key"; then
+      install -m 0600 "/etc/ssh/$name" "$key.tmp"
+      mv -T "$key.tmp" "$key"
+    fi
+    ssh-keygen -y -f "$key" > "$key.pub.tmp"
+    chmod 0644 "$key.pub.tmp"
+    mv -T "$key.pub.tmp" "$key.pub"
+    ln -sfn "$key" "/etc/ssh/$name"
+    ln -sfn "$key.pub" "/etc/ssh/$name.pub"
+  done
+  systemctl reload-or-restart sshd.service
   mkdir -p "$root"
   # Keep the temporary ZFS mount out of other services' mount namespaces.
   mount --bind "$runtime" "$runtime"

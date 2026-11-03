@@ -29,7 +29,7 @@ func (c *apiClient) assertManagementUpdateAppliance() {
 	runGuestTest := func(name string, wantExit int) {
 		t.Helper()
 		prefix := "/floatlab/system/updates/acceptance-" + name
-		script := fmt.Sprintf("rm -f %[1]s.exit %[1]s.json; coverage_dir=/floatlab/integration-coverage/guest-$(basename %[1]s)-$(date +%%s%%N); mkdir -p \"$coverage_dir\"; (GOCOVERDIR=\"$coverage_dir\" FLOATLAB_MANAGEMENT_APPLIANCE=1 %[2]s -test.gocoverdir=\"$coverage_dir\" -test.run='^TestManagementApplianceIntegration$' -ginkgo.focus='%[3]s$' -ginkgo.json-report=%[1]s.json -test.v -test.timeout=20m >%[1]s.log 2>&1; echo $? >%[1]s.exit) </dev/null >/dev/null 2>&1 & echo started", prefix, remote, name)
+		script := fmt.Sprintf("rm -f %[1]s.exit %[1]s.json; coverage_dir=/floatlab/system/integration-coverage/guest-$(basename %[1]s)-$(date +%%s%%N); mkdir -p \"$coverage_dir\"; (GOCOVERDIR=\"$coverage_dir\" FLOATLAB_MANAGEMENT_APPLIANCE=1 %[2]s -test.gocoverdir=\"$coverage_dir\" -test.run='^TestManagementApplianceIntegration$' -ginkgo.focus='%[3]s$' -ginkgo.json-report=%[1]s.json -test.v -test.timeout=20m >%[1]s.log 2>&1; echo $? >%[1]s.exit) </dev/null >/dev/null 2>&1 & echo started", prefix, remote, name)
 		if out, err := guestCommand(c.vm, script); err != nil {
 			t.Fatalf("start guest test: %s %v", out, err)
 		}

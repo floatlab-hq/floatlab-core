@@ -51,7 +51,7 @@ func TestLabFirewallRejectsUnenrolledConsensusBeforeDockerDNAT(t *testing.T) {
 }
 
 func TestLabEmptinessRejectsOrphanedWorkloadAndProtectionMaterial(t *testing.T) {
-	names := []string{"floatlab", "floatlab/os", "floatlab/os/v1@base", "floatlab/system", "floatlab/system/docker/a", "floatlab/stacks", "floatlab/orphan@retained", "floatlab/stacks/old", "floatlab/system/protection/old/stack"}
+	names := []string{"floatlab", "floatlab/os", "floatlab/os/v1@base", "floatlab/system", "floatlab/system/docker/a", "floatlab/system/integration-coverage", "floatlab/stacks", "floatlab/orphan@retained", "floatlab/stacks/old", "floatlab/system/protection/old/stack"}
 	retained := labRetainedDatasets(names)
 	if len(retained) != 3 || retained[0] != "floatlab/orphan@retained" || retained[2] != "floatlab/system/protection/old/stack" {
 		t.Fatal(retained)
