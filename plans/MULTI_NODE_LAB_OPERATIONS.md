@@ -117,16 +117,22 @@ CA or host SSH key.
 
 ## Automated verification
 
-`scripts/test-multi-node.sh` builds appliances, creates owned libvirt fixtures,
+The Go integration suite builds appliances, creates owned libvirt fixtures,
 partitions guest interfaces, runs local API requests through the guest agent,
 checks actual published HTTP service access and compares local/replica SQLite
 state after healing. It includes joining a populated source, two- and three-node
 partitions, controller restart, normal removal and fenced lost-quorum recovery.
 It cleans up its VMs, private network and storage pool automatically.
 
-Run inside the development shell on a host with KVM and libvirt access. Set
-`FLOATLAB_REPORT_DIR` to retain logs; the default is
-`/tmp/floatlab-multi-node-reports`. `scripts/test-workloads.sh` runs the existing
-single-node workload suite twice and then this multi-node suite in disposable
-appliance mode. Existing-appliance mode explicitly reports that multi-node tests
-still need to be run separately.
+Run inside the development shell on a host with KVM and libvirt access:
+
+```sh
+FLOATLAB_INTEGRATION=1 go test -count=1 -timeout 12h -v ./integration \
+  -args -ginkgo.label-filter=multi-node
+```
+
+Each appliance uses 3584 MiB RAM. Reports are written to a unique
+`/tmp/floatlab-reports-*` directory; `FLOATLAB_REPORT_DIR` changes the parent
+directory. Omit the label filter to include single-node workflows, package
+integration and host upgrades. Existing appliances are not supported. Run the
+full suite twice when qualifying repeatability.

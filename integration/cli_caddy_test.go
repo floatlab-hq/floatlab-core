@@ -3,8 +3,6 @@ package integration_test
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"net/netip"
 	"os"
@@ -17,20 +15,7 @@ import (
 	"github.com/floatlab/floatlab-core/pkg/compose"
 )
 
-func TestCLICaddy(t *testing.T) {
-	if os.Getenv("FLOATLAB_CLI_INTEGRATION") != "1" {
-		t.Skip("run with FLOATLAB_CLI_INTEGRATION=1 go test -run '^TestCLICaddy$' -count=1 -timeout 30m -v ./integration")
-	}
-	if os.Getenv("API_URL") == "" {
-		if _, err := os.Stat("/dev/kvm"); err != nil {
-			t.Fatal("Caddy VM integration requires /dev/kvm; use API_URL and VM_SSH for an existing development VM")
-		}
-		for _, name := range []string{"nix", "virsh"} {
-			if _, err := exec.LookPath(name); err != nil {
-				t.Fatalf("Caddy VM integration requires %s", name)
-			}
-		}
-	}
+func runCLICaddy(t testT, c *apiClient) {
 	root, err := filepath.Abs("..")
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +26,6 @@ func TestCLICaddy(t *testing.T) {
 	temporary := t.TempDir()
 	binary := filepath.Join(temporary, "floatlab")
 	run(t, temporary, nil, "bun", "build", "--compile", filepath.Join(root, "cli/src/main.ts"), "--outfile", binary)
-	c := newAPIClient(t, startAppliance(t))
 	c.waitReady()
 	c.login()
 	c.waitNodeReady()
@@ -110,17 +94,17 @@ func TestCLICaddy(t *testing.T) {
 	prefix := netip.MustParsePrefix(subnet)
 	startIP := prefix.Addr().Next().Next()
 	endIP := startIP.Next().Next()
-	_, err = guestCommand(root, "ip link show dev floatlab-lan")
+	_, err = guestCommand(c.vm, "ip link show dev floatlab-lan")
 	if err != nil {
 		t.Fatalf("installer did not configure the LAN bridge: %v", err)
 	}
 	// Pools must belong to a node and match one of its actual LAN subnets.
 	lanAddress := prefix.Addr().Next().String() + "/24"
-	if out, err := guestCommand(root, "ip address add "+lanAddress+" dev floatlab-lan"); err != nil {
+	if out, err := guestCommand(c.vm, "ip address add "+lanAddress+" dev floatlab-lan"); err != nil {
 		t.Fatalf("add test LAN address: %s %v", out, err)
 	}
 	t.Cleanup(func() {
-		if _, err := guestCommand(root, "ip address del "+lanAddress+" dev floatlab-lan"); err != nil {
+		if _, err := guestCommand(c.vm, "ip address del "+lanAddress+" dev floatlab-lan"); err != nil {
 			t.Errorf("remove test LAN address: %v", err)
 		}
 	})
@@ -222,7 +206,7 @@ func TestCLICaddy(t *testing.T) {
 	if output := mustCLI("exec", name, "probe", "--", "wget", "-T", "5", "-qO-", "http://caddy/"+marker); output != marker {
 		t.Fatalf("service DNS HTTP: %q", output)
 	}
-	hostOutput, err := guestCommand(root, "curl --fail --silent --show-error http://"+status.StackIP+":8088/"+marker)
+	hostOutput, err := guestCommand(c.vm, "curl --fail --silent --show-error http://"+status.StackIP+":8088/"+marker)
 	if err != nil || hostOutput != marker {
 		t.Fatalf("VM host HTTP: %q error=%v", hostOutput, err)
 	}
@@ -235,7 +219,7 @@ func TestCLICaddy(t *testing.T) {
 	if containerID == "" {
 		t.Fatal("Caddy container not found")
 	}
-	binding, err := guestCommand(root, "docker inspect --format '{{json .NetworkSettings.Ports}}' "+containerID)
+	binding, err := guestCommand(c.vm, "docker inspect --format '{{json .NetworkSettings.Ports}}' "+containerID)
 	if err != nil || !strings.Contains(binding, `"HostIp":"`+status.StackIP+`"`) || !strings.Contains(binding, `"HostPort":"8088"`) {
 		t.Fatalf("published binding=%s error=%v", binding, err)
 	}
@@ -276,11 +260,11 @@ func TestCLICaddy(t *testing.T) {
 	if !strings.Contains(output, "mem") || !strings.Contains(output, "bytes") {
 		t.Fatalf("stats output: %s", output)
 	}
-	if os.Getenv("FLOATLAB_WORKLOAD_INTEGRATION") == "1" {
+	{
 		t.Log("verify HTTP and service DNS after independent control and host service restarts")
 		c.assertServiceRestarts(stackID, func(_ string) {
 			waitFor(t, 30*time.Second, func() error {
-				output, err := guestCommand(root, "curl --max-time 5 --fail --silent --show-error http://"+status.StackIP+":8088/"+marker)
+				output, err := guestCommand(c.vm, "curl --max-time 5 --fail --silent --show-error http://"+status.StackIP+":8088/"+marker)
 				if err != nil || output != marker {
 					return fmt.Errorf("HTTP after service restart: %q %v", output, err)
 				}
@@ -300,7 +284,7 @@ func TestCLICaddy(t *testing.T) {
 		t.Fatalf("allocation leaked: %+v error=%v", allocated, err)
 	}
 	host := "flh" + strings.ReplaceAll(stackID, "-", "")[:10]
-	cleanup, err := guestCommand(root, "docker ps --all --quiet --filter label=com.docker.compose.project="+stackID+"; if ip link show dev "+host+" >/dev/null 2>&1; then echo interface-leaked; exit 1; fi")
+	cleanup, err := guestCommand(c.vm, "docker ps --all --quiet --filter label=com.docker.compose.project="+stackID+"; if ip link show dev "+host+" >/dev/null 2>&1; then echo interface-leaked; exit 1; fi")
 	if err != nil || strings.TrimSpace(cleanup) != "" {
 		t.Fatalf("resources remain: %s error=%v", cleanup, err)
 	}
@@ -309,59 +293,6 @@ func TestCLICaddy(t *testing.T) {
 	}
 	pool.ID = ""
 	stackID = ""
-}
-
-// guestCommand runs checks on the VM host, not inside the workload. Existing
-// targets can use VM_SSH; freshly booted appliances use the QEMU guest agent.
-func guestCommand(root, script string) (string, error) {
-	script = "export PATH=/run/current-system/sw/bin:/run/wrappers/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH; " + script
-	if ssh := os.Getenv("VM_SSH"); ssh != "" {
-		return command(60*time.Second, root, nil, "ssh", "-o", "BatchMode=yes", ssh, "sudo", "-n", "sh", "-c", "'"+strings.ReplaceAll(script, "'", "'\\''")+"'")
-	}
-	uri, name := env("LIBVIRT_URI", "qemu:///system"), env("VM_NAME", "floatlab-integration")
-	raw, _ := json.Marshal(map[string]any{"execute": "guest-exec", "arguments": map[string]any{"path": "/bin/sh", "arg": []string{"-c", script}, "capture-output": true}})
-	out, err := command(15*time.Second, root, nil, "virsh", "-c", uri, "qemu-agent-command", name, string(raw))
-	if err != nil {
-		return "", err
-	}
-	var started struct {
-		Return struct {
-			PID int `json:"pid"`
-		} `json:"return"`
-	}
-	if err := json.Unmarshal([]byte(out), &started); err != nil || started.Return.PID == 0 {
-		return "", fmt.Errorf("guest-exec: %s", out)
-	}
-	deadline := time.Now().Add(45 * time.Second)
-	for time.Now().Before(deadline) {
-		raw, _ := json.Marshal(map[string]any{"execute": "guest-exec-status", "arguments": map[string]int{"pid": started.Return.PID}})
-		out, err := command(10*time.Second, root, nil, "virsh", "-c", uri, "qemu-agent-command", name, string(raw))
-		if err != nil {
-			return "", err
-		}
-		var status struct {
-			Return struct {
-				Exited   bool   `json:"exited"`
-				ExitCode int    `json:"exitcode"`
-				Signal   int    `json:"signal"`
-				Out      string `json:"out-data"`
-				Err      string `json:"err-data"`
-			} `json:"return"`
-		}
-		if err := json.Unmarshal([]byte(out), &status); err != nil {
-			return "", err
-		}
-		if status.Return.Exited {
-			stdout, _ := base64.StdEncoding.DecodeString(status.Return.Out)
-			stderr, _ := base64.StdEncoding.DecodeString(status.Return.Err)
-			if status.Return.ExitCode != 0 || status.Return.Signal != 0 {
-				return string(stdout), fmt.Errorf("guest command exited %d signal %d: %s", status.Return.ExitCode, status.Return.Signal, stderr)
-			}
-			return string(stdout), nil
-		}
-		time.Sleep(250 * time.Millisecond)
-	}
-	return "", fmt.Errorf("guest command timed out")
 }
 
 func caddyCompose(name, pool, node, marker string) string {
@@ -408,37 +339,5 @@ func TestCaddyComposeFixture(t *testing.T) {
 	}
 	if _, err := compose.RuntimeYAML(source, "demo", "10.254.240.2"); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestExistingAPIBypassesVMProvisioning(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$INSTALL_CHECK_ARGS\"\nexit 0\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
-	t.Setenv("VM_SSH", "test-appliance")
-	argsPath := filepath.Join(dir, "args")
-	t.Setenv("INSTALL_CHECK_ARGS", argsPath)
-	t.Setenv("API_URL", "http://example.test:8080")
-	if got := startAppliance(t); got != "http://example.test:8080" {
-		t.Fatalf("existing API URL = %q", got)
-	}
-	args, err := os.ReadFile(argsPath)
-	if err != nil || !strings.Contains(string(args), "floatlab/os/live") || !strings.Contains(string(args), "install-status.json") {
-		t.Fatal("existing target bypassed installed-appliance validation", err)
-	}
-}
-
-func TestInstalledAddressUsesTheBridgeInsteadOfAnOldDHCPLease(t *testing.T) {
-	dir := t.TempDir()
-	script := "#!/bin/sh\nprintf '%s\\n' '[{\"addr_info\":[{\"local\":\"198.19.1.101\"}]}]'\n"
-	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte(script), 0700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
-	t.Setenv("VM_SSH", "installed-test-appliance")
-	if got := waitForIP(t, dir); got != "198.19.1.101" {
-		t.Fatalf("installed bridge address = %q", got)
 	}
 }

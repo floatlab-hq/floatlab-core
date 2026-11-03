@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"io"
 	"net"
@@ -12,10 +11,11 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
-	"testing"
 	"time"
+
+	"github.com/floatlab/floatlab-core/internal/integrationvm"
+	"github.com/onsi/gomega"
 
 	"github.com/coder/websocket"
 	"github.com/floatlab/floatlab-core/api/openapi"
@@ -24,19 +24,16 @@ import (
 )
 
 type apiClient struct {
-	t       *testing.T
-	baseURL string
-	token   string
-	client  *http.Client
-	nodeID  string
+	t        testT
+	baseURL  string
+	token    string
+	client   *http.Client
+	vm       *integrationvm.Guest
+	coverage *coverageRun
+	nodeID   string
 }
 
-func TestContainerManagementAPI(t *testing.T) {
-	if os.Getenv("FLOATLAB_VM_INTEGRATION") != "1" {
-		t.Skip("run with FLOATLAB_VM_INTEGRATION=1 go test -count=1 -timeout 30m -v ./integration")
-	}
-
-	c := newAPIClient(t, startAppliance(t))
+func runContainerManagementAPI(t testT, c *apiClient) {
 	c.waitReady()
 	c.assertUnauthorized()
 	c.login()
@@ -89,183 +86,18 @@ func TestContainerManagementAPI(t *testing.T) {
 	stackID = ""
 }
 
-func newAPIClient(t *testing.T, baseURL string) *apiClient {
+func newAPIClient(t testT, baseURL string) *apiClient {
 	t.Helper()
 	return &apiClient{t: t, baseURL: strings.TrimRight(baseURL, "/"), client: &http.Client{Timeout: 20 * time.Second}}
 }
 
-// All appliance acceptance tests qualify the minimum supported 4 GiB node.
-const applianceMemoryMiB = "4096"
-
-func startAppliance(t *testing.T) string {
-	return startApplianceWithAnswers(t, nil)
-}
-
-func startApplianceWithAnswers(t *testing.T, configuration *installer.Answers) string {
-	t.Helper()
-	if baseURL := os.Getenv("API_URL"); baseURL != "" {
-		assertInstalledAppliance(t)
-		return baseURL
-	}
-	// A newly owned VM must never inherit another appliance's SSH destination.
-	t.Setenv("VM_SSH", "")
-	root, err := filepath.Abs("..")
-	if err != nil {
-		t.Fatal(err)
-	}
-	appliance := filepath.Join(root, "floatlab-appliance-image")
-	name := env("VM_NAME", "floatlab-integration")
-	t.Setenv("VM_NAME", name)
-	uri := env("LIBVIRT_URI", "qemu:///system")
-	pool := env("LIBVIRT_POOL", "default")
-	volume := name + "-zfs.qcow2"
-	var isoDirectory string
-	existingPools := map[string]bool{}
-	// Check ownership before registering cleanup, which must never delete an existing VM.
-	for _, args := range [][]string{{"dominfo", name}, {"vol-info", "--pool", pool, volume}, {"vol-info", "--pool", pool, name + "-answers.iso"}} {
-		if _, err := command(15*time.Second, root, nil, "virsh", append([]string{"-c", uri}, args...)...); err == nil {
-			t.Fatalf("refusing to replace an existing appliance resource: %s", strings.Join(args, " "))
-		}
-	}
-
-	t.Cleanup(func() {
-		if os.Getenv("FLOATLAB_KEEP_VM") == "1" {
-			t.Logf("keeping VM %s and volume %s", name, volume)
-			return
-		}
-		command(30*time.Second, root, nil, "virsh", "-c", uri, "destroy", name)
-		command(30*time.Second, root, nil, "virsh", "-c", uri, "undefine", name, "--nvram")
-		command(30*time.Second, root, nil, "virsh", "-c", uri, "vol-delete", "--pool", pool, volume)
-		command(30*time.Second, root, nil, "virsh", "-c", uri, "vol-delete", "--pool", pool, name+"-answers.iso")
-		if isoDirectory != "" {
-			cleanupISOPools(t, root, uri, isoDirectory, existingPools)
-		}
-	})
-	// A path flake includes new source files that Git flakes omit until staged.
-	// Keep the result link outside the source tree so consecutive passes reuse the image.
-	image := os.Getenv("FLOATLAB_APPLIANCE_ISO")
-	if image == "" {
-		result := filepath.Join(t.TempDir(), "appliance")
-		bundle := os.Getenv("FLOATLAB_ISO_BUNDLE")
-		if bundle == "" {
-			directory := t.TempDir()
-			host := filepath.Join(directory, "host")
-			bundle = filepath.Join(directory, "bundle")
-			run(t, appliance, nil, "nix", "build", "path:"+root+"?dir=floatlab-appliance-image#host-image", "--impure", "--print-build-logs", "--out-link", host)
-			run(t, root, nil, "python3", "scripts/release.py", "prepare-iso", bundle, "--version", "integration", "--local-host", host)
-		}
-		run(t, appliance, []string{"FLOATLAB_ISO_BUNDLE=" + bundle}, "nix", "--extra-experimental-features", "nix-command flakes", "build", "path:"+root+"?dir=floatlab-appliance-image#iso", "--impure", "--print-build-logs", "--out-link", result)
-		images, err := filepath.Glob(filepath.Join(result, "iso", "*.iso"))
-		if err != nil || len(images) != 1 {
-			t.Fatalf("expected one appliance ISO: %v %v", images, err)
-		}
-		image = images[0]
-	}
-	image, err = filepath.EvalSymlinks(image)
-	if err != nil {
-		t.Fatal(err)
-	}
-	isoDirectory = filepath.Dir(image)
-	before, err := command(15*time.Second, root, nil, "virsh", "-c", uri, "pool-list", "--all", "--name")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range strings.Fields(before) {
-		existingPools[name] = true
-	}
-	// All nodes in a multi-node run boot the exact same built artifact.
-	if os.Getenv("FLOATLAB_MULTI_NODE_INTEGRATION") == "1" {
-		t.Setenv("FLOATLAB_APPLIANCE_ISO", image)
-	}
-	answers := applianceAnswers(t, strings.ToLower(name), env("FLOATLAB_USER", "demo"), env("FLOATLAB_PASSWORD", "floatlab"))
-	if configuration != nil {
-		answers = *configuration
-	}
-	answersPath := filepath.Join(t.TempDir(), "answers.toml")
-	if err := installer.WriteAnswers(answersPath, answers); err != nil {
-		t.Fatal(err)
-	}
-	run(t, root, []string{"VM_NAME=" + name, "LIBVIRT_URI=" + uri, "LIBVIRT_POOL=" + pool, "MEMORY_MB=" + applianceMemoryMiB, "ZFS_DISK_SIZE=" + env("ZFS_DISK_SIZE", "32G"), "FLOATLAB_ANSWERS=" + answersPath}, filepath.Join(appliance, "scripts/run-libvirt.sh"), image)
-	t.Cleanup(func() {
-		if t.Failed() {
-			out, err := guestCommand(root, `cat /run/floatlab-installer/status.json /floatlab/system/etc/install-status.json 2>/dev/null || true; journalctl -u floatlab-install-discovery -u floatlab-unattended-install -u floatlab-installer-root -u floatlab-hostd -u floatlab-core-stack --no-pager -n 100; zfs list -t all`)
-			t.Logf("installer appliance diagnostics: %s\n%v", out, err)
-		}
-	})
-	assertInstalledAppliance(t)
-	return "http://" + waitForIP(t, root) + ":8080"
-}
-
-func applianceAnswers(t *testing.T, name, username, password string) installer.Answers {
+func applianceAnswers(t testT, name, username, password string) installer.Answers {
 	t.Helper()
 	answers, err := installer.NewAnswers(installer.ZPoolCommand([]installer.Disk{{Path: "/dev/disk/by-id/virtio-floatlab-zfs"}}), installer.InstallConfig{NodeName: name, Timezone: "UTC", Network: hostnetwork.DefaultConfig(), Username: username, Password: password, PasswordConfirmation: password, RecoveryPassword: "integration-console-password", RecoveryConfirmation: "integration-console-password"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return answers
-}
-
-func assertInstalledAppliance(t *testing.T) {
-	t.Helper()
-	root, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	check := func() error {
-		out, err := guestCommand(root, `set -eu; if systemctl is-failed --quiet floatlab-unattended-install.service || systemctl is-failed --quiet floatlab-install-discovery.service; then echo INSTALLATION_FAILED; journalctl -u floatlab-unattended-install -u floatlab-install-discovery --no-pager -n 60; exit 1; fi; test "$(findmnt -n -o SOURCE /)" = floatlab/os/live; test -e /floatlab/system/etc/installed; test "$(jq -r .ready /floatlab/system/etc/install-status.json)" = true; test "$(zfs get -H -o value mountpoint floatlab)" = none`)
-		if strings.Contains(out, "INSTALLATION_FAILED") {
-			t.Fatalf("unattended installer failed: %s", out)
-		}
-		if err != nil {
-			return fmt.Errorf("waiting for a verified installation booted from disk: %s %w", out, err)
-		}
-		return nil
-	}
-	if os.Getenv("API_URL") != "" {
-		if err := check(); err != nil {
-			t.Fatal(err)
-		}
-		return
-	}
-	waitFor(t, 20*time.Minute, check)
-}
-
-// virt-install automatically registers the ISO's directory as a storage pool.
-// Remove only newly registered pools for this appliance's exact ISO directory.
-func cleanupISOPools(t *testing.T, root, uri, directory string, before map[string]bool) {
-	t.Helper()
-	names, err := command(15*time.Second, root, nil, "virsh", "-c", uri, "pool-list", "--all", "--name")
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	for _, name := range strings.Fields(names) {
-		if before[name] {
-			continue
-		}
-		raw, err := command(15*time.Second, root, nil, "virsh", "-c", uri, "pool-dumpxml", name)
-		var pool struct {
-			Path string `xml:"target>path"`
-		}
-		if err != nil {
-			t.Error(err)
-			continue
-		}
-		if err := xml.Unmarshal([]byte(raw), &pool); err != nil {
-			t.Error(err)
-			continue
-		}
-		if pool.Path != directory {
-			continue
-		}
-		if out, err := command(15*time.Second, root, nil, "virsh", "-c", uri, "pool-destroy", name); err != nil {
-			t.Errorf("ISO pool destroy: %s %v", out, err)
-			continue
-		}
-		if out, err := command(15*time.Second, root, nil, "virsh", "-c", uri, "pool-undefine", name); err != nil {
-			t.Errorf("ISO pool undefine: %s %v", out, err)
-		}
-	}
 }
 
 func (c *apiClient) waitReady() {
@@ -316,8 +148,8 @@ func (c *apiClient) login() {
 		AccessToken string `json:"access_token"`
 	}
 	body := map[string]string{
-		"username": env("FLOATLAB_USER", "demo"),
-		"password": env("FLOATLAB_PASSWORD", "floatlab"),
+		"username": "demo",
+		"password": "floatlab",
 	}
 	if err := c.doJSON(http.MethodPost, "/api/v1/auth/token", "", "application/json", bytes.NewReader(mustJSON(c.t, body)), &login); err != nil {
 		c.t.Fatal(err)
@@ -500,8 +332,8 @@ func (c *apiClient) assertTerminal(stackID, containerID string) {
 		}
 		got.Write(data)
 		if strings.Contains(got.String(), "terminal-ok") {
-			if activeCoverage != nil {
-				activeCoverage.observe("GET", "/api/v1/stacks/"+stackID+"/containers/"+containerID+"/terminal", 101)
+			if c.coverage != nil {
+				c.coverage.observe("GET", "/api/v1/stacks/"+stackID+"/containers/"+containerID+"/terminal", 101)
 			}
 			return
 		}
@@ -895,30 +727,22 @@ func (c *apiClient) request(method, path, token, idempotencyKey, contentType str
 	if err != nil {
 		return nil, nil, err
 	}
-	if activeCoverage != nil {
-		activeCoverage.observe(method, path, resp.StatusCode)
+	if c.coverage != nil {
+		c.coverage.observe(method, path, resp.StatusCode)
 	}
 	return resp, payload, nil
 }
 
-func waitFor(t *testing.T, timeout time.Duration, check func() error) {
+func waitFor(t testT, timeout time.Duration, check func() error) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	var last error
-	for time.Now().Before(deadline) {
-		if last = check(); last == nil {
-			return
-		}
-		time.Sleep(2 * time.Second)
-	}
-	t.Fatalf("timed out after %s: %v", timeout, last)
+	gomega.NewWithT(t).Eventually(t.Context(), check).WithTimeout(timeout).WithPolling(2 * time.Second).Should(gomega.Succeed())
 }
 
-func waitForIP(t *testing.T, dir string) string {
+func waitForIP(t testT, vm *integrationvm.Guest) string {
 	t.Helper()
 	var ip string
 	waitFor(t, 5*time.Minute, func() error {
-		out, err := guestCommand(dir, "ip -json -4 addr show dev floatlab-lan")
+		out, err := guestCommand(vm, "ip -json -4 addr show dev floatlab-lan")
 		if err != nil {
 			return err
 		}
@@ -944,9 +768,9 @@ func waitForIP(t *testing.T, dir string) string {
 	return ip
 }
 
-func run(t *testing.T, dir string, extraEnv []string, name string, args ...string) {
+func run(t testT, dir string, extraEnv []string, name string, args ...string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
@@ -957,20 +781,7 @@ func run(t *testing.T, dir string, extraEnv []string, name string, args ...strin
 	}
 }
 
-func command(timeout time.Duration, dir string, extraEnv []string, name string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), extraEnv...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(out), fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, bytes.TrimSpace(out))
-	}
-	return string(out), nil
-}
-
-func mustJSON(t *testing.T, v any) []byte {
+func mustJSON(t testT, v any) []byte {
 	t.Helper()
 	data, err := json.Marshal(v)
 	if err != nil {

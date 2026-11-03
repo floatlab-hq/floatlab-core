@@ -3,7 +3,6 @@ package integration_test
 import (
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 )
@@ -166,13 +165,12 @@ func (c *apiClient) assertRecoveryWorkload() {
 	deleted := c.mutate("DELETE", stackPath, nil, "")
 	c.waitOperation(deleted.OperationID)
 	c.waitStackDeleted(id)
-	root, _ := os.Getwd()
-	out, err := guestCommand(root, "zfs list -H -o name '"+dataset+"'")
+	out, err := guestCommand(c.vm, "zfs list -H -o name '"+dataset+"'")
 	if err != nil || strings.TrimSpace(out) != dataset {
 		t.Fatalf("retained dataset missing: %s %v", out, err)
 	}
 	t.Cleanup(func() {
-		out, err := guestCommand(root, "zfs list -H -o name -r floatlab | while IFS= read -r ds; do case \"$ds\" in '"+dataset+"'-recovery-*|'"+dataset+"'-restore-*) zfs destroy -r \"$ds\" ;; esac; done; zfs destroy -r '"+dataset+"'")
+		out, err := guestCommand(c.vm, "zfs list -H -o name -r floatlab | while IFS= read -r ds; do case \"$ds\" in '"+dataset+"'-recovery-*|'"+dataset+"'-restore-*) zfs destroy -r \"$ds\" ;; esac; done; zfs destroy -r '"+dataset+"'")
 		if err != nil {
 			t.Errorf("cleanup retained dataset: %s %v", out, err)
 		}
@@ -200,12 +198,11 @@ func (c *apiClient) assertPrefixAllocation(name, stackID string) {
 
 func (c *apiClient) assertServiceRestarts(id string, assertData func(string)) {
 	t := c.t
-	root, _ := os.Getwd()
 	for _, command := range []string{
 		`docker restart $(docker ps -q --filter label=com.docker.compose.service=floatlab-control --filter label=com.docker.compose.project=floatlab-system)`,
 		`systemctl restart floatlab-hostd.service`,
 	} {
-		out, err := guestCommand(root, command)
+		out, err := guestCommand(c.vm, command)
 		if err != nil {
 			t.Fatalf("restart service: %s %v", out, err)
 		}
@@ -222,7 +219,6 @@ func (c *apiClient) assertServiceRestarts(id string, assertData func(string)) {
 
 func (c *apiClient) assertDatasetRollback(id string) {
 	t := c.t
-	root, _ := os.Getwd()
 	stackPath := "/api/v1/stacks/" + id
 	dataset := c.object("GET", "/api/v1/storage/datasets/"+id, nil, 200)
 	mount := dataset["mount_point"].(string)
@@ -231,7 +227,7 @@ func (c *apiClient) assertDatasetRollback(id string) {
 	c.waitStackState(id, "Idle")
 	writeMarker := func(marker string) {
 		t.Helper()
-		out, err := guestCommand(root, "printf '"+marker+"' > '"+mount+"/rollback-marker'")
+		out, err := guestCommand(c.vm, "printf '"+marker+"' > '"+mount+"/rollback-marker'")
 		if err != nil {
 			t.Fatalf("write dataset marker: %s %v", out, err)
 		}
@@ -250,7 +246,7 @@ func (c *apiClient) assertDatasetRollback(id string) {
 	c.expect("POST", path, map[string]bool{"destroy_newer": false}, 409)
 	restore := c.mutateJSON("POST", path, map[string]bool{"destroy_newer": true})
 	c.waitOperation(restore.OperationID)
-	out, err := guestCommand(root, "cat '"+mount+"/rollback-marker'")
+	out, err := guestCommand(c.vm, "cat '"+mount+"/rollback-marker'")
 	if err != nil || out != "before" {
 		t.Fatalf("rollback data: %q %v", out, err)
 	}

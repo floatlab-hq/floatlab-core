@@ -29,8 +29,11 @@
       };
       floatlab-version = let version = builtins.getEnv "FLOATLAB_INSTALLER_VERSION";
         in if version != "" then version else pkgs.lib.removeSuffix "-dirty" (self.shortRev or self.dirtyShortRev or "unknown");
+      integrationCoverage = builtins.getEnv "FLOATLAB_INTEGRATION_COVERAGE" == "1";
       hostVersion = let v = builtins.getEnv "FLOATLAB_HOST_VERSION"; in if v == "" then "0.1.0-dev" else v;
-      buildBinaries = name: version: subPackages: pkgs.buildGoModule {
+      buildBinaries = name: version: subPackages:
+        let instrument = integrationCoverage && builtins.elem name [ "floatlab-host" "floatlab-manage" ];
+        in pkgs.buildGoModule {
         pname = name;
         inherit version;
         ldflags = [ "-s" "-w" "-X github.com/floatlab/floatlab-core/pkg/release.Version=${version}" "-X github.com/floatlab/floatlab-core/pkg/release.GitCommit=${self.rev or self.dirtyRev or "unknown"}" ];
@@ -44,7 +47,12 @@
             && builtins.baseNameOf path != "node_modules";
         };
         inherit subPackages;
-        vendorHash = "sha256-pf6wVL6HqxV6RygqpGvCKxOyhtJYVQlBeJRey7821mw=";
+        env.CGO_ENABLED = "0";
+        tags = pkgs.lib.optionals instrument [ "integrationcoverage" ];
+        preBuild = pkgs.lib.optionalString instrument ''
+          export GOFLAGS="$GOFLAGS -cover -coverpkg=./... -covermode=atomic"
+        '';
+        vendorHash = "sha256-bW6mEKlDsR1oGYSAZj1OXj3atsuMbLzwQpSiwtkOHlg=";
       };
       floatlab-binaries = buildBinaries "floatlab-host" hostVersion [ "cmd/floatlab-hostd" ];
       floatlab-manage-binaries = buildBinaries "floatlab-manage" "0.1.0-dev" [ "cmd/floatlab-control" ];
@@ -99,13 +107,13 @@
         inherit system;
         modules = [ ./nixos/iso.nix ];
         pkgs = pkgs;
-        specialArgs = { inherit floatlab-binaries floatlab-installer-binaries floatlab-version; floatlab-installer-command = null; };
+        specialArgs = { inherit floatlab-binaries floatlab-installer-binaries floatlab-version integrationCoverage; floatlab-installer-command = null; };
       };
 
       nixosConfigurations.floatlab-installed = nixpkgs.lib.nixosSystem {
         inherit system pkgs;
         modules = [ ./nixos/installed.nix ];
-        specialArgs = { inherit floatlab-binaries floatlab-installer-binaries floatlab-version; };
+        specialArgs = { inherit floatlab-binaries floatlab-installer-binaries floatlab-version integrationCoverage; };
       };
       nixosConfigurations.floatlab-installer-preview = nixpkgs.lib.nixosSystem {
         inherit system pkgs;
@@ -258,7 +266,7 @@
 
       devShells.${system}.default = pkgs.mkShell {
         FLOATLAB_OVMF = "${pkgs.OVMF.fd}/FV";
-        packages = with pkgs; [ just qemu_kvm libvirt virt-manager coreutils jq python3 docker-client go gh xorriso ];
+        packages = with pkgs; [ just qemu_kvm libvirt virt-manager coreutils jq python3 docker-client go gh xorriso bun pnpm ];
       };
     };
 }

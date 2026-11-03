@@ -2,20 +2,21 @@ package integration_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
 	"net/netip"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/floatlab/floatlab-core/internal/integrationvm"
+	. "github.com/onsi/ginkgo/v2"
 
 	"github.com/floatlab/floatlab-core/internal/hostnetwork"
 	"github.com/floatlab/floatlab-core/pkg/compose"
@@ -24,10 +25,10 @@ import (
 // The guest agent remains reachable when a fixture's network is partitioned.
 // Run all requests locally in the guest, including authentication and provisioning.
 type labGuest struct {
-	t                  *testing.T
+	t                  testT
+	vm                 *integrationvm.Guest
 	name               string
 	address            string
-	root               string
 	client             *apiClient
 	pool               string
 	firstIP            netip.Addr
@@ -36,23 +37,19 @@ type labGuest struct {
 	standalonePassword string
 }
 
-func TestMultiNodeLab(t *testing.T) {
-	if os.Getenv("FLOATLAB_MULTI_NODE_INTEGRATION") != "1" {
-		t.Skip("run scripts/test-multi-node.sh for real multi-node appliance acceptance")
-	}
-	if os.Getenv("API_URL") != "" || os.Getenv("VM_NAME") != "" || os.Getenv("VM_SSH") != "" {
-		t.Fatal("multi-node acceptance requires fresh owned appliances, not existing API/VM targets")
-	}
-	if os.Getenv("FLOATLAB_MULTI_NODE_RUN_ID") == "" {
-		t.Setenv("FLOATLAB_MULTI_NODE_RUN_ID", fmt.Sprintf("%d", time.Now().UnixNano()))
-	}
-	first := newLabGuest(t, 1)
-	firstID := first.nodeID()
-	first.configurePool(1, firstID)
-	web := first.createWeb(firstID, "join-existing-web")
-	second := newLabGuest(t, 2)
-	var secondWeb string
-	labScenario(t, "join-empty-node-to-populated-lab", []*labGuest{first, second}, func(t *testing.T) {
+func defineLab(fixture *applianceFixture) {
+	var first, second, third *labGuest
+	var firstID, secondID, thirdID, web, secondWeb string
+	BeforeAll(func(ctx SpecContext) {
+		t := integrationT()
+		first = newLabGuest(t, fixture, 1)
+		firstID = first.nodeID()
+		first.configurePool(1, firstID)
+		web = first.createWeb(firstID, "join-existing-web")
+		second = newLabGuest(t, fixture, 2)
+	})
+	It("join-empty-node-to-populated-lab", func(ctx SpecContext) {
+		t := integrationT()
 		second.join(first)
 		assertLabMembers(t, 2, first, second)
 		if first.nodeID() == second.nodeID() {
@@ -97,11 +94,9 @@ func TestMultiNodeLab(t *testing.T) {
 		})
 		assertLabCaughtUp(t, first, second)
 	})
-	if t.Failed() {
-		return
-	}
-	secondID := second.nodeID()
-	labScenario(t, "two-node-partition-local-workloads-and-recovery", []*labGuest{first, second}, func(t *testing.T) {
+	It("two-node-partition-local-workloads-and-recovery", func(ctx SpecContext) {
+		t := integrationT()
+		secondID = second.nodeID()
 		second.link(false)
 		first.assertSharedWritesUnavailable()
 		second.assertSharedWritesUnavailable()
@@ -152,15 +147,14 @@ func TestMultiNodeLab(t *testing.T) {
 		assertLabMembers(t, 2, first, second)
 		assertLabCaughtUp(t, first, second)
 	})
-	if t.Failed() {
-		return
-	}
-	third := newLabGuest(t, 3)
-	third.join(first)
-	assertLabMembers(t, 3, first, second, third)
-	thirdID := third.nodeID()
-	third.configurePool(3, thirdID)
-	labScenario(t, "three-node-partition-majority-and-minority-recovery", []*labGuest{first, second, third}, func(t *testing.T) {
+	It("three-node-partition-majority-and-minority-recovery", func(ctx SpecContext) {
+		t := integrationT()
+		third = newLabGuest(t, fixture, 3)
+		third.join(first)
+		assertLabMembers(t, 3, first, second, third)
+		thirdID = third.nodeID()
+		third.configurePool(3, thirdID)
+
 		third.link(false)
 		third.assertSharedWritesUnavailable()
 		for index, node := range []*labGuest{first, second, third} {
@@ -200,10 +194,8 @@ func TestMultiNodeLab(t *testing.T) {
 		})
 		assertLabCaughtUp(t, first, second, third)
 	})
-	if t.Failed() {
-		return
-	}
-	labScenario(t, "remove-unavailable-node-with-quorum", []*labGuest{first, second, third}, func(t *testing.T) {
+	It("remove-unavailable-node-with-quorum", func(ctx SpecContext) {
+		t := integrationT()
 		third.link(false)
 		var preview struct {
 			Stale     bool             `json:"stale"`
@@ -225,10 +217,8 @@ func TestMultiNodeLab(t *testing.T) {
 		}
 		assertLabCaughtUp(t, first, second)
 	})
-	if t.Failed() {
-		return
-	}
-	labScenario(t, "two-node-lost-quorum-fenced-recovery-and-return", []*labGuest{first, second}, func(t *testing.T) {
+	It("two-node-lost-quorum-fenced-recovery-and-return", func(ctx SpecContext) {
+		t := integrationT()
 		second.link(false)
 		first.assertSharedWritesUnavailable()
 		// Fencing is performed by this fixture, not inferred from failed pings.
@@ -278,22 +268,7 @@ func TestMultiNodeLab(t *testing.T) {
 	})
 }
 
-func labScenario(t *testing.T, name string, nodes []*labGuest, body func(*testing.T)) {
-	t.Helper()
-	t.Run(name, func(child *testing.T) {
-		for _, node := range nodes {
-			node.t, node.client.t = child, child
-		}
-		defer func() {
-			for _, node := range nodes {
-				node.t, node.client.t = t, t
-			}
-		}()
-		body(child)
-	})
-}
-
-func assertRemovedPeerRejected(t *testing.T, removed, survivor *labGuest) {
+func assertRemovedPeerRejected(t testT, removed, survivor *labGuest) {
 	t.Helper()
 	if out, err := removed.guest("set -eu; test -s /floatlab/system/etc/lab/node.pem; test -s /floatlab/system/etc/lab/node-key.pem; test -s /floatlab/system/etc/lab/ca.pem; test -s /floatlab/system/workloads/lab/replication-key; test -s /floatlab/system/workloads/lab/known_hosts"); err != nil {
 		t.Fatalf("removed-node credential fixture missing: %s %v", out, err)
@@ -314,39 +289,18 @@ func assertRemovedPeerRejected(t *testing.T, removed, survivor *labGuest) {
 	}
 }
 
-func newLabGuest(t *testing.T, index int) *labGuest {
+func newLabGuest(t testT, fixture *applianceFixture, index int) *labGuest {
 	t.Helper()
-	if os.Getenv("LIBVIRT_NETWORK") != "floatlab-multinode-"+os.Getenv("FLOATLAB_MULTI_NODE_RUN_ID") {
-		t.Fatal("run scripts/test-multi-node.sh to create an isolated installation network")
-	}
-	t.Setenv("API_URL", "")
-	name := fmt.Sprintf("floatlab-multinode-%s-%d", os.Getenv("FLOATLAB_MULTI_NODE_RUN_ID"), index)
-	t.Setenv("VM_NAME", name)
-	if _, err := command(15*time.Second, "..", nil, "virsh", "-c", env("LIBVIRT_URI", "qemu:///system"), "dominfo", name); err == nil {
-		t.Fatalf("refusing to replace an existing domain %s", name)
-	}
+	name := fmt.Sprintf("%s-%d", fixture.run.Name, index)
 	username, password := "demo", "floatlab"
 	if index > 1 {
 		username = fmt.Sprintf("standalone-node-%d", index)
-		password = fmt.Sprintf("standalone-%s-node-%d-password", os.Getenv("FLOATLAB_MULTI_NODE_RUN_ID"), index)
+		password = fmt.Sprintf("standalone-%s-node-%d-password", fixture.run.Name, index)
 	}
 	answers := applianceAnswers(t, strings.ToLower(name), username, password)
-	raw, err := command(15*time.Second, "..", nil, "virsh", "-c", env("LIBVIRT_URI", "qemu:///system"), "net-dumpxml", env("LIBVIRT_NETWORK", "default"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var network struct {
-		IP struct {
-			Address string `xml:"address,attr"`
-			Netmask string `xml:"netmask,attr"`
-		} `xml:"ip"`
-	}
-	if err := xml.Unmarshal([]byte(raw), &network); err != nil {
-		t.Fatal(err)
-	}
-	gateway, err := netip.ParseAddr(network.IP.Address)
-	if err != nil || !gateway.Is4() || network.IP.Netmask != "255.255.255.0" || index < 1 || index > 99 {
-		t.Fatal("multi-node test requires an IPv4 /24 network and node index 1..99")
+	gateway, err := netip.ParseAddr(fixture.run.Gateway)
+	if err != nil || index < 1 || index > 99 {
+		t.Fatal("fixture requires IPv4 node index 1..99")
 	}
 	addressBytes := gateway.As4()
 	addressBytes[3] = byte(100 + index) // Outside the test network's DHCP range (.2-.99).
@@ -354,13 +308,11 @@ func newLabGuest(t *testing.T, index int) *labGuest {
 	answers.Config.Network.IPv4 = hostnetwork.IPv4{Mode: "static", Address: ip, Netmask: "255.255.255.0", Gateway: gateway.String()}
 	answers.Config.Network.DNSServers = []string{gateway.String()}
 	answers.Config.EnableLab = true
-	address := startApplianceWithAnswers(t, &answers)
-	root, err := filepath.Abs("..")
-	if err != nil {
-		t.Fatal(err)
-	}
-	n := &labGuest{t: t, name: name, address: address, root: root}
+	client := startApplianceWithAnswers(t, fixture, &answers)
+	address := client.baseURL
+	n := &labGuest{t: t, name: name, address: address, vm: client.vm}
 	n.client = newAPIClient(t, "http://127.0.0.1:8080")
+	n.client.vm = n.vm
 	n.client.client = &http.Client{Transport: n, Timeout: 65 * time.Second}
 	t.Cleanup(func() {
 		if t.Failed() {
@@ -387,15 +339,7 @@ func newLabGuest(t *testing.T, index int) *labGuest {
 	return n
 }
 
-func (n *labGuest) guest(script string) (string, error) {
-	// These appliance tests deliberately run serially; guestCommand uses this env.
-	previous := os.Getenv("VM_NAME")
-	if err := os.Setenv("VM_NAME", n.name); err != nil {
-		return "", err
-	}
-	defer os.Setenv("VM_NAME", previous)
-	return guestCommand(n.root, script)
-}
+func (n *labGuest) guest(script string) (string, error) { return guestCommand(n.vm, script) }
 
 func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
 
@@ -435,26 +379,11 @@ func (n *labGuest) RoundTrip(request *http.Request) (*http.Response, error) {
 
 func (n *labGuest) link(up bool) {
 	n.t.Helper()
-	raw, err := command(15*time.Second, n.root, nil, "virsh", "-c", env("LIBVIRT_URI", "qemu:///system"), "domiflist", n.name)
-	if err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := n.vm.Link(ctx, up); err != nil {
 		n.t.Fatal(err)
 	}
-	var mac string
-	for _, line := range strings.Split(raw, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 5 && fields[1] == "network" {
-			mac = fields[4]
-			break
-		}
-	}
-	if mac == "" {
-		n.t.Fatalf("no fixture network interface in %s", raw)
-	}
-	state := "down"
-	if up {
-		state = "up"
-	}
-	run(n.t, n.root, nil, "virsh", "-c", env("LIBVIRT_URI", "qemu:///system"), "domif-setlink", n.name, mac, state)
 	if !up {
 		n.t.Cleanup(func() { n.link(true) })
 	}
@@ -658,7 +587,7 @@ func (n *labGuest) assertStandaloneCredentialsRejected() {
 	}
 }
 
-func assertLabMembers(t *testing.T, count int, nodes ...*labGuest) {
+func assertLabMembers(t testT, count int, nodes ...*labGuest) {
 	t.Helper()
 	for _, node := range nodes {
 		waitFor(t, 90*time.Second, func() error {
@@ -685,7 +614,7 @@ func (n *labGuest) sql(path, query string) (string, error) {
 }
 
 // Compare independently read SQLite content, not publisher acknowledgements.
-func assertLabCaughtUp(t *testing.T, nodes ...*labGuest) {
+func assertLabCaughtUp(t testT, nodes ...*labGuest) {
 	t.Helper()
 	const metadata = "SELECT node_id,generation,revision FROM workload_identity WHERE singleton=1"
 	const content = "SELECT * FROM stacks ORDER BY id"

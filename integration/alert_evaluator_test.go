@@ -2,22 +2,15 @@ package integration_test
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
-	"testing"
 	"time"
 )
 
-func TestAlertEvaluator(t *testing.T) {
-	if os.Getenv("FLOATLAB_VM_INTEGRATION") != "1" {
-		t.Skip("run with FLOATLAB_VM_INTEGRATION=1 against a dedicated test appliance")
-	}
-	c := newAPIClient(t, startAppliance(t))
+func runAlertEvaluator(t testT, c *apiClient) {
 	c.waitReady()
 	c.login()
 	c.waitNodeReady()
-	root, _ := os.Getwd()
 	name := fmt.Sprintf("alerts-it-%d", time.Now().UnixNano())
 	metric := `fl_alert_evaluator_test{test_case=` + strconv.Quote(name) + `}`
 	rule := c.object("POST", "/api/v1/alert-rules", map[string]interface{}{
@@ -34,14 +27,14 @@ func TestAlertEvaluator(t *testing.T) {
 	})
 	t.Cleanup(func() {
 		if t.Failed() {
-			out, err := guestCommand(root, `docker logs --tail=80 $(docker ps -q --filter label=com.docker.compose.service=floatlab-control --filter label=com.docker.compose.project=floatlab-system)`)
+			out, err := guestCommand(c.vm, `docker logs --tail=80 $(docker ps -q --filter label=com.docker.compose.service=floatlab-control --filter label=com.docker.compose.project=floatlab-system)`)
 			t.Logf("evaluator diagnostics: %s\n%v", out, err)
 		}
 	})
 	push := func(a, b int) {
 		t.Helper()
 		body := fmt.Sprintf("fl_alert_evaluator_test{test_case=%q,node_id=%q,device=\"a\"} %d\nfl_alert_evaluator_test{test_case=%q,node_id=%q,device=\"b\"} %d\n", name, c.nodeID, a, name, c.nodeID, b)
-		out, err := guestCommand(root, "curl -fsS --data-binary '"+body+"' http://127.0.0.1:8428/api/v1/import/prometheus")
+		out, err := guestCommand(c.vm, "curl -fsS --data-binary '"+body+"' http://127.0.0.1:8428/api/v1/import/prometheus")
 		if err != nil {
 			t.Fatalf("push evaluator samples: %s %v", out, err)
 		}
@@ -123,7 +116,7 @@ func TestAlertEvaluator(t *testing.T) {
 	})
 
 	t.Log("restarting management and checking persistent identity and deduplication")
-	out, err := guestCommand(root, `docker restart $(docker ps -q --filter label=com.docker.compose.service=floatlab-control --filter label=com.docker.compose.project=floatlab-system)`)
+	out, err := guestCommand(c.vm, `docker restart $(docker ps -q --filter label=com.docker.compose.service=floatlab-control --filter label=com.docker.compose.project=floatlab-system)`)
 	if err != nil {
 		t.Fatalf("restart management: %s %v", out, err)
 	}

@@ -12,14 +12,14 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/onsi/ginkgo/v2"
+	"github.com/onsi/gomega"
 )
 
 // Exercise the actual Compose SDK and daemon: a cached :latest image must not
 // contact its registry during start, while an explicit upgrade must do so.
-func TestComposeCachedStartAndExplicitPull(t *testing.T) {
-	if os.Getenv("FLOATLAB_DOCKER_INTEGRATION") != "1" {
-		t.Skip("set FLOATLAB_DOCKER_INTEGRATION=1 with Docker available")
-	}
+func runTestComposeCachedStartAndExplicitPull(t ginkgo.GinkgoTInterface) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	var requests atomic.Int64
@@ -85,3 +85,17 @@ func TestComposeCachedStartAndExplicitPull(t *testing.T) {
 		t.Fatalf("explicit always policy ignored: requests=%d err=%v", requests.Load(), err)
 	}
 }
+
+func TestDockerIntegration(t *testing.T) {
+	if os.Getenv("FLOATLAB_DOCKER_INTEGRATION") != "1" {
+		t.Skip("run the disposable-appliance integration suite")
+	}
+	gomega.RegisterFailHandler(ginkgo.Fail)
+	config, reporter := ginkgo.GinkgoConfiguration()
+	config.FailOnEmpty = true
+	ginkgo.RunSpecs(t, "TestDockerIntegration", config, reporter)
+}
+
+var _ = ginkgo.Describe("TestDockerIntegration", ginkgo.Serial, func() {
+	ginkgo.It("TestComposeCachedStartAndExplicitPull", func() { runTestComposeCachedStartAndExplicitPull(ginkgo.GinkgoT()) })
+})

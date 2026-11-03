@@ -368,7 +368,7 @@ just run
 ```
 
 This builds the standard installer ISO and opens the interactive installation flow on
-a blank UEFI disk. The minimum supported appliance and acceptance VMs have 4 GiB RAM.
+a blank UEFI disk. The minimum supported appliance has 4 GiB RAM; integration tests deliberately constrain every test VM to 3584 MiB.
 Existing domains and volumes are not replaced. For unattended installation:
 
 ```bash
@@ -387,14 +387,13 @@ VM_NAME=test2 ZFS_DISK_SIZE=32G MEMORY_MB=4096 ./scripts/run-libvirt.sh
 From the repository root, run complete workload and multi-node acceptance with:
 
 ```bash
-scripts/test-workloads.sh
-scripts/test-multi-node.sh
+FLOATLAB_INTEGRATION=1 go test -count=1 -timeout 12h -v ./integration
 ```
 
 All appliance E2E suites, including host upgrades, use the shared unattended installer
 harness. They check `/floatlab/system/etc/installed`, the installer's completed status,
-the pool's `mountpoint=none`, and a disk-booted `floatlab/os/live` root. Existing dedicated
-appliances supplied through `API_URL` plus `VM_SSH` or `VM_NAME` must pass those checks too.
+the pool's `mountpoint=none`, and a disk-booted `floatlab/os/live` root. Only disposable
+appliances created by the Go harness are supported.
 Each suite discovers the real installer-generated node ID instead of assuming `node1`.
 The installer UI/mirror tests still drive the actual interactive installer intentionally.
 

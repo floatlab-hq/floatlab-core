@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 
+	"github.com/floatlab/floatlab-core/internal/integrationcoverage"
+
 	"fmt"
 	"net/http"
 	"os"
@@ -70,6 +72,7 @@ var (
 )
 
 func main() {
+	defer integrationcoverage.Flush()
 	root := &cobra.Command{
 		Use:   "floatlab-control",
 		Short: "FloatLab control plane — state management, API, and failover orchestration",
@@ -115,6 +118,7 @@ func main() {
 	root.Flags().StringSliceVar(&isolationProbes, "isolation-probe", nil, "Known reachable host/production TCP endpoints that sandbox must deny")
 
 	if err := root.Execute(); err != nil {
+		integrationcoverage.Flush()
 		os.Exit(1)
 	}
 }

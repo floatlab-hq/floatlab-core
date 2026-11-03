@@ -1,4 +1,4 @@
-{ config, lib, pkgs, floatlab-installer-binaries, ... }:
+{ config, lib, pkgs, floatlab-installer-binaries, integrationCoverage ? false, ... }:
 let
   root = "/run/floatlab-installer/root";
   chroot = "${pkgs.coreutils}/bin/chroot ${root} /run/current-system/sw/bin";
@@ -175,7 +175,9 @@ in {
     };
   };
   systemd.services.floatlab-hostd = {
-    environment.SYSTEMD_OFFLINE = "0";
+    environment = { SYSTEMD_OFFLINE = "0"; } // lib.optionalAttrs integrationCoverage {
+      GOCOVERDIR = "/floatlab/integration-coverage";
+    };
     requires = [ "floatlab-installer-root.service" "floatlab-network-config.service" ];
     after = [ "floatlab-installer-root.service" "floatlab-network-config.service" ];
     serviceConfig = {
@@ -189,6 +191,9 @@ in {
     };
   };
   systemd.services.floatlab-core-stack = {
+    environment = lib.optionalAttrs integrationCoverage {
+      GOCOVERDIR = "/floatlab/integration-coverage";
+    };
     requires = [ "floatlab-installer-root.service" "docker.service" "floatlab-hostd.service" "floatlab-network-config.service" ];
     after = [ "floatlab-installer-root.service" "docker.service" "floatlab-hostd.service" "floatlab-network-config.service" "network-online.target" ];
     wants = [ "network-online.target" ];

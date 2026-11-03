@@ -4,13 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/floatlab/floatlab-core/internal/hostupgrade"
-	"github.com/floatlab/floatlab-core/internal/managementupdate"
-	"github.com/floatlab/floatlab-core/pkg/ipc"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/floatlab/floatlab-core/internal/hostupgrade"
+	"github.com/floatlab/floatlab-core/internal/integrationcoverage"
+	"github.com/floatlab/floatlab-core/internal/managementupdate"
+	"github.com/floatlab/floatlab-core/pkg/ipc"
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -21,6 +23,7 @@ import (
 )
 
 func main() {
+	defer integrationcoverage.Flush()
 	root := &cobra.Command{
 		Use:   "floatlab-hostd",
 		Short: "FloatLab host daemon — manages filesystem and containers on behalf of the control plane",
@@ -116,6 +119,7 @@ func main() {
 	}
 	root.AddCommand(updates)
 	if err := root.Execute(); err != nil {
+		integrationcoverage.Flush()
 		os.Exit(1)
 	}
 }

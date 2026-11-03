@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/floatlab/floatlab-core/internal/integrationcoverage"
 	"github.com/floatlab/floatlab-core/internal/update"
 	"gopkg.in/yaml.v3"
 )
@@ -105,6 +107,9 @@ func (l *Linux) Preflight(ctx context.Context, s *Status) (result error) {
 		}
 		if _, e = l.run(cleanupCtx, "nft", "delete", "table", "inet", table); result == nil {
 			result = e
+		}
+		if err := integrationcoverage.ArchiveSandbox(filepath.Join(workloads, "integration-coverage"), s.OperationID); err != nil {
+			result = errors.Join(result, err)
 		}
 	}()
 	if _, e = l.run(ctx, "docker", "network", "create", "--internal", "--driver", "bridge", "--opt", "com.docker.network.bridge.name="+bridge, "--ipv6=false", network); e != nil {
@@ -245,6 +250,7 @@ func sandboxCompose(s *Status, root, identityPath, nodeID, network string) map[s
 	control["environment"] = map[string]string{"GOMEMLIMIT": "288MiB", "FLOATLAB_APPLIANCE_CONFIG": "/config/appliance.json", "FLOATLAB_UPDATE_RELEASE": s.TargetRelease}
 	control["volumes"] = append(volumes("raft", "/var/lib/floatlab/raft"), map[string]any{"type": "bind", "source": identityPath, "target": "/config/appliance.json", "read_only": true}, map[string]any{"type": "bind", "source": "/run/floatlab/preflight", "target": "/run/preflight", "read_only": true})
 	control["volumes"] = append(control["volumes"].([]any), map[string]any{"type": "bind", "source": filepath.Join(filepath.Dir(identityPath), "workloads"), "target": "/var/lib/floatlab/workloads"})
+	integrationcoverage.ConfigureSandbox(control)
 	ss["floatlab-control"] = control
 	return map[string]any{"services": ss, "networks": map[string]any{"sandbox": map[string]any{"external": true, "name": network}}}
 }

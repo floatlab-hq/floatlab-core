@@ -105,3 +105,13 @@ jobs:
 
       - name: Test
         run: go test -race -count=1 ./pkg/... ./internal/... ./api/openapi ./integration
+
+      - name: Compile appliance integration binaries without C bindings
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          go test -c -o "$RUNNER_TEMP/floatlab-integration.test" ./integration
+          go test -c -tags=appliance,integrationcoverage -cover -covermode=atomic -coverpkg=./... -o "$RUNNER_TEMP/floatlab-host-upgrade.test" ./internal/hostupgrade
+          go test -c -tags=appliance,integrationcoverage -cover -covermode=atomic -coverpkg=./... -o "$RUNNER_TEMP/floatlab-management-update.test" ./internal/managementupdate
