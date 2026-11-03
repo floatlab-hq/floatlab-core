@@ -33,9 +33,10 @@ type Run struct {
 }
 
 type Guest struct {
-	Run    *Run
-	Domain libvirt.Domain
-	Name   string
+	Run           *Run
+	Domain        libvirt.Domain
+	Name          string
+	SerialLogPath string
 }
 
 func connect(ctx context.Context, socket string) (*libvirt.Libvirt, func(), error) {
@@ -181,6 +182,16 @@ func (r *Run) Boot(ctx context.Context, iso, answersISO string, diskGiB uint64) 
 	name := fmt.Sprintf("%s-%d", r.Name, len(r.Guests)+1)
 	g := &Guest{Run: r, Name: name, Domain: libvirt.Domain{Name: name, UUID: libvirt.UUID(uuid.New()), ID: -1}}
 	r.Guests = append(r.Guests, g)
+	g.SerialLogPath = filepath.Join(r.Directory, name+"-serial.log")
+	log, err := os.OpenFile(g.SerialLogPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, err
+	}
+	// Retain host read access after libvirt relabels ownership to QEMU.
+	err = log.Chmod(0644)
+	if err := errors.Join(err, log.Close()); err != nil {
+		return nil, err
+	}
 	create := func(name, format string, size uint64, source string) (string, error) {
 		vol, err := l.StorageVolCreateXML(r.pool, fmt.Sprintf(`<volume><name>%s</name><capacity unit="bytes">%d</capacity><allocation>0</allocation><target><format type="%s"/></target></volume>`, name, size, format), 0)
 		if err != nil {
@@ -211,7 +222,7 @@ func (r *Run) Boot(ctx context.Context, iso, answersISO string, diskGiB uint64) 
 	if err != nil {
 		return nil, err
 	}
-	xml := strings.Replace(domainXML(name, r.Name, iso, disk, answers), "<domain type=\"kvm\">", "<domain type=\"kvm\"><uuid>"+uuid.UUID(g.Domain.UUID).String()+"</uuid>", 1)
+	xml := strings.Replace(domainXML(name, r.Name, iso, disk, answers, g.SerialLogPath), "<domain type=\"kvm\">", "<domain type=\"kvm\"><uuid>"+uuid.UUID(g.Domain.UUID).String()+"</uuid>", 1)
 	domain, err := l.DomainDefineXML(xml)
 	if err != nil {
 		return nil, err
@@ -223,8 +234,8 @@ func (r *Run) Boot(ctx context.Context, iso, answersISO string, diskGiB uint64) 
 	return g, nil
 }
 
-func domainXML(name, network, iso, disk, answers string) string {
-	return fmt.Sprintf(`<domain type="kvm"><name>%s</name><memory unit="MiB">%d</memory><currentMemory unit="MiB">%d</currentMemory><vcpu>4</vcpu><cpu mode="host-passthrough"/><os firmware="efi"><type arch="x86_64" machine="q35">hvm</type><firmware><feature enabled="no" name="secure-boot"/></firmware></os><features><acpi/><apic/></features><devices><disk type="file" device="disk"><driver name="qemu" type="qcow2"/><source file="%s"/><target dev="vda" bus="virtio"/><serial>floatlab-zfs</serial><boot order="1"/></disk><disk type="file" device="cdrom"><driver name="qemu" type="raw"/><source file="%s"/><target dev="sda" bus="sata"/><readonly/><boot order="2"/></disk><disk type="file" device="cdrom"><driver name="qemu" type="raw"/><source file="%s"/><target dev="sdb" bus="sata"/><readonly/></disk><interface type="network"><source network="%s"/><model type="virtio"/></interface><channel type="unix"><target type="virtio" name="org.qemu.guest_agent.0"/></channel><serial type="pty"/><console type="pty"/></devices></domain>`, escape(name), MemoryMiB, MemoryMiB, escape(disk), escape(iso), escape(answers), escape(network))
+func domainXML(name, network, iso, disk, answers, serialLog string) string {
+	return fmt.Sprintf(`<domain type="kvm"><name>%s</name><memory unit="MiB">%d</memory><currentMemory unit="MiB">%d</currentMemory><vcpu>4</vcpu><cpu mode="host-passthrough"/><os firmware="efi"><type arch="x86_64" machine="q35">hvm</type><firmware><feature enabled="no" name="secure-boot"/></firmware></os><features><acpi/><apic/></features><devices><disk type="file" device="disk"><driver name="qemu" type="qcow2"/><source file="%s"/><target dev="vda" bus="virtio"/><serial>floatlab-zfs</serial><boot order="1"/></disk><disk type="file" device="cdrom"><driver name="qemu" type="raw"/><source file="%s"/><target dev="sda" bus="sata"/><readonly/><boot order="2"/></disk><disk type="file" device="cdrom"><driver name="qemu" type="raw"/><source file="%s"/><target dev="sdb" bus="sata"/><readonly/></disk><interface type="network"><source network="%s"/><model type="virtio"/></interface><channel type="unix"><target type="virtio" name="org.qemu.guest_agent.0"/></channel><serial type="pty"><log file="%s" append="on"/></serial><console type="pty"/></devices></domain>`, escape(name), MemoryMiB, MemoryMiB, escape(disk), escape(iso), escape(answers), escape(network), escape(serialLog))
 }
 
 func (g *Guest) Agent(ctx context.Context, operation string, args any, result any) error {

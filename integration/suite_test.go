@@ -136,6 +136,11 @@ func (f *applianceFixture) open(name string) {
 func (f *applianceFixture) collect() {
 	var errs []error
 	for _, vm := range f.run.Guests {
+		serial, err := os.ReadFile(vm.SerialLogPath)
+		if err != nil {
+			serial = []byte("serial log unavailable: " + err.Error() + "\n")
+		}
+		errs = append(errs, os.WriteFile(filepath.Join(f.report, vm.Name+"-serial.log"), serial, 0600))
 		out, err := guestCommand(vm, `docker ps -a; journalctl -u floatlab-hostd -u floatlab-core-stack --no-pager -n 100; zfs list -t all`)
 		if err != nil {
 			out += "\n" + err.Error()

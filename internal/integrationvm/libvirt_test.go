@@ -2,6 +2,7 @@ package integrationvm
 
 import (
 	"context"
+	"encoding/xml"
 	"errors"
 	"net"
 	"net/netip"
@@ -11,6 +12,28 @@ import (
 
 	libvirt "github.com/digitalocean/go-libvirt"
 )
+
+func TestDomainSerialLogPreservesConsoleAndEscapesPath(t *testing.T) {
+	path := "/tmp/owned-run/serial&console.log"
+	var domain struct {
+		Serial struct {
+			Type string `xml:"type,attr"`
+			Log  struct {
+				File   string `xml:"file,attr"`
+				Append string `xml:"append,attr"`
+			} `xml:"log"`
+		} `xml:"devices>serial"`
+		Console struct {
+			Type string `xml:"type,attr"`
+		} `xml:"devices>console"`
+	}
+	if err := xml.Unmarshal([]byte(domainXML("guest", "network", "image.iso", "disk.qcow2", "answers.iso", path)), &domain); err != nil {
+		t.Fatal(err)
+	}
+	if domain.Serial.Type != "pty" || domain.Console.Type != "pty" || domain.Serial.Log.File != path || domain.Serial.Log.Append != "on" {
+		t.Fatalf("serial console logging lost: %+v", domain)
+	}
+}
 
 func TestCleanupIgnoresOnlyAlreadyMissingResources(t *testing.T) {
 	if err := missing(libvirt.Error{Code: uint32(libvirt.ErrNoDomain)}, libvirt.ErrNoDomain); err != nil {
