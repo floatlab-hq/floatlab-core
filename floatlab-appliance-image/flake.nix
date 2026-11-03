@@ -154,11 +154,11 @@
           mkdir -p "$out"
           export PATH=${pkgs.lib.makeBinPath [ pkgs.floatlab-zbm-kcl ]}
           zbm-kcl -r spl_hostid -r zbm.prefer -r zbm.import_policy -r zbm.timeout -r console \
-            -a 'spl_hostid=12345678 zbm.prefer=floatlab!! zbm.import_policy=strict zbm.timeout=5 console=tty0 console=ttyS0,115200n8' \
+            -a 'spl_hostid=0x20390125 zbm.prefer=floatlab!! zbm.import_policy=strict zbm.timeout=5 console=tty0 console=ttyS0,115200n8' \
             -o "$out/BOOTX64.EFI" ${zfsbootmenu}
           cmdline=$(zbm-kcl "$out/BOOTX64.EFI")
           case "$cmdline" in
-            *'spl_hostid=12345678 zbm.prefer=floatlab!! zbm.import_policy=strict zbm.timeout=5 console=tty0 console=ttyS0,115200n8'*) ;;
+            *'spl_hostid=0x20390125 zbm.prefer=floatlab!! zbm.import_policy=strict zbm.timeout=5 console=tty0 console=ttyS0,115200n8'*) ;;
             *) exit 1 ;;
           esac
         '';

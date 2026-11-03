@@ -446,7 +446,7 @@ func installWorker(stopCtx context.Context, runtimeDir, persistentDir, mediaDir 
 					if e := copyVerifiedProgress(mediaDir+"/zfsbootmenu.EFI", target, payload.Files["zfsbootmenu.EFI"], progress); e != nil {
 						return e
 					}
-					if e := runStep("zbm-kcl", "-r", "spl_hostid", "-r", "zbm.prefer", "-r", "zbm.import_policy", "-r", "zbm.timeout", "-r", "console", "-a", "spl_hostid="+op.Identity.HostID+" zbm.prefer=floatlab!! zbm.import_policy=strict zbm.timeout=5 console=tty0 console=ttyS0,115200n8", target); e != nil {
+					if e := runStep("zbm-kcl", "-r", "spl_hostid", "-r", "zbm.prefer", "-r", "zbm.import_policy", "-r", "zbm.timeout", "-r", "console", "-a", "spl_hostid=0x"+op.Identity.HostID+" zbm.prefer=floatlab!! zbm.import_policy=strict zbm.timeout=5 console=tty0 console=ttyS0,115200n8", target); e != nil {
 						return e
 					}
 					return runStep("sync", "-f", target)
