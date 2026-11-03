@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/floatlab/floatlab-core/pkg/monitoring"
 	"github.com/floatlab/floatlab-core/pkg/store"
 	. "github.com/onsi/ginkgo/v2"
 )
@@ -117,7 +118,7 @@ func defineReplication(fixture *applianceFixture) {
 		if err := source.json("POST", "/api/v1/storage/replication/"+stack+"/trigger?"+url.Values{"dataset": {dataset}, "dest_node_id": {backupID}}.Encode(), map[string]any{}, &failed); err != nil {
 			t.Fatal(err)
 		}
-		alertID := "replication:" + sourceID + ":" + dataset + ":" + backupID
+		alertID := replicationIncidentID(t, source, sourceID, stack, dataset, backupID)
 		assertReplicationAlert(t, source, stack, alertID, "active")
 		if out, err := backup.guest("systemctl start sshd"); err != nil {
 			t.Fatalf("restore backup transport: %s %v", out, err)
@@ -207,6 +208,42 @@ func newReplicationLab(t testT, fixture *applianceFixture) (*labGuest, *labGuest
 	other.join(source)
 	assertLabMembers(t, 3, source, backup, other)
 	return source, backup, other
+}
+
+func replicationIncidentID(t testT, source *labGuest, sourceID, stack, dataset, destination string) string {
+	t.Helper()
+	var incidentID string
+	waitFor(t, time.Minute, func() error {
+		raw, err := source.sql("/floatlab/system/workloads/local.sqlite", "SELECT state_json FROM monitoring_checks WHERE producer='worker'")
+		if err != nil {
+			return err
+		}
+		var rows []struct {
+			State string `json:"state_json"`
+		}
+		if err := json.Unmarshal([]byte(raw), &rows); err != nil {
+			return err
+		}
+		var matches []monitoring.Check
+		for _, row := range rows {
+			var check monitoring.Check
+			if err := json.Unmarshal([]byte(row.State), &check); err != nil {
+				return err
+			}
+			if check.Kind == "replication" && check.Resource == (monitoring.Resource{HostID: sourceID, WorkloadID: stack, Dataset: dataset, SourceID: sourceID, DestinationID: destination}) {
+				matches = append(matches, check)
+			}
+		}
+		if len(matches) != 1 {
+			return fmt.Errorf("expected one replication check for %s on %s to %s, got %d", dataset, sourceID, destination, len(matches))
+		}
+		if matches[0].IncidentID == "" {
+			return fmt.Errorf("replication check for %s to %s has no incident: status=%s reason=%s", dataset, destination, matches[0].Status, matches[0].Reason)
+		}
+		incidentID = matches[0].IncidentID
+		return nil
+	})
+	return incidentID
 }
 
 func assertReplicationAlert(t testT, source *labGuest, stack, id, state string) {
