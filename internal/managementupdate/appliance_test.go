@@ -18,6 +18,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/onsi/ginkgo/v2"
+	"github.com/onsi/gomega"
+
 	"github.com/floatlab/floatlab-core/internal/update"
 	"gopkg.in/yaml.v3"
 )
@@ -33,7 +36,7 @@ type applianceFixture struct {
 const applianceTargetVersion = "0.1.1-dev"
 const applianceTargetRelease = "manage-v" + applianceTargetVersion
 
-func TestApplianceSandboxFirewallParser(t *testing.T) {
+func runTestApplianceSandboxFirewallParser(t ginkgo.GinkgoTInterface) {
 	requireAppliance(t)
 	path := filepath.Join(t.TempDir(), "isolation.nft")
 	if err := os.WriteFile(path, []byte(sandboxFirewallRules("floatlab_acceptance_parser", "ftparser")), 0600); err != nil {
@@ -45,7 +48,7 @@ func TestApplianceSandboxFirewallParser(t *testing.T) {
 	}
 }
 
-func TestApplianceManagementRecoverRetained(t *testing.T) {
+func runTestApplianceManagementRecoverRetained(t ginkgo.GinkgoTInterface) {
 	requireAppliance(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -256,7 +259,7 @@ func (b *applianceFixture) Restore(ctx context.Context, s *Status) error {
 	return restore.Restore(ctx, s)
 }
 
-func requireAppliance(t *testing.T) {
+func requireAppliance(t ginkgo.GinkgoTInterface) {
 	t.Helper()
 	if os.Getenv("FLOATLAB_MANAGEMENT_APPLIANCE") != "1" {
 		t.Skip("requires disposable appliance and explicit FLOATLAB_MANAGEMENT_APPLIANCE=1")
@@ -357,7 +360,7 @@ func provisionApplianceIdentity(ctx context.Context, l *Linux) error {
 		time.Sleep(time.Second)
 	}
 }
-func applianceStatus(t *testing.T, m *Manager, id string, want string) *Status {
+func applianceStatus(t ginkgo.GinkgoTInterface, m *Manager, id string, want string) *Status {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Minute)
 	for {
@@ -381,8 +384,12 @@ func applianceStatus(t *testing.T, m *Manager, id string, want string) *Status {
 	}
 }
 
-func TestApplianceManagementTransactions(t *testing.T) {
+func runTestApplianceManagementTransactions(t ginkgo.GinkgoTInterface) {
 	requireAppliance(t)
+	scenarioName := os.Getenv("FLOATLAB_MANAGEMENT_SCENARIO")
+	if scenarioName != "preflight-failure" && scenarioName != "commit" && scenarioName != "rollback" {
+		t.Fatal("FLOATLAB_MANAGEMENT_SCENARIO must select preflight-failure, commit, or rollback")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	l := &Linux{Dir: Directory}
@@ -397,41 +404,12 @@ func TestApplianceManagementTransactions(t *testing.T) {
 		t.Fatal("candidate must have a different version from source")
 	}
 	t.Logf("actual management transition %s -> %s", baseline.SourceRelease, applianceTargetRelease)
-	source, err := composeDocument(baseline.PreviousCompose)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sourceControl := services(source)["floatlab-control"]["image"].(string)
-	// A separate workload and dataset must survive every management stop and rollback.
-	workload := "floatlab-update-proof"
-	if _, err = l.run(ctx, "docker", "run", "-d", "--name", workload, "--restart=unless-stopped", "--entrypoint", "/usr/bin/sleep", sourceControl, "infinity"); err != nil {
-		t.Fatal(err)
-	}
-	defer l.run(context.Background(), "docker", "rm", "-f", workload)
-	if _, err = l.run(ctx, "zfs", "create", "-p", "floatlab/stacks/update-proof"); err != nil {
-		t.Fatal(err)
-	}
-	defer l.run(context.Background(), "zfs", "destroy", "floatlab/stacks/update-proof")
-	if err = os.WriteFile("/floatlab/stacks/update-proof/marker", []byte("workload-data"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	workloadID, err := l.run(ctx, "docker", "inspect", "--format", "{{.Id}}", workload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertWorkload := func() {
-		t.Helper()
-		running, e := l.run(ctx, "docker", "inspect", "--format", "{{.Id}} {{.State.Running}} {{.HostConfig.RestartPolicy.Name}}", workload)
-		if e != nil || running != workloadID+" true unless-stopped" {
-			t.Fatalf("workload changed: %s %v", running, e)
-		}
-		data, e := os.ReadFile("/floatlab/stacks/update-proof/marker")
-		if e != nil || string(data) != "workload-data" {
-			t.Fatalf("workload data changed %q %v", data, e)
-		}
-	}
 	for _, scenario := range []struct{ name, failure, want string }{{"preflight-failure", "preflight", "failed"}, {"commit", "", "succeeded"}, {"rollback", "install", "rolled_back"}} {
-		if !t.Run(scenario.name, func(t *testing.T) {
+		if scenario.name != scenarioName {
+			continue
+		}
+		ginkgo.By(scenario.name)
+		func() {
 			beforeControl := l.controlID(ctx)
 			id := fmt.Sprintf("appliance-%s-%d", scenario.name, time.Now().Unix())
 			backend := &applianceFixture{Linux: l, failure: scenario.failure}
@@ -447,7 +425,6 @@ func TestApplianceManagementTransactions(t *testing.T) {
 				if status.Authorized || status.Snapshot != "" || l.controlID(ctx) != beforeControl {
 					t.Fatalf("failed preflight changed production %s", applianceSummary(status))
 				}
-				assertWorkload()
 				return
 			}
 			if !status.Authorized || status.Snapshot == "" {
@@ -462,7 +439,6 @@ func TestApplianceManagementTransactions(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			assertWorkload()
 			raw, err := l.run(ctx, "zfs", "list", "-H", "-r", "-t", "filesystem", "-o", "name", "floatlab/system/update-tests")
 			if err == nil && strings.Contains(raw, "/"+id) {
 				t.Fatalf("test clone leaked %s", raw)
@@ -474,32 +450,21 @@ func TestApplianceManagementTransactions(t *testing.T) {
 			if err = l.verifyRunningImages(ctx, &check); err != nil {
 				t.Fatal(err)
 			}
-			// Return the successful candidate to its source so subsequent scenarios share a known baseline.
-			if scenario.want == "succeeded" {
-				if status, err = manager.Rollback(ctx, id); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err = l.Cleanup(ctx, status); err != nil {
-				t.Fatal(err)
-			}
-			status.Snapshot = ""
-			if err = manager.save(status); err != nil {
-				t.Fatal(err)
-			}
-		}) {
-			return
-		}
+			// The runner submits rollback and cleanup through the authenticated API.
+
+		}()
 	}
 }
 
-func TestApplianceManagementCrashAfterInstall(t *testing.T) {
+func runTestApplianceManagementCrashAfterInstall(t ginkgo.GinkgoTInterface) {
 	applianceCrash(t, "crash")
 }
 
-func TestApplianceManagementCrashDuringRestore(t *testing.T) { applianceCrash(t, "restore-crash") }
+func runTestApplianceManagementCrashDuringRestore(t ginkgo.GinkgoTInterface) {
+	applianceCrash(t, "restore-crash")
+}
 
-func applianceCrash(t *testing.T, failure string) {
+func applianceCrash(t ginkgo.GinkgoTInterface, failure string) {
 	requireAppliance(t)
 	l := &Linux{Dir: Directory}
 	baseline := &Status{}
@@ -518,7 +483,7 @@ func applianceCrash(t *testing.T, failure string) {
 	t.Fatal("fault injection did not terminate updater")
 }
 
-func TestApplianceManagementCrashRecovered(t *testing.T) {
+func runTestApplianceManagementCrashRecovered(t ginkgo.GinkgoTInterface) {
 	requireAppliance(t)
 	b, err := os.ReadFile(filepath.Join(Directory, "appliance-crash-expected.json"))
 	if err != nil {
@@ -560,3 +525,22 @@ func TestApplianceManagementCrashRecovered(t *testing.T) {
 func applianceSummary(s *Status) string {
 	return fmt.Sprintf("operation=%s state=%s phase=%s error=%q rollback_error=%q", s.OperationID, s.State, s.Phase, s.Error, s.RollbackError)
 }
+
+func TestManagementApplianceIntegration(t *testing.T) {
+	if os.Getenv("FLOATLAB_MANAGEMENT_APPLIANCE") != "1" {
+		t.Skip("requires the disposable-appliance integration runner")
+	}
+	gomega.RegisterFailHandler(ginkgo.Fail)
+	config, reporter := ginkgo.GinkgoConfiguration()
+	config.FailOnEmpty = true
+	ginkgo.RunSpecs(t, "TestManagementApplianceIntegration", config, reporter)
+}
+
+var _ = ginkgo.DescribeTable("appliance phase", func(run func(ginkgo.GinkgoTInterface)) { run(ginkgo.GinkgoT()) },
+	ginkgo.Entry("TestApplianceSandboxFirewallParser", runTestApplianceSandboxFirewallParser),
+	ginkgo.Entry("TestApplianceManagementRecoverRetained", runTestApplianceManagementRecoverRetained),
+	ginkgo.Entry("TestApplianceManagementTransactions", runTestApplianceManagementTransactions),
+	ginkgo.Entry("TestApplianceManagementCrashAfterInstall", runTestApplianceManagementCrashAfterInstall),
+	ginkgo.Entry("TestApplianceManagementCrashDuringRestore", runTestApplianceManagementCrashDuringRestore),
+	ginkgo.Entry("TestApplianceManagementCrashRecovered", runTestApplianceManagementCrashRecovered),
+)

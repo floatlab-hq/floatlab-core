@@ -1,4 +1,4 @@
-{ config, floatlab-binaries, pkgs, ... }:
+{ config, floatlab-binaries, pkgs, lib, integrationCoverage ? false, ... }:
 {
   # PID1 feeds supported watchdog hardware; the independent trial guard still owns readiness.
   systemd.settings.Manager = {
@@ -13,10 +13,11 @@
   }) ];
   systemd.services.floatlab-hostd = {
     description = "FloatLab host daemon";
+    environment = lib.optionalAttrs integrationCoverage { GOCOVERDIR = "/floatlab/system/integration-coverage"; };
     path = with pkgs; [ coreutils docker inetutils iproute2 openssh zfs systemd ethtool util-linux gnutar gzip nix efibootmgr floatlab-zbm-kcl nftables docker-compose sqlite ];
     wantedBy = [ "multi-user.target" ];
-    requires = [ "floatlab-network-config.service" "floatlab-datasets.service" "floatlab-lab-quarantine.service" ];
-    after = [ "floatlab-network-config.service" "floatlab-datasets.service" ];
+    requires = [ "floatlab-network-config.service" "floatlab-datasets.service" "floatlab-lab-quarantine.service" ] ++ lib.optional integrationCoverage "floatlab-integration-coverage.service";
+    after = [ "floatlab-network-config.service" "floatlab-datasets.service" ] ++ lib.optional integrationCoverage "floatlab-integration-coverage.service";
     before = [ "floatlab-core-stack.service" ];
     serviceConfig = {
       ExecStart = pkgs.writeShellScript "floatlab-hostd-launch" ''
@@ -62,6 +63,7 @@
   # Independent from hostd and its network, Docker, and persistent-mount dependencies.
   systemd.services.floatlab-boot-recovery = {
     description = "Recover an uncommitted FloatLab OS boot";
+    environment = lib.optionalAttrs integrationCoverage { GOCOVERDIR = "/run/floatlab-boot-recovery/coverage"; };
     wantedBy = [ "sysinit.target" ];
     unitConfig.DefaultDependencies = false;
     after = [ "local-fs.target" ];

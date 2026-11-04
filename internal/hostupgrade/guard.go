@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/floatlab/floatlab-core/internal/integrationcoverage"
 	"github.com/floatlab/floatlab-core/internal/update"
 	"golang.org/x/sys/unix"
 )
@@ -143,6 +144,7 @@ func Guard(ctx context.Context) error {
 			if g.Expired(now) {
 				_ = update.WriteJSON(filepath.Join(Directory, "boot-failure-"+token+".json"), map[string]any{"operation_id": token, "error": "trial readiness deadline or heartbeat expired", "time": time.Now().UTC()})
 				reboot, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				integrationcoverage.Flush()
 				_ = (Linux{}).run(reboot, "systemctl", "reboot")
 				cancel()
 				// If orderly shutdown stalls, PID1's bounded force request still runs independently.
@@ -151,6 +153,7 @@ func Guard(ctx context.Context) error {
 					return ctx.Err()
 				case <-time.After(30 * time.Second):
 				}
+				integrationcoverage.Flush()
 				return (Linux{}).run(context.Background(), "systemctl", "reboot", "--force", "--force")
 			}
 		}

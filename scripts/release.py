@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -167,6 +168,8 @@ def container_bundle(directory, management, sidecars, expected_manage_id=None):
         compose, count = re.subn(pattern, lambda m: m[1] + local, compose, count=1, flags=re.M)
         if count != 1:
             raise ValueError(f"Missing Compose image for {service}")
+    if os.environ.get("FLOATLAB_INTEGRATION_COVERAGE") == "1":
+        compose = compose.replace("      FLOATLAB_ACTIVATION_DIR:", "      GOCOVERDIR: /floatlab/system/integration-coverage\n      FLOATLAB_ACTIVATION_DIR:")
     (directory / "docker-compose.yml").write_text(compose)
     write(directory / "images.json", images)
 
@@ -188,7 +191,7 @@ def prepare_iso(directory, iso_version, local_host=None):
         for name in host["files"]:
             shutil.copyfile(local_host / name, directory / name)
         management = "floatlab-manage:dev"
-        run("docker", "build", "--tag", management, "--file", "docker/floatlab-control.Dockerfile", ".")
+        run("docker", "build", "--build-arg", "INTEGRATION_COVERAGE=" + os.environ.get("FLOATLAB_INTEGRATION_COVERAGE", "0"), "--tag", management, "--file", "docker/floatlab-control.Dockerfile", ".")
         sidecars = read(LOCK)["sidecars"]
         container_bundle(directory, management, sidecars)
         manage_version = "0.1.0-dev"

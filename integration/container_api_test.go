@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"io"
 	"net"
@@ -12,28 +11,29 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
-	"testing"
 	"time"
+
+	"github.com/floatlab/floatlab-core/internal/integrationvm"
+	"github.com/onsi/gomega"
 
 	"github.com/coder/websocket"
 	"github.com/floatlab/floatlab-core/api/openapi"
+	"github.com/floatlab/floatlab-core/internal/hostnetwork"
+	"github.com/floatlab/floatlab-core/internal/installer"
 )
 
 type apiClient struct {
-	t       *testing.T
-	baseURL string
-	token   string
-	client  *http.Client
+	t        testT
+	baseURL  string
+	token    string
+	client   *http.Client
+	vm       *integrationvm.Guest
+	coverage *coverageRun
+	nodeID   string
 }
 
-func TestContainerManagementAPI(t *testing.T) {
-	if os.Getenv("FLOATLAB_VM_INTEGRATION") != "1" {
-		t.Skip("run with FLOATLAB_VM_INTEGRATION=1 go test -count=1 -timeout 30m -v ./integration")
-	}
-
-	c := newAPIClient(t, startAppliance(t))
+func runContainerManagementAPI(t testT, c *apiClient) {
 	c.waitReady()
 	c.assertUnauthorized()
 	c.login()
@@ -41,7 +41,7 @@ func TestContainerManagementAPI(t *testing.T) {
 
 	stackName := fmt.Sprintf("api-it-%d", time.Now().UnixNano())
 	marker := "floatlab-api-integration-" + stackName
-	compose := composeFixture(stackName, marker, "alpine:3.20", "from-start")
+	compose := c.composeFixture(stackName, marker, "alpine:3.20", "from-start")
 
 	started := c.startNewStack(stackName, compose)
 	stackID := started.StackID
@@ -86,121 +86,18 @@ func TestContainerManagementAPI(t *testing.T) {
 	stackID = ""
 }
 
-func newAPIClient(t *testing.T, baseURL string) *apiClient {
+func newAPIClient(t testT, baseURL string) *apiClient {
 	t.Helper()
 	return &apiClient{t: t, baseURL: strings.TrimRight(baseURL, "/"), client: &http.Client{Timeout: 20 * time.Second}}
 }
 
-// All appliance acceptance tests qualify the minimum supported 4 GiB node.
-const applianceMemoryMiB = "4096"
-
-func startAppliance(t *testing.T) string {
+func applianceAnswers(t testT, name, username, password string) installer.Answers {
 	t.Helper()
-	if baseURL := os.Getenv("API_URL"); baseURL != "" {
-		return baseURL
-	}
-	// A newly owned VM must never inherit another appliance's SSH destination.
-	t.Setenv("VM_SSH", "")
-	root, err := filepath.Abs("..")
+	answers, err := installer.NewAnswers(installer.ZPoolCommand([]installer.Disk{{Path: "/dev/disk/by-id/virtio-floatlab-zfs"}}), installer.InstallConfig{NodeName: name, Timezone: "UTC", Network: hostnetwork.DefaultConfig(), Username: username, Password: password, PasswordConfirmation: password, RecoveryPassword: "integration-console-password", RecoveryConfirmation: "integration-console-password"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	appliance := filepath.Join(root, "floatlab-appliance-image")
-	name := env("VM_NAME", "floatlab-integration")
-	uri := env("LIBVIRT_URI", "qemu:///system")
-	pool := env("LIBVIRT_POOL", "default")
-	volume := name + "-zfs.qcow2"
-	var isoDirectory string
-	existingPools := map[string]bool{}
-
-	t.Cleanup(func() {
-		if os.Getenv("FLOATLAB_KEEP_VM") == "1" {
-			t.Logf("keeping VM %s and volume %s", name, volume)
-			return
-		}
-		command(30*time.Second, root, nil, "virsh", "-c", uri, "destroy", name)
-		command(30*time.Second, root, nil, "virsh", "-c", uri, "undefine", name, "--nvram")
-		command(30*time.Second, root, nil, "virsh", "-c", uri, "vol-delete", "--pool", pool, volume)
-		if isoDirectory != "" {
-			cleanupISOPools(t, root, uri, isoDirectory, existingPools)
-		}
-	})
-	// A path flake includes new source files that Git flakes omit until staged.
-	// Keep the result link outside the source tree so consecutive passes reuse the image.
-	image := os.Getenv("FLOATLAB_APPLIANCE_ISO")
-	if image == "" {
-		result := filepath.Join(t.TempDir(), "appliance")
-		bundle := os.Getenv("FLOATLAB_ISO_BUNDLE")
-		if bundle == "" {
-			directory := t.TempDir()
-			host := filepath.Join(directory, "host")
-			bundle = filepath.Join(directory, "bundle")
-			run(t, appliance, nil, "nix", "build", "path:"+root+"?dir=floatlab-appliance-image#host-image", "--impure", "--print-build-logs", "--out-link", host)
-			run(t, root, nil, "python3", "scripts/release.py", "prepare-iso", bundle, "--version", "integration", "--local-host", host)
-		}
-		run(t, appliance, []string{"FLOATLAB_ISO_BUNDLE=" + bundle}, "nix", "--extra-experimental-features", "nix-command flakes", "build", "path:"+root+"?dir=floatlab-appliance-image#dev-iso", "--impure", "--print-build-logs", "--out-link", result)
-		images, err := filepath.Glob(filepath.Join(result, "iso", "*.iso"))
-		if err != nil || len(images) != 1 {
-			t.Fatalf("expected one appliance ISO: %v %v", images, err)
-		}
-		image = images[0]
-	}
-	image, err = filepath.EvalSymlinks(image)
-	if err != nil {
-		t.Fatal(err)
-	}
-	isoDirectory = filepath.Dir(image)
-	before, err := command(15*time.Second, root, nil, "virsh", "-c", uri, "pool-list", "--all", "--name")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range strings.Fields(before) {
-		existingPools[name] = true
-	}
-	// All nodes in a multi-node run boot the exact same built artifact.
-	if os.Getenv("FLOATLAB_MULTI_NODE_INTEGRATION") == "1" {
-		t.Setenv("FLOATLAB_APPLIANCE_ISO", image)
-	}
-	run(t, root, []string{"VM_NAME=" + name, "LIBVIRT_URI=" + uri, "LIBVIRT_POOL=" + pool, "MEMORY_MB=" + applianceMemoryMiB, "ZFS_DISK_SIZE=" + env("ZFS_DISK_SIZE", "32G")}, filepath.Join(appliance, "scripts/run-libvirt.sh"), image)
-	return "http://" + waitForIP(t, root, uri, name) + ":8080"
-}
-
-// virt-install automatically registers the ISO's directory as a storage pool.
-// Remove only newly registered pools for this appliance's exact ISO directory.
-func cleanupISOPools(t *testing.T, root, uri, directory string, before map[string]bool) {
-	t.Helper()
-	names, err := command(15*time.Second, root, nil, "virsh", "-c", uri, "pool-list", "--all", "--name")
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	for _, name := range strings.Fields(names) {
-		if before[name] {
-			continue
-		}
-		raw, err := command(15*time.Second, root, nil, "virsh", "-c", uri, "pool-dumpxml", name)
-		var pool struct {
-			Path string `xml:"target>path"`
-		}
-		if err != nil {
-			t.Error(err)
-			continue
-		}
-		if err := xml.Unmarshal([]byte(raw), &pool); err != nil {
-			t.Error(err)
-			continue
-		}
-		if pool.Path != directory {
-			continue
-		}
-		if out, err := command(15*time.Second, root, nil, "virsh", "-c", uri, "pool-destroy", name); err != nil {
-			t.Errorf("ISO pool destroy: %s %v", out, err)
-			continue
-		}
-		if out, err := command(15*time.Second, root, nil, "virsh", "-c", uri, "pool-undefine", name); err != nil {
-			t.Errorf("ISO pool undefine: %s %v", out, err)
-		}
-	}
+	return answers
 }
 
 func (c *apiClient) waitReady() {
@@ -251,8 +148,8 @@ func (c *apiClient) login() {
 		AccessToken string `json:"access_token"`
 	}
 	body := map[string]string{
-		"username": env("FLOATLAB_USER", "demo"),
-		"password": env("FLOATLAB_PASSWORD", "floatlab"),
+		"username": "demo",
+		"password": "floatlab",
 	}
 	if err := c.doJSON(http.MethodPost, "/api/v1/auth/token", "", "application/json", bytes.NewReader(mustJSON(c.t, body)), &login); err != nil {
 		c.t.Fatal(err)
@@ -272,17 +169,14 @@ func (c *apiClient) waitNodeReady() {
 		if err := c.doJSON(http.MethodGet, "/api/v1/nodes", c.token, "", nil, &nodes); err != nil {
 			return err
 		}
-		registered := false
-		for _, node := range nodes {
-			registered = registered || node.ID == "node1"
+		if len(nodes) != 1 {
+			return fmt.Errorf("expected one installed standalone node, got %d", len(nodes))
 		}
-		if !registered {
-			return fmt.Errorf("node1 is not registered")
-		}
+		c.nodeID = nodes[0].ID
 		var health struct {
 			Status string `json:"status"`
 		}
-		if err := c.doJSON(http.MethodGet, "/api/v1/nodes/node1/health", c.token, "", nil, &health); err != nil {
+		if err := c.doJSON(http.MethodGet, "/api/v1/nodes/"+c.nodeID+"/health", c.token, "", nil, &health); err != nil {
 			return err
 		}
 		if health.Status != "reachable" {
@@ -407,6 +301,16 @@ func (c *apiClient) assertContainerAPIs(stackID string) string {
 	return container.ID
 }
 
+func (c *apiClient) execInContainer(stackID, containerID string, command []string) string {
+	c.t.Helper()
+	result := c.object("POST", "/api/v1/stacks/"+stackID+"/containers/"+containerID+"/exec", map[string]any{"command": command}, 200)
+	if result["exit_code"] != float64(0) {
+		c.t.Fatalf("container exec %q: %+v", command, result)
+	}
+	stdout, _ := result["stdout"].(string)
+	return stdout
+}
+
 func (c *apiClient) assertTerminal(stackID, containerID string) {
 	c.t.Helper()
 	wsURL := strings.Replace(c.baseURL, "http://", "ws://", 1)
@@ -438,8 +342,8 @@ func (c *apiClient) assertTerminal(stackID, containerID string) {
 		}
 		got.Write(data)
 		if strings.Contains(got.String(), "terminal-ok") {
-			if activeCoverage != nil {
-				activeCoverage.observe("GET", "/api/v1/stacks/"+stackID+"/containers/"+containerID+"/terminal", 101)
+			if c.coverage != nil {
+				c.coverage.observe("GET", "/api/v1/stacks/"+stackID+"/containers/"+containerID+"/terminal", 101)
 			}
 			return
 		}
@@ -536,7 +440,7 @@ func (c *apiClient) assertLogAPIs(stackID, containerID, marker string) {
 		"/api/v1/logs/search?query=*&limit=5",
 		"/api/v1/logs/stacks/" + stackID + "?range=1h",
 		"/api/v1/logs/containers/" + containerID,
-		"/api/v1/logs/nodes/node1?range=1h",
+		"/api/v1/logs/nodes/" + c.nodeID + "?range=1h",
 		"/api/v1/logs/audit?limit=5",
 	} {
 		var lines []map[string]any
@@ -572,8 +476,8 @@ func (c *apiClient) assertStatsAPIs(stackID string) {
 	for _, path := range []string{
 		"/api/v1/stats/query?q=" + url.QueryEscape("up") + "&range=1h",
 		"/api/v1/stats/stacks/" + stackID + "?range=1h",
-		"/api/v1/stats/nodes/node1?range=1h",
-		"/api/v1/stats/storage/node1?range=1h",
+		"/api/v1/stats/nodes/" + c.nodeID + "?range=1h",
+		"/api/v1/stats/storage/" + c.nodeID + "?range=1h",
 	} {
 		var payload any
 		if err := c.doJSON(http.MethodGet, path, "", "", nil, &payload); err != nil {
@@ -644,7 +548,7 @@ func (c *apiClient) assertIdempotency(stackID string) {
 
 func (c *apiClient) assertComposeUpdate(stackID, stackName, marker string) {
 	c.t.Helper()
-	updated := composeFixture(stackName, marker, "alpine:3.20", "from-update")
+	updated := c.composeFixture(stackName, marker, "alpine:3.20", "from-update")
 	var stack struct {
 		ID          string `json:"id"`
 		ComposeFile string `json:"compose_file"`
@@ -656,7 +560,7 @@ func (c *apiClient) assertComposeUpdate(stackID, stackName, marker string) {
 		c.t.Fatalf("unexpected compose update response: %+v", stack)
 	}
 
-	resp, body, err := c.request(http.MethodPut, "/api/v1/stacks/"+stackID+"/compose", c.token, "bad-compose-"+time.Now().Format("150405000000000"), "application/json", bytes.NewReader(mustJSON(c.t, map[string]string{"compose_file": strings.Replace(updated, "primary_node: node1", "primary_node: other", 1)})))
+	resp, body, err := c.request(http.MethodPut, "/api/v1/stacks/"+stackID+"/compose", c.token, "bad-compose-"+time.Now().Format("150405000000000"), "application/json", bytes.NewReader(mustJSON(c.t, map[string]string{"compose_file": strings.Replace(updated, "primary_node: "+c.nodeID, "primary_node: other", 1)})))
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -833,48 +737,50 @@ func (c *apiClient) request(method, path, token, idempotencyKey, contentType str
 	if err != nil {
 		return nil, nil, err
 	}
-	if activeCoverage != nil {
-		activeCoverage.observe(method, path, resp.StatusCode)
+	if c.coverage != nil {
+		c.coverage.observe(method, path, resp.StatusCode)
 	}
 	return resp, payload, nil
 }
 
-func waitFor(t *testing.T, timeout time.Duration, check func() error) {
+func waitFor(t testT, timeout time.Duration, check func() error) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	var last error
-	for time.Now().Before(deadline) {
-		if last = check(); last == nil {
-			return
-		}
-		time.Sleep(2 * time.Second)
-	}
-	t.Fatalf("timed out after %s: %v", timeout, last)
+	gomega.NewWithT(t).Eventually(t.Context(), check).WithTimeout(timeout).WithPolling(2 * time.Second).Should(gomega.Succeed())
 }
 
-func waitForIP(t *testing.T, dir, uri, name string) string {
+func waitForIP(t testT, vm *integrationvm.Guest) string {
 	t.Helper()
 	var ip string
 	waitFor(t, 5*time.Minute, func() error {
-		out, err := command(15*time.Second, dir, nil, "virsh", "-c", uri, "domifaddr", name, "--source", "lease")
+		out, err := guestCommand(vm, "ip -json -4 addr show dev floatlab-lan")
 		if err != nil {
 			return err
 		}
-		for _, field := range strings.Fields(out) {
-			candidate, _, err := net.ParseCIDR(field)
-			if err == nil && candidate.To4() != nil && !candidate.IsLoopback() {
-				ip = candidate.String()
-				return nil
+		var links []struct {
+			Addresses []struct {
+				Local string `json:"local"`
+			} `json:"addr_info"`
+		}
+		if err := json.Unmarshal([]byte(out), &links); err != nil {
+			return err
+		}
+		for _, link := range links {
+			for _, address := range link.Addresses {
+				candidate := net.ParseIP(address.Local)
+				if candidate.To4() != nil && !candidate.IsLoopback() {
+					ip = candidate.String()
+					return nil
+				}
 			}
 		}
-		return fmt.Errorf("no IPv4 lease yet")
+		return fmt.Errorf("installed LAN has no IPv4 address yet")
 	})
 	return ip
 }
 
-func run(t *testing.T, dir string, extraEnv []string, name string, args ...string) {
+func run(t testT, dir string, extraEnv []string, name string, args ...string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
@@ -885,20 +791,7 @@ func run(t *testing.T, dir string, extraEnv []string, name string, args ...strin
 	}
 }
 
-func command(timeout time.Duration, dir string, extraEnv []string, name string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), extraEnv...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(out), fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, bytes.TrimSpace(out))
-	}
-	return string(out), nil
-}
-
-func mustJSON(t *testing.T, v any) []byte {
+func mustJSON(t testT, v any) []byte {
 	t.Helper()
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -914,12 +807,12 @@ func env(name, fallback string) string {
 	return fallback
 }
 
-func composeFixture(name, marker, image, revision string) string {
+func (c *apiClient) composeFixture(name, marker, image, revision string) string {
 	return fmt.Sprintf(`name: %s
 x-fl-health-timeout: 90s
 x-fl-stack:
   schema_version: 1
-  primary_node: node1
+  primary_node: %s
   failover:
     mode: manual
   storage:
@@ -950,5 +843,5 @@ services:
         x-fl-snapshots: 1h/2 1d/2
 volumes:
   data: {}
-`, name, image, marker, revision)
+`, name, c.nodeID, image, marker, revision)
 }

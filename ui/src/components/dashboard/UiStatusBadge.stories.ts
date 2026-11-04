@@ -5,7 +5,7 @@ const meta: Meta<typeof UiStatusBadge> = {
   title: '1. Primitive/Status Badge', component: UiStatusBadge,
   args: { state: 'Running' },
   argTypes: { state: { control: 'select', options: ['Running', 'Stopped', 'Failed', 'Provisioning', 'Starting', 'FailingOver', 'Restoring', 'Stopping', 'Updating', 'RollingBack'] } },
-  parameters: { layout: 'padded' },
+  parameters: { layout: 'padded', docs: { description: { component: 'Interactive badges replace their state icon with an edit pencil only on hover.' } } },
   render: (args) => ({ components: { UiStatusBadge }, setup: () => ({ args }), template: '<UiStatusBadge v-bind="args" />' }),
 }
 export default meta

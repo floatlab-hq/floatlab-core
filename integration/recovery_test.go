@@ -3,7 +3,6 @@ package integration_test
 import (
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 )
@@ -11,7 +10,7 @@ import (
 func (c *apiClient) assertRecoveryWorkload() {
 	t := c.t
 	name := fmt.Sprintf("recovery-%d", time.Now().UnixNano())
-	source := composeFixture(name, name, "alpine:3.20", "v1")
+	source := c.composeFixture(name, name, "alpine:3.20", "v1")
 	// Keep the fixture's data file stable across container recreation.
 	source = strings.Replace(source, "echo v1 > /data/revision.txt", "test -f /data/revision.txt || echo v1 > /data/revision.txt", 1)
 	source = strings.Replace(source, "x-fl-health-timeout: 90s", "x-fl-health-timeout: 15s", 1)
@@ -29,7 +28,12 @@ func (c *apiClient) assertRecoveryWorkload() {
 	}
 	backup := c.object("POST", "/api/v1/nodes", map[string]string{"name": name + "-backup", "hostname": "unreachable.invalid", "zfs_pool": "floatlab"}, 201)
 	backupID := backup["id"].(string)
-	t.Cleanup(func() { c.expect("DELETE", "/api/v1/nodes/"+backupID, nil, 204) })
+	backupExists := true
+	t.Cleanup(func() {
+		if backupExists {
+			c.expect("DELETE", "/api/v1/nodes/"+backupID, nil, 204)
+		}
+	})
 	targetsPath := "/api/v1/storage/replication/" + id + "/targets"
 	target := map[string]string{"dataset": "floatlab/" + name + "/data", "node_id": backupID, "schedule": "h/24 d/28"}
 	c.object("PUT", targetsPath, target, 200)
@@ -45,6 +49,8 @@ func (c *apiClient) assertRecoveryWorkload() {
 	}
 	c.expect("DELETE", targetsPath, target, 202)
 	targetEnabled = false
+	c.expect("DELETE", "/api/v1/nodes/"+backupID, nil, 204)
+	backupExists = false
 	started := c.mutate(http.MethodPost, stackPath+"/start", nil, "application/json")
 	c.waitOperation(started.OperationID)
 	c.waitStackState(id, "RunningPrimary")
@@ -166,25 +172,24 @@ func (c *apiClient) assertRecoveryWorkload() {
 	deleted := c.mutate("DELETE", stackPath, nil, "")
 	c.waitOperation(deleted.OperationID)
 	c.waitStackDeleted(id)
-	root, _ := os.Getwd()
-	out, err := guestCommand(root, "zfs list -H -o name '"+dataset+"'")
+	out, err := guestCommand(c.vm, "zfs list -H -o name '"+dataset+"'")
 	if err != nil || strings.TrimSpace(out) != dataset {
 		t.Fatalf("retained dataset missing: %s %v", out, err)
 	}
-	t.Cleanup(func() {
-		out, err := guestCommand(root, "zfs list -H -o name -r floatlab | while IFS= read -r ds; do case \"$ds\" in '"+dataset+"'-recovery-*|'"+dataset+"'-restore-*) zfs destroy -r \"$ds\" ;; esac; done; zfs destroy -r '"+dataset+"'")
-		if err != nil {
-			t.Errorf("cleanup retained dataset: %s %v", out, err)
-		}
-	})
+	// The disposable VM owns intentionally retained data until fixture teardown.
 }
 
 func (c *apiClient) assertPrefixAllocation(name, stackID string) {
 	pool := c.object("POST", "/api/v1/network/pools", map[string]string{"name": name, "prefix": "fdfe:200::/127", "stack_id": stackID}, 201)
 	pid := pool["id"].(string)
 	c.t.Cleanup(func() {
-		c.cleanupSQL("DELETE FROM ip_reservations WHERE prefix_pool=?", pid)
-		c.cleanupSQL("DELETE FROM prefix_pools WHERE id=?", pid)
+		for _, value := range c.expect("GET", "/api/v1/network/allocations?stack_id="+stackID, nil, 200).([]interface{}) {
+			allocation := value.(map[string]interface{})
+			if allocation["prefix_pool"] == pid {
+				c.expect("DELETE", "/api/v1/network/allocations/"+allocation["id"].(string), nil, 204)
+			}
+		}
+		c.expect("DELETE", "/api/v1/network/pools/"+pid, nil, 204)
 	})
 	c.expect("GET", "/api/v1/network/pools", nil, 200)
 	allocations := []string{}
@@ -200,12 +205,11 @@ func (c *apiClient) assertPrefixAllocation(name, stackID string) {
 
 func (c *apiClient) assertServiceRestarts(id string, assertData func(string)) {
 	t := c.t
-	root, _ := os.Getwd()
 	for _, command := range []string{
 		`docker restart $(docker ps -q --filter label=com.docker.compose.service=floatlab-control --filter label=com.docker.compose.project=floatlab-system)`,
 		`systemctl restart floatlab-hostd.service`,
 	} {
-		out, err := guestCommand(root, command)
+		out, err := guestCommand(c.vm, command)
 		if err != nil {
 			t.Fatalf("restart service: %s %v", out, err)
 		}
@@ -222,7 +226,6 @@ func (c *apiClient) assertServiceRestarts(id string, assertData func(string)) {
 
 func (c *apiClient) assertDatasetRollback(id string) {
 	t := c.t
-	root, _ := os.Getwd()
 	stackPath := "/api/v1/stacks/" + id
 	dataset := c.object("GET", "/api/v1/storage/datasets/"+id, nil, 200)
 	mount := dataset["mount_point"].(string)
@@ -231,7 +234,8 @@ func (c *apiClient) assertDatasetRollback(id string) {
 	c.waitStackState(id, "Idle")
 	writeMarker := func(marker string) {
 		t.Helper()
-		out, err := guestCommand(root, "printf '"+marker+"' > '"+mount+"/rollback-marker'")
+		// Container mounts expose child datasets; this fixture verifies the stopped parent.
+		out, err := guestCommand(c.vm, "printf '"+marker+"' > '"+mount+"/rollback-marker'")
 		if err != nil {
 			t.Fatalf("write dataset marker: %s %v", out, err)
 		}
@@ -250,7 +254,7 @@ func (c *apiClient) assertDatasetRollback(id string) {
 	c.expect("POST", path, map[string]bool{"destroy_newer": false}, 409)
 	restore := c.mutateJSON("POST", path, map[string]bool{"destroy_newer": true})
 	c.waitOperation(restore.OperationID)
-	out, err := guestCommand(root, "cat '"+mount+"/rollback-marker'")
+	out, err := guestCommand(c.vm, "cat '"+mount+"/rollback-marker'")
 	if err != nil || out != "before" {
 		t.Fatalf("rollback data: %q %v", out, err)
 	}

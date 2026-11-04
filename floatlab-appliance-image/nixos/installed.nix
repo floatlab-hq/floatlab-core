@@ -44,6 +44,19 @@
       AuthorizedKeysFile ${lib.concatStringsSep " " config.services.openssh.authorizedKeysFiles} /floatlab/system/etc/root-authorized-keys
     Match all
   '';
+  services.openssh.hostKeys = [
+    { path = "/floatlab/system/etc/ssh/ssh_host_rsa_key"; type = "rsa"; bits = 4096; }
+    { path = "/floatlab/system/etc/ssh/ssh_host_ed25519_key"; type = "ed25519"; }
+  ];
+  environment.etc."ssh/ssh_host_ed25519_key.pub".source = "/floatlab/system/etc/ssh/ssh_host_ed25519_key.pub";
+  systemd.services.sshd-keygen = {
+    requires = [ "floatlab-datasets.service" ];
+    after = [ "floatlab-datasets.service" ];
+  };
+  systemd.services.floatlab-hostd = {
+    requires = [ "sshd-keygen.service" ];
+    after = [ "sshd-keygen.service" ];
+  };
   services.timesyncd.enable = true;
   environment.systemPackages = [ pkgs.zfs pkgs.gitMinimal ];
   system.stateVersion = "26.05";

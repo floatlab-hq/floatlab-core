@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/onsi/ginkgo/v2"
+	"github.com/onsi/gomega"
+
 	"github.com/floatlab/floatlab-core/internal/credentials"
 	"github.com/floatlab/floatlab-core/pkg/config"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
@@ -18,10 +21,7 @@ import (
 
 // This test uses the appliance's real pinned sidecar: the fast Python SQL fixture
 // cannot check rqlite's HTTP validation, transaction errors or response metadata.
-func TestPinnedRQLiteMigrationAndLocalAuthority(t *testing.T) {
-	if os.Getenv("FLOATLAB_RQLITE_INTEGRATION") != "1" {
-		t.Skip("set FLOATLAB_RQLITE_INTEGRATION=1 with Docker available")
-	}
+func runTestPinnedRQLiteMigrationAndLocalAuthority(t ginkgo.GinkgoTInterface) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	name := fmt.Sprintf("floatlab-rqlite-smoke-%d", time.Now().UnixNano())
@@ -152,3 +152,17 @@ func TestPinnedRQLiteMigrationAndLocalAuthority(t *testing.T) {
 		t.Fatalf("legacy source regained authority: %+v %v", actual, err)
 	}
 }
+
+func TestRQLiteIntegration(t *testing.T) {
+	if os.Getenv("FLOATLAB_RQLITE_INTEGRATION") != "1" {
+		t.Skip("run the disposable-appliance integration suite")
+	}
+	gomega.RegisterFailHandler(ginkgo.Fail)
+	config, reporter := ginkgo.GinkgoConfiguration()
+	config.FailOnEmpty = true
+	ginkgo.RunSpecs(t, "TestRQLiteIntegration", config, reporter)
+}
+
+var _ = ginkgo.Describe("TestRQLiteIntegration", ginkgo.Serial, func() {
+	ginkgo.It("TestPinnedRQLiteMigrationAndLocalAuthority", func() { runTestPinnedRQLiteMigrationAndLocalAuthority(ginkgo.GinkgoT()) })
+})

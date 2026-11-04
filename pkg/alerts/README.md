@@ -98,16 +98,14 @@ requirements and proposed defaults.
 
 ## Appliance integration test
 
-Against a dedicated test appliance reachable through the local QEMU guest agent:
+On a host with KVM and libvirt, run against a disposable 3584 MiB appliance:
 
 ```sh
-FLOATLAB_VM_INTEGRATION=1 API_URL=http://VM_IP:8080 VM_NAME=TEST_VM \
-  LIBVIRT_URI=qemu:///system go test -count=1 -timeout 15m \
-  -run '^TestAlertEvaluator$' -v ./integration
+FLOATLAB_INTEGRATION=1 go test -count=1 -timeout 12h -v ./integration \
+  -args -ginkgo.label-filter=alert-evaluator
 ```
 
-For an SSH-accessible test VM, set `VM_SSH=user@VM_IP` instead of `VM_NAME`.
 The test pushes scoped samples to real VictoriaMetrics, restarts management and
 checks independent incidents, deduplication, unknown/stale data, recovery,
 recurrence and rule disablement. It cleans up its own rule and records. The full
-`scripts/test-workloads.sh` workflow includes this scenario too.
+Go integration suite includes this scenario too; see the repository README for prerequisites.

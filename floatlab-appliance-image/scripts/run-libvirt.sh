@@ -24,10 +24,23 @@ fi
 }
 iso="$(readlink -f "$iso")"
 
-virsh -c "$uri" destroy "$name" >/dev/null 2>&1 || true
-virsh -c "$uri" undefine "$name" --nvram >/dev/null 2>&1 || \
-  virsh -c "$uri" undefine "$name" >/dev/null 2>&1 || true
-virsh -c "$uri" vol-delete --pool "$pool" "$volume" >/dev/null 2>&1 || true
+if virsh -c "$uri" dominfo "$name" >/dev/null 2>&1 || virsh -c "$uri" vol-info --pool "$pool" "$volume" >/dev/null 2>&1 || virsh -c "$uri" vol-info --pool "$pool" "$name-answers.iso" >/dev/null 2>&1; then
+  echo "Refusing to replace existing VM or volume $name." >&2
+  exit 1
+fi
+extra_disks=()
+if [[ -n "${FLOATLAB_ANSWERS:-}" ]]; then
+  command -v xorriso >/dev/null || { echo "Missing xorriso; enter the appliance development shell." >&2; exit 1; }
+  umask 077
+  answers_dir=$(mktemp -d)
+  trap 'rm -rf "$answers_dir"; rm -f "$answers_dir.iso"' EXIT
+  cp "$FLOATLAB_ANSWERS" "$answers_dir/floatlab-answers.toml"
+  xorriso -as mkisofs -quiet -R -V FLOATLAB_ANSWERS -o "$answers_dir.iso" "$answers_dir"
+  answers_volume="$name-answers.iso"
+  virsh -c "$uri" vol-create-as "$pool" "$answers_volume" "$(stat -c %s "$answers_dir.iso")" --format raw >/dev/null
+  virsh -c "$uri" vol-upload --pool "$pool" "$answers_volume" "$answers_dir.iso"
+  extra_disks=(--disk "vol=$pool/$answers_volume,device=cdrom,readonly=on")
+fi
 virsh -c "$uri" vol-create-as "$pool" "$volume" "${ZFS_DISK_SIZE:-16G}" \
   --format qcow2 --allocation 0 >/dev/null
 
@@ -37,17 +50,17 @@ virt-install --connect "$uri" \
   --vcpus "${VCPUS:-4}" \
   --cpu host-passthrough \
   --import \
-  --transient \
   --wait 0 \
   --osinfo detect=on,require=off \
-  --boot cdrom \
-  --disk "path=$iso,device=cdrom,readonly=on" \
-  --disk "vol=$pool/$volume,bus=virtio,serial=floatlab-zfs" \
+  --boot uefi,loader.secure=no \
+  --disk "path=$iso,device=cdrom,readonly=on,boot_order=2" \
+  --disk "vol=$pool/$volume,bus=virtio,serial=floatlab-zfs,boot_order=1" \
+  "${extra_disks[@]}" \
   --network "network=${LIBVIRT_NETWORK:-default},model=virtio" \
   --channel unix,target_type=virtio,name=org.qemu.guest_agent.0 \
   --graphics none \
   --console pty,target_type=serial \
   --noautoconsole
 
-echo "Started $name with a fresh ${ZFS_DISK_SIZE:-16G} floatlab pool disk."
+echo "Started $name with a blank ${ZFS_DISK_SIZE:-16G} disk and the FloatLab installer."
 echo "Console: virsh -c $uri console $name"

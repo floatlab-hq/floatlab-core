@@ -92,6 +92,11 @@ jobs:
       - name: Test release metadata and offline bundle assembly
         run: python3 scripts/release_test.py
 
+      - name: Test installer answers discovery and VM launchers
+        run: |
+          python3 floatlab-appliance-image/tests/installer-answers.py floatlab-appliance-image/nixos/modules/installer-answers.sh
+          python3 floatlab-appliance-image/tests/vm-harness.py
+
       - name: Download modules
         run: go mod download
 
@@ -100,3 +105,13 @@ jobs:
 
       - name: Test
         run: go test -race -count=1 ./pkg/... ./internal/... ./api/openapi ./integration
+
+      - name: Compile appliance integration binaries without C bindings
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          go test -c -o "$RUNNER_TEMP/floatlab-integration.test" ./integration
+          go test -c -tags=appliance,integrationcoverage -cover -covermode=atomic -coverpkg=./... -o "$RUNNER_TEMP/floatlab-host-upgrade.test" ./internal/hostupgrade
+          go test -c -tags=appliance,integrationcoverage -cover -covermode=atomic -coverpkg=./... -o "$RUNNER_TEMP/floatlab-management-update.test" ./internal/managementupdate

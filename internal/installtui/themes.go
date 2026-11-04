@@ -20,7 +20,7 @@ func (m *Model) styleInputs() {
 	t := m.currentTheme()
 	text := lipgloss.NewStyle().Foreground(t.foreground).Background(t.background)
 	cursor := lipgloss.NewStyle().Foreground(t.accent).Background(t.background)
-	for _, input := range []*textinput.Model{&m.confirmation, &m.timezoneSearch} {
+	for _, input := range []*textinput.Model{&m.confirmation, &m.timezoneSearch, &m.answersPath} {
 		input.TextStyle = text
 		input.PromptStyle = cursor
 		input.PlaceholderStyle = text

@@ -236,43 +236,35 @@ tests.
 
 ## Development VM
 
-The repository's Nix development shell provides the VM tooling. Host libvirt must be installed, running, and accessible to your user.
-
-Create and boot a fresh `floatlab-dev` VM:
-
-```bash
-nix develop -c env LIBVIRT_URI=qemu:///system scripts/create-floatlab-vm.sh
-```
-
-The command builds and loads the management API container, installs the native host daemon, and starts rqlite, VictoriaMetrics, VictoriaLogs, and the management API. The services start automatically after a VM reboot.
-
-Once provisioning finishes, the API and Swagger UI are available on the VM's host-facing IP:
-
-```text
-http://<VM-IP>:8080
-http://<VM-IP>:8080/swagger/
-```
-
-Start an existing VM:
+VMs use the release installer ISO, private TOML answers with bcrypt password hashes,
+and a blank UEFI disk. Host libvirt must be running and accessible to your user.
+Export an answers file with Ctrl+E on the installer's Review screen, then run:
 
 ```bash
-nix develop -c virsh --connect qemu:///system start floatlab-dev
+nix develop -c env LIBVIRT_URI=qemu:///system scripts/create-floatlab-vm.sh /path/to/floatlab-answers.toml
 ```
 
-Find its IP address and connect:
+Review the exact disk IDs in the answers before reuse. The VM disk is
+`/dev/disk/by-id/virtio-floatlab-zfs`. Existing domains and volumes are never replaced.
+The installer verifies the installation, reboots into the installed OS, and starts
+management services. Find its address using the guest agent:
 
 ```bash
-nix develop -c virsh --connect qemu:///system domifaddr floatlab-dev --source lease
-ssh ubuntu@<IP>
+nix develop -c virsh --connect qemu:///system domifaddr floatlab-dev --source agent
 ```
 
-Create a VM and run the uncached container API integration suite:
+The API is at `http://<VM-IP>:8080`; sign in with the credentials used to generate
+the answers. To create disposable hosts and run real workload acceptance:
 
 ```bash
-nix develop -c env LIBVIRT_URI=qemu:///system RUN_INTEGRATION_TESTS=1 scripts/create-floatlab-vm.sh
+nix develop "path:$PWD?dir=floatlab-appliance-image" -c env FLOATLAB_INTEGRATION=1 go test -count=1 -timeout 12h -v ./integration
 ```
 
-The integration suite destroys the `floatlab-dev` domain and removes its generated files when it finishes, including after a failure.
+The suite generates private answers for each VM, installs through the normal installer,
+and requires a completed installation booted from disk before running workloads.
+It removes its owned domains, disks, and answers media after the run. It requires KVM;
+ordinary CI Go tests skip these appliance scenarios unless explicitly enabled.
+See the [unattended installation guide](floatlab-appliance-image/README.md#unattended-installation).
 
 ### FloatLab Raft - Distributed Consensus Algorithm
 
@@ -361,44 +353,36 @@ File creation uses node assignments in the Compose file; omit `--primary` and `-
 
 `exec` accepts a container service name, container name, or ID. It runs argv directly, separates stdout and stderr, and returns the command's exit status. Capture is bounded to 60 seconds and 1 MiB combined output. Docker does not provide an exec-kill endpoint: a command can continue inside the container after capture times out or disconnects. Interactive shell attachment and stdin are outside this command's scope.
 
-Install the workspace dependencies with `pnpm install --frozen-lockfile`, then run:
-
-```bash
-nix develop -c env FLOATLAB_CLI_INTEGRATION=1 LIBVIRT_URI=qemu:///system \
-  go test -run '^TestCLICaddy$' -count=1 -timeout 30m -v ./integration
-```
-
-The opt-in test requires Bun, Go, Nix with flakes enabled, libvirt, KVM, and access to pull Docker images. It builds the CLI and appliance, boots a dedicated VM, and tests Caddy HTTP responses, service DNS, managed IPv4 allocation and port binding, actual logs and metrics, command output and exit codes, and deletion cleanup. It cleans up the VM unless `FLOATLAB_KEEP_VM=1` is set. Set `VM_NAME` to choose the disposable VM name; that VM is recreated by the existing appliance launcher.
-
-To test an already provisioned development VM with the updated services, add `API_URL=http://<VM-IP>:8080` and `VM_SSH=ubuntu@<VM-IP>`; SSH must support noninteractive authentication and passwordless sudo. This mode never creates or destroys the VM. The suite creates and removes only its own stack, pool, and bridge (if absent). Its test subnet is selected from unused `/24` ranges in `10.254.240.0/20`.
+Install workspace dependencies with `pnpm install --frozen-lockfile`. The CLI workflow is included in the Go integration suite described below; select it with `-args -ginkgo.label-filter=cli-caddy`.
 
 Hostd forwards metrics and logs for FloatLab containers every five seconds to the local VictoriaMetrics and VictoriaLogs endpoints. Set `FLOATLAB_NODE_ID`, `FLOATLAB_VMETRICS_URL`, and `FLOATLAB_VLOGS_URL` in its environment for another deployment. The core Compose files expose these endpoints only on loopback. Log polling currently captures at most 1000 lines and 1 MiB per container per pass; higher-volume workloads need continuous log forwarding.
 
-### Complete single-node workload suite
+### Appliance integration suite
 
-The minimum supported node has **4 GiB RAM**. All appliance end-to-end tests use fixed 4096 MiB VMs, including management updates, installed host upgrades, and each multi-node guest. `MEMORY_MB` does not override acceptance-test memory. Existing appliances selected with `API_URL` must also be provisioned with 4096 MiB to count as acceptance evidence; larger systems can be used for additional testing only.
+All integration appliances run with **3584 MiB RAM (3.5 GiB)**, including instrumented management and host-upgrade candidates. This is the standard test configuration; there is no separate low-memory variant. Existing sandbox memory limits and OOM checks remain enforced.
 
-Enter the development shell, install workspace dependencies, and run:
-
-```bash
-nix develop -c scripts/test-workloads.sh
-```
-
-This command requires Go, Bun, pnpm, Nix, libvirt, `virt-install`, KVM, and image-pull access. It performs two consecutive full passes, each using one uniquely named disposable appliance. All API and CLI scenarios within a pass share that appliance. The command creates a temporary libvirt storage pool unless `LIBVIRT_POOL` selects an existing writable pool. Reports and logs are written to `/tmp/floatlab-workload-reports`; override with `FLOATLAB_REPORT_DIR`. `FLOATLAB_KEEP_VM=1` preserves appliances for debugging.
-
-An existing **dedicated test appliance** can be selected with `API_URL` and `VM_SSH`; SSH must be noninteractive with passwordless sudo. A local libvirt appliance can instead use `API_URL` and `VM_NAME` through its existing QEMU guest agent. The suite restarts `floatlab-control` and `floatlab-hostd`, requires the standard `floatlab-system` Compose project and `floatlab-hostd.service`, and removes only its fixture resources. It does not create or destroy that appliance. Do not point the suite at a shared deployment.
-
-Coverage is measured by management HTTP method/path, using executed scenarios that pass their assertions, documented response statuses, and JSON contracts. The full suite fails if a required scenario skips or an endpoint lacks qualifying evidence. Real multi-node replication, failover, failback, abort and step-history success are reported as deferred; their single-node safety rejections are exercised. Ordinary `go test` skips VM tests and does **not** establish complete endpoint coverage.
-
-The suite exercises actual workload networking, data persistence, snapshot recovery of data and Compose, failed health-check upgrade rollback, dataset rollback with newer snapshots, independent SSE subscribers, alert ingestion, notification state changes, and service restart recovery. It also tests management clone preflight, production activation, snapshot rollback, and hostd recovery after interrupted updates on a 4 GiB VM. Update acceptance checks the sandbox's actual cgroup memory peaks and OOM counters against its enforced limits; do not increase test RAM to bypass failures. Fast SQL integration and migration tests use Python 3's SQLite behind the rqlite HTTP protocol; appliance tests use real rqlite.
-
-Run installed OS upgrade acceptance separately:
+Install workspace dependencies, ensure the host has KVM and a running libvirt system daemon, then run outside any sandbox that hides `/dev/kvm`:
 
 ```bash
-FLOATLAB_HOST_UPDATE_INTEGRATION=1 go test -run '^TestHostUpdateAppliance$' -count=1 -timeout 120m -v ./integration
+nix develop "path:$PWD?dir=floatlab-appliance-image" -c env FLOATLAB_INTEGRATION=1 \
+  go test -count=1 -timeout 12h -v ./integration
 ```
 
-This builds local source and candidate payloads, installs a disposable UEFI libvirt VM, and tests trial boot, fallback, recovery, and commitment. Only artifact distribution uses local fixtures; ZFS, Docker, firmware, and the boot guard are real. Passing these tests does not qualify a different published Docker or rqlite transition, or physical watchdog behavior.
+The Ginkgo suite creates disposable UEFI appliances through the pure-Go libvirt RPC client over `/var/run/libvirt/libvirt-sock`. It requires Go, Nix, Python, Docker, Bun, pnpm, xorriso, and image-pull access; neither `virsh`, `virt-install`, libvirt headers, nor C bindings are required by the runner. Docker/rqlite package checks execute inside appliances too. Ordinary `go test` leaves appliance execution disabled.
+
+Select scenarios with `-args -ginkgo.label-filter=multi-node` (or `Lab`, `Replication`, `BackupRestore`, `single-node`, `cli-caddy`, `management-update`, `host-update`, `docker`, `rqlite`). The multi-node table gives each entry fresh appliances and ordered narrative stages. Single-node stages retain their shared appliance. Independent scenarios run serially, and a failed stage skips its dependent stages without retrying it.
+
+The runner builds and reuses instrumented artifacts. Set `FLOATLAB_APPLIANCE_ISO` to reuse an instrumented ISO; ordinary production ISOs fail the coverage preflight. Host-upgrade artifact reuse requires both `FLOATLAB_HOST_TEST_ISO` and `FLOATLAB_HOST_TEST_CANDIDATE`. External `API_URL`, `VM_NAME`, and `VM_SSH` targets are no longer supported.
+
+Reports are written to a unique `floatlab-reports-*` directory under `/tmp`, or under `FLOATLAB_REPORT_DIR`. They include Ginkgo JSON, JUnit XML, guest diagnostics, resource identifiers, endpoint evidence, raw Go coverage, a merged `coverage.out`, and `coverage.html`. Coverage is collected before teardown and checkpointed before planned power interruption. Failed runs retain any coverage that could be collected. Set `FLOATLAB_KEEP_VM=1` to retain owned infrastructure for debugging. SIGKILL or host failure can leave resources behind; use the recorded identifiers for recovery and cleanup.
+
+Ordinary workload setup, payload access, and cleanup use FloatLab's API or CLI. Upgrade persistence proofs use managed stacks; host activation/commit/cleanup and management rollback/cleanup use authenticated update endpoints. Empty IPv6 prefix pools can be deleted with `DELETE /api/v1/network/pools/{id}`; resolved alerts and their linked notifications can be deleted with `DELETE /api/v1/alerts/{id}`. Active alerts and allocated prefix pools reject deletion. Both methods are included in the generated CLI commands and API types. Alert reads expose `kind` and the exact current monitoring `resource`; that resource is nullable and is not a historical resource record after resolution.
+
+Privileged test controls remain outside the product API: VM creation and teardown, network/power/process failures, corrupt EFI and interrupted streams, retention-history and stopped-parent-dataset rollback fixtures, and independent storage/database/kernel observations. Local unpublished upgrade artifacts still require guest staging/start fixtures because production release-distribution and qualification checks remain enforced; the suite does not replace the installed hostd binary. Multi-node API calls use guest-local HTTP through the guest agent so deliberate NIC partitions do not disconnect the test controller. Intentionally retained workload data stays on its disposable VM until teardown; a general retained-dataset purge API requires durable ownership tracking before it can safely support reused dataset names.
+
+Endpoint evidence distinguishes successful execution from safety rejections and outstanding multi-node requirements. Filtered runs do not claim complete endpoint coverage. Statement coverage is separate and includes FloatLab control and hostd processes, not third-party services. Coverage artifacts are enabled only for integration builds; release builds remain uninstrumented.
+
+The suite preserves workload networking, persistence, snapshot and Compose recovery, upgrade rollback, independent SSE subscribers, alert ingestion, service restarts, lab enrollment and partition recovery, replication resume, backup restore, and installed UEFI upgrade checks. Run the full command twice consecutively when qualifying repeatability. Passing local upgrade fixtures does not qualify other published Docker/rqlite transitions or physical watchdog behavior.
 
 Snapshot recovery is now `POST /api/v1/stacks/{id}/snapshots/{snapshotId}/restore`. `POST /api/v1/stacks/{id}/restore` performs failback to the primary. Clients of the old snapshot recovery path must migrate. Management requests require an administrator token, except login, public health routes, and the internal metrics webhook; deployments must restrict webhook ingress to trusted alert producers.
 

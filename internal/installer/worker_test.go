@@ -99,7 +99,7 @@ func TestWorkerRetriesFinalizationWithoutErasing(t *testing.T) {
 		t.Fatal(err)
 	}
 	disks := testDisks()[:1]
-	a := Appliance{NodeID: "node", NodeName: "floatlab", Timezone: "UTC", HostID: "12345678", JWTSecret: strings.Repeat("a", 64), Network: hostnetwork.DefaultConfig()}
+	a := Appliance{NodeID: "node", NodeName: "floatlab", Timezone: "UTC", HostID: "20390125", JWTSecret: strings.Repeat("a", 64), Network: hostnetwork.DefaultConfig()}
 	op := Operation{Disks: disks, Command: ZPoolCommand(disks), Identity: a}
 	// Storage installation runs while the user is still entering host settings.
 	op.Identity.NodeName, op.Identity.Timezone = "", ""
@@ -146,6 +146,10 @@ func TestWorkerRetriesFinalizationWithoutErasing(t *testing.T) {
 	commands, err := os.ReadFile(log)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Bare numeric host IDs are parsed as decimal by ZFSBootMenu (20390125 becomes 0x013720ed).
+	if strings.Count(string(commands), "-a spl_hostid=0x20390125 ") != 2 {
+		t.Fatal("bootloader must preserve the hexadecimal host identity", string(commands))
 	}
 	recovery, err := os.ReadFile(persistentDir + "/root-password.hash")
 	if err != nil {

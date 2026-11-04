@@ -3,8 +3,6 @@ package integration_test
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"net/netip"
 	"os"
@@ -14,23 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/floatlab/floatlab-core/internal/hostnetwork"
+	"github.com/floatlab/floatlab-core/internal/ipam"
 	"github.com/floatlab/floatlab-core/pkg/compose"
 )
 
-func TestCLICaddy(t *testing.T) {
-	if os.Getenv("FLOATLAB_CLI_INTEGRATION") != "1" {
-		t.Skip("run with FLOATLAB_CLI_INTEGRATION=1 go test -run '^TestCLICaddy$' -count=1 -timeout 30m -v ./integration")
-	}
-	if os.Getenv("API_URL") == "" {
-		if _, err := os.Stat("/dev/kvm"); err != nil {
-			t.Fatal("Caddy VM integration requires /dev/kvm; use API_URL and VM_SSH for an existing development VM")
-		}
-		for _, name := range []string{"nix", "virsh"} {
-			if _, err := exec.LookPath(name); err != nil {
-				t.Fatalf("Caddy VM integration requires %s", name)
-			}
-		}
-	}
+func runCLICaddy(t testT, c *apiClient) {
 	root, err := filepath.Abs("..")
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +28,6 @@ func TestCLICaddy(t *testing.T) {
 	temporary := t.TempDir()
 	binary := filepath.Join(temporary, "floatlab")
 	run(t, temporary, nil, "bun", "build", "--compile", filepath.Join(root, "cli/src/main.ts"), "--outfile", binary)
-	c := newAPIClient(t, startAppliance(t))
 	c.waitReady()
 	c.login()
 	c.waitNodeReady()
@@ -82,55 +68,21 @@ func TestCLICaddy(t *testing.T) {
 	name := fmt.Sprintf("cli-it-%d", time.Now().UnixNano())
 	marker := "floatlab-caddy-" + name
 	poolName := name + "-pool"
-	var pools []struct {
-		CIDR string `json:"cidr"`
-	}
+	var pools []ipam.Pool
 	if err := c.doJSON("GET", "/api/v1/settings/network-pools", c.token, "", nil, &pools); err != nil {
 		t.Fatal(err)
 	}
-	subnet := ""
-	for octet := 240; octet < 255; octet++ {
-		candidate := fmt.Sprintf("10.254.%d.0/24", octet)
-		prefix := netip.MustParsePrefix(candidate)
-		overlap := false
-		for _, pool := range pools {
-			existing, err := netip.ParsePrefix(pool.CIDR)
-			if err == nil && (prefix.Contains(existing.Addr()) || existing.Contains(prefix.Addr())) {
-				overlap = true
-			}
-		}
-		if !overlap {
-			subnet = candidate
-			break
-		}
+	var network struct {
+		Live hostnetwork.Live `json:"live"`
 	}
-	if subnet == "" {
-		t.Fatal("no free test subnet in 10.254.240.0/20")
+	if err := c.doJSON("GET", "/api/v1/nodes/"+nodes[0].ID+"/settings/network", c.token, "", nil, &network); err != nil {
+		t.Fatal(err)
 	}
-	prefix := netip.MustParsePrefix(subnet)
-	startIP := prefix.Addr().Next().Next()
-	endIP := startIP.Next().Next()
-	bridge, err := guestCommand(root, "if ! ip link show dev floatlab-lan >/dev/null 2>&1; then ip link add floatlab-lan type bridge; ip link set floatlab-lan up; echo created; fi")
+	prefix, startIP, endIP, err := caddyPoolRange(network.Live, pools)
 	if err != nil {
-		t.Fatalf("prepare VM bridge: %v", err)
+		t.Fatal(err)
 	}
-	if strings.Contains(bridge, "created") {
-		t.Cleanup(func() {
-			if _, err := guestCommand(root, "ip link delete floatlab-lan"); err != nil {
-				t.Errorf("cleanup test bridge: %v", err)
-			}
-		})
-	}
-	// Pools must belong to a node and match one of its actual LAN subnets.
-	lanAddress := prefix.Addr().Next().String() + "/24"
-	if out, err := guestCommand(root, "ip address add "+lanAddress+" dev floatlab-lan"); err != nil {
-		t.Fatalf("add test LAN address: %s %v", out, err)
-	}
-	t.Cleanup(func() {
-		if _, err := guestCommand(root, "ip address del "+lanAddress+" dev floatlab-lan"); err != nil {
-			t.Errorf("remove test LAN address: %v", err)
-		}
-	})
+	subnet := prefix.String()
 	var pool struct {
 		ID string `json:"id"`
 	}
@@ -229,7 +181,7 @@ func TestCLICaddy(t *testing.T) {
 	if output := mustCLI("exec", name, "probe", "--", "wget", "-T", "5", "-qO-", "http://caddy/"+marker); output != marker {
 		t.Fatalf("service DNS HTTP: %q", output)
 	}
-	hostOutput, err := guestCommand(root, "curl --fail --silent --show-error http://"+status.StackIP+":8088/"+marker)
+	hostOutput, err := guestCommand(c.vm, "curl --fail --silent --show-error http://"+status.StackIP+":8088/"+marker)
 	if err != nil || hostOutput != marker {
 		t.Fatalf("VM host HTTP: %q error=%v", hostOutput, err)
 	}
@@ -242,7 +194,7 @@ func TestCLICaddy(t *testing.T) {
 	if containerID == "" {
 		t.Fatal("Caddy container not found")
 	}
-	binding, err := guestCommand(root, "docker inspect --format '{{json .NetworkSettings.Ports}}' "+containerID)
+	binding, err := guestCommand(c.vm, "docker inspect --format '{{json .NetworkSettings.Ports}}' "+containerID)
 	if err != nil || !strings.Contains(binding, `"HostIp":"`+status.StackIP+`"`) || !strings.Contains(binding, `"HostPort":"8088"`) {
 		t.Fatalf("published binding=%s error=%v", binding, err)
 	}
@@ -283,11 +235,11 @@ func TestCLICaddy(t *testing.T) {
 	if !strings.Contains(output, "mem") || !strings.Contains(output, "bytes") {
 		t.Fatalf("stats output: %s", output)
 	}
-	if os.Getenv("FLOATLAB_WORKLOAD_INTEGRATION") == "1" {
+	{
 		t.Log("verify HTTP and service DNS after independent control and host service restarts")
 		c.assertServiceRestarts(stackID, func(_ string) {
 			waitFor(t, 30*time.Second, func() error {
-				output, err := guestCommand(root, "curl --max-time 5 --fail --silent --show-error http://"+status.StackIP+":8088/"+marker)
+				output, err := guestCommand(c.vm, "curl --max-time 5 --fail --silent --show-error http://"+status.StackIP+":8088/"+marker)
 				if err != nil || output != marker {
 					return fmt.Errorf("HTTP after service restart: %q %v", output, err)
 				}
@@ -307,7 +259,7 @@ func TestCLICaddy(t *testing.T) {
 		t.Fatalf("allocation leaked: %+v error=%v", allocated, err)
 	}
 	host := "flh" + strings.ReplaceAll(stackID, "-", "")[:10]
-	cleanup, err := guestCommand(root, "docker ps --all --quiet --filter label=com.docker.compose.project="+stackID+"; if ip link show dev "+host+" >/dev/null 2>&1; then echo interface-leaked; exit 1; fi")
+	cleanup, err := guestCommand(c.vm, "docker ps --all --quiet --filter label=com.docker.compose.project="+stackID+"; if ip link show dev "+host+" >/dev/null 2>&1; then echo interface-leaked; exit 1; fi")
 	if err != nil || strings.TrimSpace(cleanup) != "" {
 		t.Fatalf("resources remain: %s error=%v", cleanup, err)
 	}
@@ -316,59 +268,6 @@ func TestCLICaddy(t *testing.T) {
 	}
 	pool.ID = ""
 	stackID = ""
-}
-
-// guestCommand runs checks on the VM host, not inside the workload. Existing
-// targets can use VM_SSH; freshly booted appliances use the QEMU guest agent.
-func guestCommand(root, script string) (string, error) {
-	script = "export PATH=/run/current-system/sw/bin:/run/wrappers/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH; " + script
-	if ssh := os.Getenv("VM_SSH"); ssh != "" {
-		return command(60*time.Second, root, nil, "ssh", "-o", "BatchMode=yes", ssh, "sudo", "-n", "sh", "-c", "'"+strings.ReplaceAll(script, "'", "'\\''")+"'")
-	}
-	uri, name := env("LIBVIRT_URI", "qemu:///system"), env("VM_NAME", "floatlab-integration")
-	raw, _ := json.Marshal(map[string]any{"execute": "guest-exec", "arguments": map[string]any{"path": "/bin/sh", "arg": []string{"-c", script}, "capture-output": true}})
-	out, err := command(15*time.Second, root, nil, "virsh", "-c", uri, "qemu-agent-command", name, string(raw))
-	if err != nil {
-		return "", err
-	}
-	var started struct {
-		Return struct {
-			PID int `json:"pid"`
-		} `json:"return"`
-	}
-	if err := json.Unmarshal([]byte(out), &started); err != nil || started.Return.PID == 0 {
-		return "", fmt.Errorf("guest-exec: %s", out)
-	}
-	deadline := time.Now().Add(45 * time.Second)
-	for time.Now().Before(deadline) {
-		raw, _ := json.Marshal(map[string]any{"execute": "guest-exec-status", "arguments": map[string]int{"pid": started.Return.PID}})
-		out, err := command(10*time.Second, root, nil, "virsh", "-c", uri, "qemu-agent-command", name, string(raw))
-		if err != nil {
-			return "", err
-		}
-		var status struct {
-			Return struct {
-				Exited   bool   `json:"exited"`
-				ExitCode int    `json:"exitcode"`
-				Signal   int    `json:"signal"`
-				Out      string `json:"out-data"`
-				Err      string `json:"err-data"`
-			} `json:"return"`
-		}
-		if err := json.Unmarshal([]byte(out), &status); err != nil {
-			return "", err
-		}
-		if status.Return.Exited {
-			stdout, _ := base64.StdEncoding.DecodeString(status.Return.Out)
-			stderr, _ := base64.StdEncoding.DecodeString(status.Return.Err)
-			if status.Return.ExitCode != 0 || status.Return.Signal != 0 {
-				return string(stdout), fmt.Errorf("guest command exited %d signal %d: %s", status.Return.ExitCode, status.Return.Signal, stderr)
-			}
-			return string(stdout), nil
-		}
-		time.Sleep(250 * time.Millisecond)
-	}
-	return "", fmt.Errorf("guest command timed out")
 }
 
 func caddyCompose(name, pool, node, marker string) string {
@@ -418,9 +317,52 @@ func TestCaddyComposeFixture(t *testing.T) {
 	}
 }
 
-func TestExistingAPIBypassesVMProvisioning(t *testing.T) {
-	t.Setenv("API_URL", "http://example.test:8080")
-	if got := startAppliance(t); got != "http://example.test:8080" {
-		t.Fatalf("existing API URL = %q", got)
+// Use the appliance's real LAN without changing host addresses or routes.
+func caddyPoolRange(live hostnetwork.Live, pools []ipam.Pool) (netip.Prefix, netip.Addr, netip.Addr, error) {
+	for _, address := range live.PrimaryAddresses {
+		prefix, err := netip.ParsePrefix(address)
+		if err != nil || !prefix.Addr().Is4() || prefix.Bits() > 29 {
+			continue
+		}
+		prefix = prefix.Masked()
+		for start := prefix.Addr().Next(); prefix.Contains(start); start = start.Next() {
+			end := start.Next().Next()
+			if !prefix.Contains(end.Next()) {
+				break // Reserve the broadcast address.
+			}
+			candidate := ipam.Pool{StartIP: start.String(), EndIP: end.String()}
+			if ipam.ValidateHostRange(candidate, live.PrimaryAddresses, live.Gateways) != nil {
+				continue
+			}
+			overlaps := false
+			for _, pool := range pools {
+				first, firstErr := netip.ParseAddr(pool.StartIP)
+				last, lastErr := netip.ParseAddr(pool.EndIP)
+				if firstErr != nil || lastErr != nil {
+					return netip.Prefix{}, netip.Addr{}, netip.Addr{}, fmt.Errorf("invalid existing pool range: %+v", pool)
+				}
+				if start.Compare(last) <= 0 && first.Compare(end) <= 0 {
+					overlaps = true
+					break
+				}
+			}
+			if !overlaps {
+				return prefix, start, end, nil
+			}
+		}
+	}
+	return netip.Prefix{}, netip.Addr{}, netip.Addr{}, fmt.Errorf("no free three-address range in appliance LAN")
+}
+
+func TestCaddyPoolRange(t *testing.T) {
+	live := hostnetwork.Live{PrimaryAddresses: []string{"192.0.2.2/24"}, Gateways: []string{"192.0.2.1"}}
+	pools := []ipam.Pool{{StartIP: "192.0.2.3", EndIP: "192.0.2.20"}}
+	prefix, start, end, err := caddyPoolRange(live, pools)
+	if err != nil || prefix.String() != "192.0.2.0/24" || start.String() != "192.0.2.21" || end.String() != "192.0.2.23" {
+		t.Fatalf("range=%s %s-%s error=%v", prefix, start, end, err)
+	}
+	pools[0].EndIP = "192.0.2.253"
+	if _, _, _, err := caddyPoolRange(live, pools); err == nil {
+		t.Fatal("accepted a range containing the broadcast address")
 	}
 }

@@ -21,8 +21,6 @@
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             bun
-            cloud-utils
-            cdrkit
             curl
             docker-client
             go
@@ -32,6 +30,7 @@
             qemu
             virt-manager
             wget
+            xorriso
           ];
 
           shellHook = ''

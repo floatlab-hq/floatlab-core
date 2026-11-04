@@ -30,6 +30,7 @@ func registerConfigRoutes(r chi.Router, s *Server) {
 		r.Delete("/alert-rules/{id}", s.labMutation(func(target *Server) http.HandlerFunc { return target.handleAlertRules }))
 		r.Get("/alerts", s.handleAlerts)
 		r.Get("/alerts/{id}", s.handleAlerts)
+		r.Delete("/alerts/{id}", s.handleDeleteAlert)
 		r.Post("/alerts/{id}/silence", s.handleSilenceAlert)
 	})
 }
@@ -354,9 +355,10 @@ func (s *Server) handleAlertRules(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
-	query := `SELECT * FROM (SELECT id,rule_id,stack_id,node_id,severity,
+	query := `SELECT * FROM (SELECT id,rule_id,stack_id,node_id,severity,kind,
 	CASE WHEN state='active' AND julianday(silenced_until)>julianday('now') THEN 'silenced' ELSE state END AS state,
 	message,silenced_until,resolved_at,created_at,labels,updated_at,resolution_reason,
+	(SELECT json_extract(state_json,'$.resource') FROM monitoring_checks WHERE json_extract(state_json,'$.incident_id')=alerts.id LIMIT 1) AS resource,
 	(SELECT json_extract(state_json,'$.Status') FROM alert_evaluations WHERE json_extract(state_json,'$.AlertID')=alerts.id) AS evaluation_state FROM alerts) WHERE 1=1`
 	args := []interface{}{}
 	if id := chi.URLParam(r, "id"); id != "" {
@@ -380,6 +382,12 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 			_ = json.Unmarshal([]byte(value), &labels)
 		}
 		row["labels"] = labels
+		if raw, ok := row["resource"].(string); ok {
+			var resource map[string]string
+			if json.Unmarshal([]byte(raw), &resource) == nil {
+				row["resource"] = resource
+			}
+		}
 	}
 	if chi.URLParam(r, "id") != "" {
 		if len(rows) == 0 {
@@ -390,6 +398,31 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	} else {
 		writeJSON(w, 200, rows)
 	}
+}
+
+func (s *Server) handleDeleteAlert(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	rows, err := s.queryObjects(r, `SELECT state FROM alerts WHERE id=?`, id)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if len(rows) == 0 {
+		writeError(w, 404, "alert not found")
+		return
+	}
+	if rows[0]["state"] != "resolved" {
+		writeError(w, 409, "alert must be resolved before deletion")
+		return
+	}
+	if err := s.db.Execute(r.Context(), []rqlite.Statement{
+		{SQL: `DELETE FROM notifications WHERE alert_id=? AND EXISTS(SELECT 1 FROM alerts WHERE id=? AND state='resolved')`, Params: []interface{}{id, id}},
+		{SQL: `DELETE FROM alerts WHERE id=? AND state='resolved'`, Params: []interface{}{id}},
+	}); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	w.WriteHeader(204)
 }
 
 func (s *Server) handleSilenceAlert(w http.ResponseWriter, r *http.Request) {

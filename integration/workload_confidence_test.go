@@ -3,68 +3,15 @@ package integration_test
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/floatlab/floatlab-core/api/openapi"
 	"io"
 	"net/http"
-	"os"
-	"os/exec"
 	"strings"
-	"testing"
 	"time"
-)
 
-func TestWorkloadConfidence(t *testing.T) {
-	if os.Getenv("FLOATLAB_WORKLOAD_INTEGRATION") != "1" {
-		t.Skip("run scripts/test-workloads.sh for the complete single-node suite")
-	}
-	preflightWorkloads(t)
-	// Never recreate an existing user-selected domain; this suite owns a unique VM.
-	if os.Getenv("API_URL") == "" {
-		t.Setenv("VM_NAME", fmt.Sprintf("floatlab-confidence-%d", time.Now().UnixNano()))
-	}
-	coverage := newCoverage(t)
-	activeCoverage = coverage
-	t.Cleanup(func() { activeCoverage = nil })
-	t.Cleanup(func() { coverage.report(t) })
-	c := newAPIClient(t, startAppliance(t))
-	c.waitReady()
-	c.login()
-	c.waitNodeReady()
-	t.Setenv("API_URL", c.baseURL)
-	t.Setenv("FLOATLAB_VM_INTEGRATION", "1")
-	t.Setenv("FLOATLAB_CLI_INTEGRATION", "1")
-	diagnostics := func(target *testing.T) {
-		if target.Failed() {
-			root, _ := os.Getwd()
-			out, err := guestCommand(root, `docker ps -a; docker compose -f /floatlab/system/docker-compose.yml logs --tail=100 floatlab-control; journalctl -u floatlab-hostd --no-pager -n 100; zfs list -t all; docker ps -aq --filter label=com.docker.compose.project | while read -r container; do docker inspect --format '{{.Name}} {{json .State}}' "$container"; docker logs --tail=40 "$container" 2>&1; done; sqlite3 -readonly -json /floatlab/system/workloads/local.sqlite 'SELECT id,state,checkpoint,error FROM operations ORDER BY created_at DESC LIMIT 20; SELECT * FROM lifecycle_events ORDER BY occurred_at DESC LIMIT 30'`)
-			target.Logf("appliance diagnostics: %s\n%v", out, err)
-		}
-	}
-	t.Cleanup(func() { diagnostics(t) })
-	for _, scenario := range []struct {
-		name string
-		fn   func(*testing.T)
-	}{
-		{"container-management", TestContainerManagementAPI},
-		{"cli-caddy", TestCLICaddy},
-		{"documented-management", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertManagementContracts() }},
-		{"unconfigured-lab-rejections", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertUnconfiguredLab() }},
-		{"alert-evaluator", TestAlertEvaluator},
-		{"persistence-recovery-rollback", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertRecoveryWorkload() }},
-		{"network-settings", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertHostNetworkTransactions() }},
-		{"management-update", func(t *testing.T) { c := newAPIClient(t, c.baseURL); c.login(); c.assertManagementUpdateAppliance() }},
-	} {
-		if !coverage.scenarioTest(t, scenario.name, func(child *testing.T) {
-			defer diagnostics(child) // Capture workloads before owned-resource cleanup runs.
-			scenario.fn(child)
-		}) {
-			return
-		}
-	}
-}
+	"github.com/floatlab/floatlab-core/api/openapi"
+)
 
 func (c *apiClient) assertUnconfiguredLab() {
 	c.t.Helper()
@@ -78,37 +25,6 @@ func (c *apiClient) assertUnconfiguredLab() {
 		}
 		path := strings.NewReplacer("{id}", "unconfigured-node", "{node_id}", "unconfigured-node").Replace(operation.Path)
 		c.expect(operation.Method, path, map[string]any{}, http.StatusServiceUnavailable)
-	}
-}
-
-func preflightWorkloads(t *testing.T) {
-	t.Helper()
-	for _, name := range []string{"go", "bun"} {
-		if _, err := exec.LookPath(name); err != nil {
-			t.Fatalf("full suite requires %s on PATH", name)
-		}
-	}
-	if os.Getenv("API_URL") != "" {
-		if os.Getenv("VM_SSH") != "" {
-			if _, err := exec.LookPath("ssh"); err != nil {
-				t.Fatal("existing appliance mode requires ssh on PATH")
-			}
-		} else if os.Getenv("VM_NAME") != "" {
-			if _, err := exec.LookPath("virsh"); err != nil {
-				t.Fatal("guest-agent appliance mode requires virsh on PATH")
-			}
-		} else {
-			t.Fatal("existing appliance mode requires VM_SSH or VM_NAME for a dedicated test appliance")
-		}
-		return
-	}
-	if _, err := os.Stat("/dev/kvm"); err != nil {
-		t.Fatal("full suite requires /dev/kvm, or API_URL and VM_SSH for a dedicated appliance")
-	}
-	for _, name := range []string{"nix", "virsh", "virt-install"} {
-		if _, err := exec.LookPath(name); err != nil {
-			t.Fatalf("full suite requires %s", name)
-		}
 	}
 }
 
@@ -157,7 +73,7 @@ func (c *apiClient) object(method, path string, body interface{}, status int) ma
 	}
 	return object
 }
-func requireFields(t *testing.T, row map[string]interface{}, fields ...string) {
+func requireFields(t testT, row map[string]interface{}, fields ...string) {
 	t.Helper()
 	for _, field := range fields {
 		if _, ok := row[field]; !ok {
@@ -233,27 +149,16 @@ func (c *apiClient) assertManagementContracts() {
 	aid := alerts[0].(map[string]interface{})["id"].(string)
 	c.object("GET", "/api/v1/alerts/"+aid, nil, 200)
 	t.Cleanup(func() {
-		c.cleanupSQL("DELETE FROM alerts WHERE id=?", aid)
-		c.cleanupSQL("DELETE FROM notifications WHERE title=?", name)
+		c.expect("POST", "/api/v1/stats/webhook", map[string]interface{}{"alerts": []interface{}{map[string]interface{}{"status": "resolved", "labels": map[string]string{"alertname": name, "rule_id": rid, "severity": "critical", "node_id": id}, "annotations": map[string]string{"summary": name, "description": "contract alert"}, "endsAt": time.Now().UTC().Format(time.RFC3339)}}}, 200)
+		c.expect("DELETE", "/api/v1/alerts/"+aid, nil, 204)
 	})
 	c.assertNotificationContract(name)
 	c.expect("GET", "/api/v1/storage/replication", nil, 200)
 	// Successful received-backup reads/restores require the separate multi-node suite.
-	c.expect("GET", "/api/v1/storage/backups?node_id=node1&source_node_id=invalid/source&dataset=invalid", nil, 400)
+	c.expect("GET", "/api/v1/storage/backups?node_id="+c.nodeID+"&source_node_id=invalid/source&dataset=invalid", nil, 400)
 	c.expect("POST", "/api/v1/storage/backups/restore", map[string]any{}, 400)
 	c.expect("GET", "/api/v1/storage/faults", nil, 200)
 	c.expect("GET", "/api/v1/failover/status", nil, 200)
-}
-
-func (c *apiClient) cleanupSQL(statement string, id string) {
-	c.t.Helper()
-	binding := `.parameter set ?1 "CAST(X'` + hex.EncodeToString([]byte(id)) + `' AS TEXT)"`
-	root, _ := os.Getwd()
-	out, err := guestCommand(root, "sqlite3 -batch -bail -cmd "+shellQuote(".timeout 10000")+" -cmd "+shellQuote(binding)+" /floatlab/system/workloads/local.sqlite "+shellQuote(statement))
-
-	if err != nil || strings.Contains(out, `"error"`) {
-		c.t.Errorf("cleanup owned record: %s %v", out, err)
-	}
 }
 
 func (c *apiClient) assertNotificationContract(name string) {
@@ -292,8 +197,8 @@ func (c *apiClient) assertNotificationContract(name string) {
 			t.Fatal("SSE missing event type")
 		}
 	}
-	if activeCoverage != nil {
-		activeCoverage.observe("GET", "/api/v1/events", 200)
+	if c.coverage != nil {
+		c.coverage.observe("GET", "/api/v1/events", 200)
 	}
 	n = c.object("GET", "/api/v1/notifications/"+id, nil, 200)
 	if n["state"] != "unread" {

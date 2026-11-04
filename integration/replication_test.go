@@ -4,226 +4,239 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
-	"testing"
 	"time"
 
+	"github.com/floatlab/floatlab-core/pkg/monitoring"
 	"github.com/floatlab/floatlab-core/pkg/store"
+	. "github.com/onsi/ginkgo/v2"
 )
 
 // This is deliberately separate from the lab membership suite: all data and
 // appliances belong to this test, including rollback and hold cleanup targets.
-func TestMultiNodeReplication(t *testing.T) {
-	source, backup, other := newReplicationLab(t)
-	sourceID, backupID := source.nodeID(), backup.nodeID()
-	otherID := other.nodeID()
-	source.configurePool(1, sourceID)
-	compose := strings.Replace(labWebCompose("replication-data", sourceID, "replication-data", source.pool), `volumes: ["data:/data"]`, "volumes:\n      - type: volume\n        source: data\n        target: /data\n        x-fl-snapshots: h/24 d/28", 1)
-	started := source.client.startNewStack("replication-data", compose)
-	source.client.waitOperation(started.OperationID)
-	source.client.waitStackState(started.StackID, "RunningPrimary")
-	stack := started.StackID
-	source.assertWeb(stack, "replication-data")
-	dataset := "floatlab/replication-data/data"
-	backupDataset := store.BackupDataset(sourceID, dataset)
-	targetPath := "/api/v1/storage/replication/" + stack + "/targets"
-	target := map[string]string{"dataset": dataset, "node_id": backupID, "schedule": "m/240 h/24 d/28"}
-
-	// Seed actual payload bytes and several available points before the first
-	// backup; initial seeding must preserve intermediate snapshots too.
+func defineReplication(fixture *applianceFixture) {
+	var source, backup, other *labGuest
+	var sourceID, backupID, otherID, stack, dataset, backupDataset, targetPath, firstPoint, latest, broken string
+	var target map[string]string
 	var snapshots []string
-	for i := 0; i < 3; i++ {
-		if i > 0 {
-			// Retention uses actual ZFS creation time. Place points in separate
-			// minute buckets without changing appliance clocks or TLS validity.
-			time.Sleep(time.Until(time.Now().UTC().Truncate(time.Minute).Add(time.Minute)) + 4*time.Second)
+	BeforeAll(func(ctx SpecContext) {
+		t := integrationT()
+		source, backup, other = newReplicationLab(t, fixture)
+		sourceID, backupID = source.nodeID(), backup.nodeID()
+		otherID = other.nodeID()
+		source.configurePool(1, sourceID)
+		compose := strings.Replace(labWebCompose("replication-data", sourceID, "replication-data", source.pool), `volumes: ["data:/data"]`, "volumes:\n      - type: volume\n        source: data\n        target: /data\n        x-fl-snapshots: h/24 d/28", 1)
+		started := source.client.startNewStack("replication-data", compose)
+		source.client.waitOperation(started.OperationID)
+		source.client.waitStackState(started.StackID, "RunningPrimary")
+		stack = started.StackID
+		source.assertWeb(stack, "replication-data")
+		dataset = "floatlab/replication-data/data"
+		backupDataset = store.BackupDataset(sourceID, dataset)
+		targetPath = "/api/v1/storage/replication/" + stack + "/targets"
+		target = map[string]string{"dataset": dataset, "node_id": backupID, "schedule": "m/240 h/24 d/28"}
+
+	})
+	It("seeds and verifies retained snapshot history on both destinations", func(ctx SpecContext) {
+		t := integrationT()
+		// Seed actual payload bytes and several available points before the first
+		// backup; initial seeding must preserve intermediate snapshots too.
+		// These automated names and test holds are a retention-history fixture.
+		for i := 0; i < 3; i++ {
+			if i > 0 {
+				// Retention uses actual ZFS creation time. Place points in separate
+				// minute buckets without changing appliance clocks or TLS validity.
+				time.Sleep(time.Until(time.Now().UTC().Truncate(time.Minute).Add(time.Minute)) + 4*time.Second)
+			}
+			name, err := store.AutomatedSnapshotName(time.Now().UTC())
+			if err != nil {
+				t.Fatal(err)
+			}
+			source.execWeb(stack, "printf %s "+shellQuote(fmt.Sprintf("payload-%d", i))+" > /data/replicated-data")
+			script := "set -eu; zfs snapshot " + shellQuote(dataset+"@"+name) + "; zfs hold floatlab:acceptance-seed " + shellQuote(dataset+"@"+name)
+			if out, err := source.guest(script); err != nil {
+				t.Fatalf("seed source snapshot: %s %v", out, err)
+			}
+			snapshots = append(snapshots, name)
 		}
-		name, err := store.AutomatedSnapshotName(time.Now().UTC())
-		if err != nil {
+		if err := source.json("PUT", targetPath, target, nil); err != nil {
 			t.Fatal(err)
 		}
-		script := "set -eu; printf %s " + shellQuote(fmt.Sprintf("payload-%d", i)) + " > " + shellQuote("/"+dataset+"/replicated-data") + "; zfs snapshot " + shellQuote(dataset+"@"+name) + "; zfs hold floatlab:acceptance-seed " + shellQuote(dataset+"@"+name)
-		if out, err := source.guest(script); err != nil {
-			t.Fatalf("seed source snapshot: %s %v", out, err)
+		if err := source.json("PUT", targetPath, map[string]string{"dataset": dataset, "node_id": otherID, "schedule": "m/240 h/24 d/28"}, nil); err != nil {
+			t.Fatal(err)
 		}
-		snapshots = append(snapshots, name)
-	}
-	if err := source.json("PUT", targetPath, target, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := source.json("PUT", targetPath, map[string]string{"dataset": dataset, "node_id": otherID, "schedule": "m/240 h/24 d/28"}, nil); err != nil {
-		t.Fatal(err)
-	}
-	source.replicateAndWait(stack, dataset, backupID)
-	for _, snapshot := range snapshots {
-		assertSnapshotGUID(t, source, backup, dataset, backupDataset, snapshot)
-	}
-	for _, snapshot := range snapshots {
-		if out, err := source.guest("zfs release floatlab:acceptance-seed " + shellQuote(dataset+"@"+snapshot)); err != nil {
-			t.Fatalf("release test-owned seed hold: %s %v", out, err)
+		source.replicateAndWait(stack, dataset, backupID)
+		for _, snapshot := range snapshots {
+			assertSnapshotGUID(t, source, backup, dataset, backupDataset, snapshot)
 		}
-	}
-	firstPoint := source.recoveryPoint(dataset, backupID)
-	assertRecoveryPoint(t, source, dataset, firstPoint, backupID, true)
-	source.replicateAndWait(stack, dataset, otherID)
-	assertRecoveryPoint(t, source, dataset, source.recoveryPoint(dataset, otherID), otherID, true)
-
-	// A second run must advance the hold rather than accumulate recovery-point
-	// holds, and received data must match a real source snapshot's bytes.
-	time.Sleep(3 * time.Second)
-	if out, err := source.guest("printf %s second-backup > " + shellQuote("/"+dataset+"/replicated-data")); err != nil {
-		t.Fatalf("change source data: %s %v", out, err)
-	}
-	source.replicateAndWait(stack, dataset, backupID)
-	latest := source.recoveryPoint(dataset, backupID)
-	if latest == firstPoint {
-		t.Fatalf("replication failed to advance from %s", firstPoint)
-	}
-	assertSnapshotGUID(t, source, backup, dataset, backupDataset, latest)
-	prunedSeed := snapshots[1]
-	firstTime, _ := store.DecodeSnapshotTimestamp(snapshots[0][3:])
-	middleTime, _ := store.DecodeSnapshotTimestamp(snapshots[1][3:])
-	if firstTime.Truncate(time.Hour) != middleTime.Truncate(time.Hour) {
-		prunedSeed = snapshots[2]
-	}
-	if out, err := source.guest("if zfs list -H -t snapshot -o name " + shellQuote(dataset+"@"+prunedSeed) + " >/dev/null 2>&1; then exit 1; fi"); err != nil {
-		t.Fatalf("source hourly retention failed to prune intermediate minute point: %s %v", out, err)
-	}
-	if out, err := backup.guest("zfs list -H -t snapshot -o name " + shellQuote(backupDataset+"@"+prunedSeed)); err != nil {
-		t.Fatalf("source pruning erased retained backup intermediate: %s %v", out, err)
-	}
-
-	// Failed transport raises a destination-specific incident; receiving and
-	// verifying a later retry must resolve it.
-	if out, err := backup.guest("systemctl stop sshd"); err != nil {
-		t.Fatalf("stop owned backup transport: %s %v", out, err)
-	}
-	t.Cleanup(func() { _, _ = backup.guest("systemctl start sshd") })
-	var failed map[string]any
-	if err := source.json("POST", "/api/v1/storage/replication/"+stack+"/trigger?"+url.Values{"dataset": {dataset}, "dest_node_id": {backupID}}.Encode(), map[string]any{}, &failed); err != nil {
-		t.Fatal(err)
-	}
-	alertID := "replication:" + sourceID + ":" + dataset + ":" + backupID
-	assertReplicationAlert(t, source, stack, alertID, "active")
-	if out, err := backup.guest("systemctl start sshd"); err != nil {
-		t.Fatalf("restore backup transport: %s %v", out, err)
-	}
-	source.replicateAndWait(stack, dataset, backupID)
-	assertReplicationAlert(t, source, stack, alertID, "resolved")
-	latest = source.recoveryPoint(dataset, backupID)
-	assertRecoveryPoint(t, source, dataset, latest, backupID, true)
-	assertRecoveryPoint(t, source, dataset, firstPoint, backupID, false)
-	assertRecoveryPoint(t, source, dataset, source.recoveryPoint(dataset, otherID), otherID, true)
-	assertBackupContents(t, backup, backupDataset, latest, "second-backup")
-	// Deliberately cut a production SSH receive after part of the stream. The
-	// next worker must resume that original point before sending its newer one.
-	broken := interruptBackup(t, source, backup, dataset, backupDataset, latest)
-	source.replicateAndWait(stack, dataset, backupID)
-	assertNoResumeToken(t, backup, backupDataset)
-	if out, err := source.guest("zfs release floatlab:acceptance-interrupted " + shellQuote(dataset+"@"+broken)); err != nil {
-		t.Fatalf("release resumed target's test hold: %s %v", out, err)
-	}
-	latest = source.recoveryPoint(dataset, backupID)
-	assertSnapshotGUID(t, source, backup, dataset, backupDataset, latest)
-
-	// A deleted original target makes its token unusable. Retry must safely
-	// retire partial receive state and recover from the previous common point.
-	broken = interruptBackup(t, source, backup, dataset, backupDataset, latest)
-	if out, err := source.guest("zfs release floatlab:acceptance-interrupted " + shellQuote(dataset+"@"+broken) + "; zfs destroy " + shellQuote(dataset+"@"+broken)); err != nil {
-		t.Fatalf("invalidate interrupted stream target: %s %v", out, err)
-	}
-	source.replicateAndWait(stack, dataset, backupID)
-	assertNoResumeToken(t, backup, backupDataset)
-	latest = source.recoveryPoint(dataset, backupID)
-	assertSnapshotGUID(t, source, backup, dataset, backupDataset, latest)
-
-	// Removing a destination must release its recovery-point hold, immediately
-	// prune the source, and leave the received backup history recoverable.
-	if err := source.json("DELETE", targetPath, map[string]string{"dataset": dataset, "node_id": backupID}, nil); err != nil {
-		t.Fatal(err)
-	}
-	waitFor(t, time.Minute, func() error {
-		out, err := source.guest(snapshotHoldsCommand(dataset))
-		if err != nil {
-			return err
+		for _, snapshot := range snapshots {
+			if out, err := source.guest("zfs release floatlab:acceptance-seed " + shellQuote(dataset+"@"+snapshot)); err != nil {
+				t.Fatalf("release test-owned seed hold: %s %v", out, err)
+			}
 		}
-		if strings.Contains(out, backupID) {
-			return fmt.Errorf("removed destination still has holds: %s", out)
-		}
-		return nil
+		firstPoint = source.recoveryPoint(dataset, backupID)
+		assertRecoveryPoint(t, source, dataset, firstPoint, backupID, true)
+		source.replicateAndWait(stack, dataset, otherID)
+		assertRecoveryPoint(t, source, dataset, source.recoveryPoint(dataset, otherID), otherID, true)
+
 	})
-	assertRecoveryPoint(t, source, dataset, source.recoveryPoint(dataset, otherID), otherID, true)
-	if out, err := backup.guest("zfs list -H -t snapshot -o name " + shellQuote(backupDataset+"@"+latest)); err != nil {
-		t.Fatalf("destination removal destroyed received backup: %s %v", out, err)
-	}
-	var removed map[string]any
-	if err := source.json("POST", "/api/v1/lab/members/"+otherID+"/remove", map[string]string{"confirm_node_id": otherID, "operation_id": fmt.Sprintf("remove-backup-%d", time.Now().UnixNano())}, &removed); err != nil {
-		t.Fatalf("remove remaining backup node: %v", err)
-	}
-	waitFor(t, time.Minute, func() error {
-		out, err := source.guest(snapshotHoldsCommand(dataset))
-		if err != nil {
-			return err
+	It("advances recovery holds while preserving received history", func(ctx SpecContext) {
+		t := integrationT()
+		// A second run must advance the hold rather than accumulate recovery-point
+		// holds, and received data must match a real source snapshot's bytes.
+		time.Sleep(3 * time.Second)
+		source.execWeb(stack, "printf %s second-backup > /data/replicated-data")
+		source.replicateAndWait(stack, dataset, backupID)
+		latest = source.recoveryPoint(dataset, backupID)
+		if latest == firstPoint {
+			t.Fatalf("replication failed to advance from %s", firstPoint)
 		}
-		if strings.Contains(out, otherID) {
-			return fmt.Errorf("removed node still has holds: %s", out)
+		assertSnapshotGUID(t, source, backup, dataset, backupDataset, latest)
+		prunedSeed := snapshots[1]
+		firstTime, _ := store.DecodeSnapshotTimestamp(snapshots[0][3:])
+		middleTime, _ := store.DecodeSnapshotTimestamp(snapshots[1][3:])
+		if firstTime.Truncate(time.Hour) != middleTime.Truncate(time.Hour) {
+			prunedSeed = snapshots[2]
 		}
-		return nil
+		if out, err := source.guest("if zfs list -H -t snapshot -o name " + shellQuote(dataset+"@"+prunedSeed) + " >/dev/null 2>&1; then exit 1; fi"); err != nil {
+			t.Fatalf("source hourly retention failed to prune intermediate minute point: %s %v", out, err)
+		}
+		if out, err := backup.guest("zfs list -H -t snapshot -o name " + shellQuote(backupDataset+"@"+prunedSeed)); err != nil {
+			t.Fatalf("source pruning erased retained backup intermediate: %s %v", out, err)
+		}
+
+	})
+	It("raises and resolves destination-specific transport incidents", func(ctx SpecContext) {
+		t := integrationT()
+		// Failed transport raises a destination-specific incident; receiving and
+		// verifying a later retry must resolve it.
+		if out, err := backup.guest("systemctl stop sshd"); err != nil {
+			t.Fatalf("stop owned backup transport: %s %v", out, err)
+		}
+		t.Cleanup(func() { _, _ = backup.guest("systemctl start sshd") })
+		var failed map[string]any
+		if err := source.json("POST", "/api/v1/storage/replication/"+stack+"/trigger?"+url.Values{"dataset": {dataset}, "dest_node_id": {backupID}}.Encode(), map[string]any{}, &failed); err != nil {
+			t.Fatal(err)
+		}
+		alertID := replicationIncidentID(t, source, sourceID, stack, dataset, backupID)
+		assertReplicationAlert(t, source, stack, alertID, "active")
+		if out, err := backup.guest("systemctl start sshd"); err != nil {
+			t.Fatalf("restore backup transport: %s %v", out, err)
+		}
+		source.replicateAndWait(stack, dataset, backupID)
+		assertReplicationAlert(t, source, stack, alertID, "resolved")
+		latest = source.recoveryPoint(dataset, backupID)
+		assertRecoveryPoint(t, source, dataset, latest, backupID, true)
+		assertRecoveryPoint(t, source, dataset, firstPoint, backupID, false)
+		assertRecoveryPoint(t, source, dataset, source.recoveryPoint(dataset, otherID), otherID, true)
+		assertBackupContents(t, backup, backupDataset, latest, "second-backup")
+
+	})
+	It("resumes an interrupted production receive", func(ctx SpecContext) {
+		t := integrationT()
+		// Deliberately cut a production SSH receive after part of the stream. The
+		// next worker must resume that original point before sending its newer one.
+		broken = interruptBackup(t, source, backup, dataset, backupDataset, latest)
+		source.replicateAndWait(stack, dataset, backupID)
+		assertNoResumeToken(t, backup, backupDataset)
+		if out, err := source.guest("zfs release floatlab:acceptance-interrupted " + shellQuote(dataset+"@"+broken)); err != nil {
+			t.Fatalf("release resumed target's test hold: %s %v", out, err)
+		}
+		latest = source.recoveryPoint(dataset, backupID)
+		assertSnapshotGUID(t, source, backup, dataset, backupDataset, latest)
+
+	})
+	It("recovers safely when the interrupted source point is deleted", func(ctx SpecContext) {
+		t := integrationT()
+		// A deleted original target makes its token unusable. Retry must safely
+		// retire partial receive state and recover from the previous common point.
+		broken = interruptBackup(t, source, backup, dataset, backupDataset, latest)
+		if out, err := source.guest("zfs release floatlab:acceptance-interrupted " + shellQuote(dataset+"@"+broken) + "; zfs destroy " + shellQuote(dataset+"@"+broken)); err != nil {
+			t.Fatalf("invalidate interrupted stream target: %s %v", out, err)
+		}
+		source.replicateAndWait(stack, dataset, backupID)
+		assertNoResumeToken(t, backup, backupDataset)
+		latest = source.recoveryPoint(dataset, backupID)
+		assertSnapshotGUID(t, source, backup, dataset, backupDataset, latest)
+
+	})
+	It("releases destination holds without deleting received backups", func(ctx SpecContext) {
+		t := integrationT()
+		// Removing a destination must release its recovery-point hold, immediately
+		// prune the source, and leave the received backup history recoverable.
+		if err := source.json("DELETE", targetPath, map[string]string{"dataset": dataset, "node_id": backupID}, nil); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, time.Minute, func() error {
+			out, err := source.guest(snapshotHoldsCommand(dataset))
+			if err != nil {
+				return err
+			}
+			if strings.Contains(out, backupID) {
+				return fmt.Errorf("removed destination still has holds: %s", out)
+			}
+			return nil
+		})
+		assertRecoveryPoint(t, source, dataset, source.recoveryPoint(dataset, otherID), otherID, true)
+		if out, err := backup.guest("zfs list -H -t snapshot -o name " + shellQuote(backupDataset+"@"+latest)); err != nil {
+			t.Fatalf("destination removal destroyed received backup: %s %v", out, err)
+		}
+		var removed map[string]any
+		if err := source.json("POST", "/api/v1/lab/members/"+otherID+"/remove", map[string]string{"confirm_node_id": otherID, "operation_id": fmt.Sprintf("remove-backup-%d", time.Now().UnixNano())}, &removed); err != nil {
+			t.Fatalf("remove remaining backup node: %v", err)
+		}
+		waitFor(t, time.Minute, func() error {
+			out, err := source.guest(snapshotHoldsCommand(dataset))
+			if err != nil {
+				return err
+			}
+			if strings.Contains(out, otherID) {
+				return fmt.Errorf("removed node still has holds: %s", out)
+			}
+			return nil
+		})
 	})
 }
 
-func newReplicationLab(t *testing.T) (*labGuest, *labGuest, *labGuest) {
+func newReplicationLab(t testT, fixture *applianceFixture) (*labGuest, *labGuest, *labGuest) {
 	t.Helper()
-	if os.Getenv("FLOATLAB_MULTI_NODE_INTEGRATION") != "1" {
-		t.Skip("run scripts/test-multi-node.sh for real ZFS replication acceptance")
-	}
-	if os.Getenv("API_URL") != "" || os.Getenv("VM_NAME") != "" || os.Getenv("VM_SSH") != "" {
-		t.Fatal("replication acceptance requires fresh owned appliances")
-	}
-	if os.Getenv("FLOATLAB_MULTI_NODE_RUN_ID") == "" {
-		t.Setenv("FLOATLAB_MULTI_NODE_RUN_ID", fmt.Sprintf("%d", time.Now().UnixNano()))
-	}
-	source := newLabGuest(t, 1)
-	source.refreshReplicationRuntime()
-	backup := newLabGuest(t, 2)
-	backup.refreshReplicationRuntime()
+	source := newLabGuest(t, fixture, 1)
+	backup := newLabGuest(t, fixture, 2)
 	backup.join(source)
 	assertLabMembers(t, 2, source, backup)
-	other := newLabGuest(t, 3)
-	other.refreshReplicationRuntime()
+	other := newLabGuest(t, fixture, 3)
 	other.join(source)
 	assertLabMembers(t, 3, source, backup, other)
-	if os.Getenv("FLOATLAB_MULTI_NODE_MANAGEMENT_ARCHIVE") != "" {
-		for _, node := range []*labGuest{source, backup, other} {
-			out, err := node.guest("set -eu; sed -i 's|exec floatlab-hostd backup-receive|exec /floatlab/system/updates/appliance-hostd-current backup-receive|' /floatlab/system/etc/lab/replica-receive-root.sh; grep -F 'exec /floatlab/system/updates/appliance-hostd-current backup-receive' /floatlab/system/etc/lab/replica-receive-root.sh")
-			if err != nil {
-				t.Fatalf("activate current SSH receiver on %s: %s %v", node.name, out, err)
-			}
-		}
-	}
 	return source, backup, other
 }
 
-// Reuse an existing disposable ISO while validating freshly built production
-// control and hostd code. The archive is supplied by the acceptance runner.
-func (n *labGuest) refreshReplicationRuntime() {
-	archive := os.Getenv("FLOATLAB_MULTI_NODE_MANAGEMENT_ARCHIVE")
-	if archive == "" {
-		return
-	}
-	const remote = "/floatlab/system/updates/replication-management.tar.gz"
-	uploadUpgradeGuestFile(n.t, n.root, archive, remote)
-	if out, err := n.guest("set -eu; docker load -i " + shellQuote(remote) + "; sed -i 's|image: floatlab-bundle/floatlab-control:[a-f0-9]*|image: floatlab-manage:dev|' /floatlab/system/docker-compose.yml; docker compose -f /floatlab/system/docker-compose.yml up -d --force-recreate floatlab-control; docker inspect --format '{{.Image}}' $(docker ps -q --filter label=com.docker.compose.project=floatlab-system --filter label=com.docker.compose.service=floatlab-control)"); err != nil {
-		n.t.Fatalf("load current production management image: %s %v", out, err)
-	} else {
-		n.t.Logf("%s production management runtime: %s", n.name, strings.TrimSpace(out))
-	}
-	installCurrentUpgradeHostd(n.t, n.root)
-	n.client.waitReady()
+func replicationIncidentID(t testT, source *labGuest, sourceID, stack, dataset, destination string) string {
+	t.Helper()
+	var incidentID string
+	waitFor(t, time.Minute, func() error {
+		var rows []struct {
+			ID, Kind string
+			Resource monitoring.Resource
+		}
+		if err := source.json("GET", "/api/v1/alerts?stack_id="+url.QueryEscape(stack)+"&state=active", nil, &rows); err != nil {
+			return err
+		}
+		var matches []string
+		for _, row := range rows {
+			if row.Kind == "replication" && row.Resource == (monitoring.Resource{HostID: sourceID, WorkloadID: stack, Dataset: dataset, SourceID: sourceID, DestinationID: destination}) {
+				matches = append(matches, row.ID)
+			}
+		}
+		if len(matches) != 1 || matches[0] == "" {
+			return fmt.Errorf("expected one active replication incident for %s on %s to %s, got %v", dataset, sourceID, destination, matches)
+		}
+		incidentID = matches[0]
+		return nil
+	})
+	return incidentID
 }
 
-func assertReplicationAlert(t *testing.T, source *labGuest, stack, id, state string) {
+func assertReplicationAlert(t testT, source *labGuest, stack, id, state string) {
 	t.Helper()
 	waitFor(t, time.Minute, func() error {
 		var rows []struct{ ID, State string }
@@ -239,7 +252,7 @@ func assertReplicationAlert(t *testing.T, source *labGuest, stack, id, state str
 	})
 }
 
-func interruptBackup(t *testing.T, source, backup *labGuest, dataset, backupDataset, base string) string {
+func interruptBackup(t testT, source, backup *labGuest, dataset, backupDataset, base string) string {
 	t.Helper()
 	time.Sleep(3 * time.Second)
 	if time.Now().UTC().Second() < 3 {
@@ -269,7 +282,7 @@ func interruptBackup(t *testing.T, source, backup *labGuest, dataset, backupData
 	return name
 }
 
-func assertNoResumeToken(t *testing.T, backup *labGuest, dataset string) {
+func assertNoResumeToken(t testT, backup *labGuest, dataset string) {
 	t.Helper()
 	out, err := backup.guest("zfs get -H -o value receive_resume_token " + shellQuote(dataset))
 	if err != nil || strings.TrimSpace(out) != "-" {
@@ -334,7 +347,7 @@ func (n *labGuest) recoveryPoint(dataset, target string) string {
 	return names[0]
 }
 
-func assertSnapshotGUID(t *testing.T, source, destination *labGuest, dataset, backupDataset, snapshot string) {
+func assertSnapshotGUID(t testT, source, destination *labGuest, dataset, backupDataset, snapshot string) {
 	t.Helper()
 	command := "zfs get -H -p -o value guid " + shellQuote(dataset+"@"+snapshot)
 	a, err := source.guest(command)
@@ -347,7 +360,8 @@ func assertSnapshotGUID(t *testing.T, source, destination *labGuest, dataset, ba
 	}
 }
 
-func assertBackupContents(t *testing.T, backup *labGuest, dataset, snapshot, expected string) {
+// A temporary read-only clone independently verifies received snapshot bytes.
+func assertBackupContents(t testT, backup *labGuest, dataset, snapshot, expected string) {
 	t.Helper()
 	clone := "floatlab/replication-verification"
 	mount := "/tmp/floatlab-replication-verification"
@@ -358,7 +372,7 @@ func assertBackupContents(t *testing.T, backup *labGuest, dataset, snapshot, exp
 	}
 }
 
-func assertRecoveryPoint(t *testing.T, source *labGuest, dataset, snapshot, target string, held bool) {
+func assertRecoveryPoint(t testT, source *labGuest, dataset, snapshot, target string, held bool) {
 	t.Helper()
 	full := dataset + "@" + snapshot
 	out, err := source.guest("if zfs list -H -t snapshot -o name " + shellQuote(full) + " >/dev/null 2>&1; then zfs get -H -o value floatlab:hold-targets " + shellQuote(full) + "; zfs holds -H " + shellQuote(full) + "; fi")

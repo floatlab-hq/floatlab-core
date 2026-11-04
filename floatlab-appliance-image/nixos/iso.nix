@@ -1,4 +1,4 @@
-{ lib, modulesPath, floatlab-version, floatlab-development ? false, ... }:
+{ lib, modulesPath, floatlab-version, ... }:
 {
   imports = [
     (modulesPath + "/installer/cd-dvd/installation-cd-minimal.nix")
@@ -7,13 +7,8 @@
     ./modules/zfs.nix
     ./modules/persistence.nix
     ./modules/networking.nix
-    ./modules/dev-provision.nix
     ./modules/installer.nix
     ./modules/installer-display.nix
-  ] ++ lib.optionals floatlab-development [
-    ./modules/docker.nix
-    ./modules/hostd.nix
-    ./modules/core-stack.nix
   ];
 
   image.baseName = lib.mkForce "floatlab-installer-${floatlab-version}";

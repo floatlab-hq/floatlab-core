@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appItem, auditEvent, hostItem, labEvent, latest, percentage } from './live'
+import { composeNetwork, appItem, auditEvent, hostItem, labEvent, latest, percentage } from './live'
 import { node, stack } from './live-fixtures'
 describe('Live dashboard mapping', () => {
   it('maps workload history without inventing missing hosts or workloads', () => {
@@ -36,4 +36,19 @@ describe('Live dashboard mapping', () => {
   it('maps critical notifications to errors', () => {
     expect(labEvent({ id: 'a', severity: 'critical', state: 'unread', title: 'Failure', body: 'Failed', created_at: node.created_at, node_id: node.id }, [node])).toMatchObject({ tone: 'error', host: node.name, source: 'Failure' })
   })
+  it('only offers host switching for a running local app with a configured standby', () => {
+    expect(appItem({ ...stack, state: 'RunningPrimary', secondary_node: 'node-2' }, [node]).hostSwitch).toBe('triggerFailover')
+    expect(appItem({ ...stack, state: 'RunningBackup', secondary_node: 'node-2' }, [node]).hostSwitch).toBe('restoreStack')
+    expect(appItem({ ...stack, state: 'Idle', secondary_node: 'node-2' }, [node]).hostSwitch).toBeUndefined()
+    expect(appItem({ ...stack, replica: true, secondary_node: 'node-2' }, [node]).hostSwitch).toBeUndefined()
+    expect(appItem({ ...stack, secondary_node: null }, [node]).hostSwitch).toBeUndefined()
+  })
+
+  it('reads declared app addresses and ports without inventing a network address', () => {
+    const result = composeNetwork('services:\n  web:\n    ports: ["127.0.0.1:8080:80", "443:443/tcp", 5432, {published: 3000, target: 80}]\n    networks:\n      lan:\n        ipv4_address: 10.0.0.4\n')
+    expect(result).toEqual({ address: '10.0.0.4', ports: ['8080', '443', '5432', '3000'] })
+    expect(composeNetwork('services: {}')).toEqual({ address: '—', ports: [] })
+    expect(composeNetwork('[')).toEqual({ address: '—', ports: [] })
+  })
+
 })

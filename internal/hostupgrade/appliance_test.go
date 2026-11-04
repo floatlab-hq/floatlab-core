@@ -14,12 +14,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/onsi/ginkgo/v2"
+	"github.com/onsi/gomega"
+
 	"github.com/floatlab/floatlab-core/internal/installer"
 	"github.com/floatlab/floatlab-core/internal/managementupdate"
 	"github.com/floatlab/floatlab-core/internal/update"
 )
 
-func applianceManager(t *testing.T) *Manager {
+func applianceManager(t ginkgo.GinkgoTInterface) *Manager {
 	t.Helper()
 	if os.Getenv("FLOATLAB_APPLIANCE_TEST") != "1" {
 		t.Skip("real installed appliance only; opt in explicitly")
@@ -65,7 +68,7 @@ func applianceManager(t *testing.T) *Manager {
 	m.CleanupCheckpoint = management.CleanupCheckpoint
 	return m
 }
-func applianceOperation(t *testing.T) Request {
+func applianceOperation(t ginkgo.GinkgoTInterface) Request {
 	t.Helper()
 	id := os.Getenv("FLOATLAB_HOST_TEST_OPERATION")
 	if !operationID.MatchString(id) {
@@ -73,7 +76,7 @@ func applianceOperation(t *testing.T) Request {
 	}
 	return Request{OperationID: id, Actor: "appliance-qualification", IdempotencyKey: id}
 }
-func applianceContext(t *testing.T) context.Context {
+func applianceContext(t ginkgo.GinkgoTInterface) context.Context {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	t.Cleanup(cancel)
@@ -108,7 +111,7 @@ func (f fixtureTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 // Only distribution is replaced: the archive, ZFS, Docker, sandbox, EFI, and journals are real.
 // The in-memory qualification entry allows measuring this transition before publishing evidence.
-func TestHostApplianceStage(t *testing.T) {
+func runTestHostApplianceStage(t ginkgo.GinkgoTInterface) {
 	m := applianceManager(t)
 	ctx := applianceContext(t)
 	request := applianceOperation(t)
@@ -168,17 +171,6 @@ func TestHostApplianceStage(t *testing.T) {
 	t.Logf("real OS staged source=%s target=%s operation=%s (qualification fixture; not a published support claim)", source.Version, target.Version, status.OperationID)
 }
 
-func TestHostApplianceActivate(t *testing.T) {
-	m := applianceManager(t)
-	status, err := m.Activate(applianceContext(t), applianceOperation(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status.State != "armed" {
-		t.Fatalf("activation did not arm boot: %+v", status)
-	}
-}
-
 type brokenTrialEFI struct{ Linux }
 
 func (b brokenTrialEFI) Arm(ctx context.Context, s Status) error {
@@ -212,7 +204,7 @@ func (b brokenTrialEFI) Arm(ctx context.Context, s Status) error {
 	}
 	return nil
 }
-func TestHostApplianceActivateBadEFI(t *testing.T) {
+func runTestHostApplianceActivateBadEFI(t ginkgo.GinkgoTInterface) {
 	m := applianceManager(t)
 	m.Backend = brokenTrialEFI{}
 	s, err := m.Activate(applianceContext(t), applianceOperation(t))
@@ -224,7 +216,7 @@ func TestHostApplianceActivateBadEFI(t *testing.T) {
 	}
 }
 
-func TestHostApplianceAssertTrial(t *testing.T) {
+func runTestHostApplianceAssertTrial(t ginkgo.GinkgoTInterface) {
 	m := applianceManager(t)
 	ctx := applianceContext(t)
 	s, err := m.StatusFor(applianceOperation(t).OperationID)
@@ -277,18 +269,7 @@ func TestHostApplianceAssertTrial(t *testing.T) {
 	}
 }
 
-func TestHostApplianceCommit(t *testing.T) {
-	m := applianceManager(t)
-	s, err := m.Commit(applianceContext(t), applianceOperation(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.State != "committed" || !s.CommitFinalized {
-		t.Fatalf("commit incomplete: %+v", s)
-	}
-}
-
-func TestHostApplianceAssertRecovered(t *testing.T) {
+func runTestHostApplianceAssertRecovered(t ginkgo.GinkgoTInterface) {
 	m := applianceManager(t)
 	ctx := applianceContext(t)
 	s, err := m.StatusFor(applianceOperation(t).OperationID)
@@ -314,23 +295,10 @@ func TestHostApplianceAssertRecovered(t *testing.T) {
 	}
 }
 
-func TestHostApplianceRollback(t *testing.T) {
-	m := applianceManager(t)
-	s, err := m.Rollback(applianceContext(t), applianceOperation(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.State != "recovering" {
-		t.Fatalf("rollback not scheduled: %+v", s)
-	}
-}
-
-func TestHostApplianceCleanup(t *testing.T) {
+func runTestHostApplianceCleanup(t ginkgo.GinkgoTInterface) {
 	m := applianceManager(t)
 	r := applianceOperation(t)
-	if _, err := m.Cleanup(applianceContext(t), r); err != nil {
-		t.Fatal(err)
-	}
+	// Cleanup is submitted through the authenticated API by the runner.
 	for _, name := range []string{"floatlab-root.tar.gz", "floatlab-root.tar.gz.partial"} {
 		if _, err := os.Stat(filepath.Join(m.Dir, r.OperationID, name)); !os.IsNotExist(err) {
 			t.Fatalf("terminal operation download remains: %s: %v", name, err)
@@ -341,7 +309,7 @@ func TestHostApplianceCleanup(t *testing.T) {
 	}
 }
 
-func TestHostApplianceAssertCommitted(t *testing.T) {
+func runTestHostApplianceAssertCommitted(t ginkgo.GinkgoTInterface) {
 	m := applianceManager(t)
 	ctx := applianceContext(t)
 	s, err := m.StatusFor(applianceOperation(t).OperationID)
@@ -373,3 +341,22 @@ func TestHostApplianceAssertCommitted(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestHostApplianceIntegration(t *testing.T) {
+	if os.Getenv("FLOATLAB_APPLIANCE_TEST") != "1" {
+		t.Skip("requires the disposable-appliance integration runner")
+	}
+	gomega.RegisterFailHandler(ginkgo.Fail)
+	config, reporter := ginkgo.GinkgoConfiguration()
+	config.FailOnEmpty = true
+	ginkgo.RunSpecs(t, "TestHostApplianceIntegration", config, reporter)
+}
+
+var _ = ginkgo.DescribeTable("appliance phase", func(run func(ginkgo.GinkgoTInterface)) { run(ginkgo.GinkgoT()) },
+	ginkgo.Entry("TestHostApplianceStage", runTestHostApplianceStage),
+	ginkgo.Entry("TestHostApplianceActivateBadEFI", runTestHostApplianceActivateBadEFI),
+	ginkgo.Entry("TestHostApplianceAssertTrial", runTestHostApplianceAssertTrial),
+	ginkgo.Entry("TestHostApplianceAssertRecovered", runTestHostApplianceAssertRecovered),
+	ginkgo.Entry("TestHostApplianceCleanup", runTestHostApplianceCleanup),
+	ginkgo.Entry("TestHostApplianceAssertCommitted", runTestHostApplianceAssertCommitted),
+)

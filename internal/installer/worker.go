@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/floatlab/floatlab-core/internal/credentials"
 	"github.com/floatlab/floatlab-core/internal/hostnetwork"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/pelletier/go-toml/v2"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/sys/unix"
@@ -40,6 +42,7 @@ type Appliance struct {
 	HostID    string             `json:"host_id"`
 	JWTSecret string             `json:"jwt_secret"`
 	Network   hostnetwork.Config `json:"network"`
+	EnableLab bool               `json:"enable_lab,omitempty"`
 }
 type Submission struct {
 	SSHAuthorizedKeys    string                `json:"ssh_authorized_keys,omitempty"`
@@ -68,6 +71,16 @@ type Status struct {
 var hostname = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 func (a Appliance) Validate() error {
+	if err := a.validateSettings(); err != nil {
+		return err
+	}
+	return a.validateIdentity()
+}
+
+func (a Appliance) validateSettings() error {
+	if a.EnableLab && a.Network.IPv4.Mode != "static" {
+		return fmt.Errorf("lab peer setup requires a static IPv4 address")
+	}
 	if !hostname.MatchString(a.NodeName) {
 		return fmt.Errorf("node name must be a valid lowercase hostname")
 	}
@@ -76,9 +89,6 @@ func (a Appliance) Validate() error {
 	}
 	if _, err := time.LoadLocation(a.Timezone); err != nil {
 		return fmt.Errorf("unknown timezone")
-	}
-	if err := a.validateIdentity(); err != nil {
-		return err
 	}
 	return a.Network.Validate()
 }
@@ -437,7 +447,7 @@ func installWorker(stopCtx context.Context, runtimeDir, persistentDir, mediaDir 
 					if e := copyVerifiedProgress(mediaDir+"/zfsbootmenu.EFI", target, payload.Files["zfsbootmenu.EFI"], progress); e != nil {
 						return e
 					}
-					if e := runStep("zbm-kcl", "-r", "spl_hostid", "-r", "zbm.prefer", "-r", "zbm.import_policy", "-r", "zbm.timeout", "-r", "console", "-a", "spl_hostid="+op.Identity.HostID+" zbm.prefer=floatlab!! zbm.import_policy=strict zbm.timeout=5 console=tty0 console=ttyS0,115200n8", target); e != nil {
+					if e := runStep("zbm-kcl", "-r", "spl_hostid", "-r", "zbm.prefer", "-r", "zbm.import_policy", "-r", "zbm.timeout", "-r", "console", "-a", "spl_hostid=0x"+op.Identity.HostID+" zbm.prefer=floatlab!! zbm.import_policy=strict zbm.timeout=5 console=tty0 console=ttyS0,115200n8", target); e != nil {
 						return e
 					}
 					return runStep("sync", "-f", target)
@@ -507,7 +517,7 @@ func installWorker(stopCtx context.Context, runtimeDir, persistentDir, mediaDir 
 		if e := credentials.WritePrivate(persistentDir+"/appliance.json", sub.Host); e != nil {
 			return e
 		}
-		if e := credentials.WriteBytes(filepath.Dir(persistentDir)+"/.env", []byte("FLOATLAB_NODE_ID="+sub.Host.NodeID+"\n")); e != nil {
+		if e := credentials.WriteBytes(filepath.Dir(persistentDir)+"/.env", []byte(applianceEnvironment(sub.Host))); e != nil {
 			return e
 		}
 		if e := credentials.WriteBytes(persistentDir+"/hostd.env", []byte("FLOATLAB_NODE_ID="+sub.Host.NodeID+"\n")); e != nil {
@@ -567,7 +577,28 @@ func installWorker(stopCtx context.Context, runtimeDir, persistentDir, mediaDir 
 	publish()
 	return nil
 }
+
+func applianceEnvironment(a Appliance) string {
+	environment := "FLOATLAB_NODE_ID=" + a.NodeID + "\n"
+	if a.EnableLab {
+		ip := a.Network.IPv4.Address
+		environment += "FLOATLAB_PEER_URL=https://" + ip + ":9443\nFLOATLAB_RQLITE_RAFT_ADDRESS=" + ip + ":4002\nFLOATLAB_RQLITE_ADDRESS=" + ip + ":4001\n"
+	}
+	return environment
+}
 func verifyStack(ctx context.Context, sub Submission) error {
+	client := &http.Client{Timeout: 10 * time.Second}
+	if sub.VerificationPassword == "" {
+		token, err := verifyHashedAccount(ctx, sub)
+		if err != nil {
+			return err
+		}
+		recovery, err := os.ReadFile(Persistent + "/root-password.hash")
+		if err != nil || strings.TrimSpace(string(recovery)) != sub.RecoveryPasswordHash {
+			return fmt.Errorf("installed recovery password hash does not match")
+		}
+		return verifyNodeHealth(ctx, client, token, sub.Host.NodeID)
+	}
 	key, err := os.ReadFile(Persistent + "/credential.key")
 	if err != nil {
 		return err
@@ -596,7 +627,6 @@ func verifyStack(ctx context.Context, sub Submission) error {
 		request["totp_code"] = code
 	}
 	body, _ := json.Marshal(request)
-	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, "POST", "http://127.0.0.1:8080/api/v1/auth/token", bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -616,12 +646,50 @@ func verifyStack(ctx context.Context, sub Submission) error {
 	if err = json.NewDecoder(response.Body).Decode(&token); err != nil || token.Token == "" {
 		return fmt.Errorf("invalid authentication response")
 	}
-	req, err = http.NewRequestWithContext(ctx, "GET", "http://127.0.0.1:8080/api/v1/nodes/"+sub.Host.NodeID+"/health", nil)
+	return verifyNodeHealth(ctx, client, token.Token, sub.Host.NodeID)
+}
+
+func verifyHashedAccount(ctx context.Context, sub Submission) (string, error) {
+	query, err := json.Marshal([][]any{{`SELECT password_hash,roles FROM users WHERE username=?`, sub.Admin.Username}})
+	if err != nil {
+		return "", err
+	}
+	// rqlite is internal to the Compose network; query it through the installed runtime.
+	command := exec.CommandContext(ctx, "chroot", Runtime+"/root", "/run/current-system/sw/bin/docker", "compose", "-f", "/floatlab/system/docker-compose.yml", "exec", "-T", "rqlite", "wget", "-qO-", "--header=Content-Type: application/json", "--post-data="+string(query), "http://127.0.0.1:4001/db/query?level=weak")
+	if sub.Host.EnableLab {
+		// Lab startup replaces anonymous HTTP with the local node's mutual TLS endpoint.
+		command = exec.CommandContext(ctx, "chroot", Runtime+"/root", "/run/current-system/sw/bin/curl", "--silent", "--show-error", "--fail", "--max-time", "10", "--cacert", Persistent+"/lab/ca.pem", "--cert", Persistent+"/lab/node.pem", "--key", Persistent+"/lab/node-key.pem", "--header", "Content-Type: application/json", "--data-binary", string(query), "https://"+net.JoinHostPort(sub.Host.Network.IPv4.Address, "4001")+"/db/query?level=weak")
+	}
+	data, err := command.Output()
+	var result struct {
+		Results []struct {
+			Values [][]any `json:"values"`
+			Error  string  `json:"error"`
+		} `json:"results"`
+	}
+	if err != nil || json.Unmarshal(data, &result) != nil || len(result.Results) != 1 || result.Results[0].Error != "" {
+		return "", fmt.Errorf("installed administrator verification unavailable")
+	}
+	row := result.Results[0]
+	if len(row.Values) != 1 || len(row.Values[0]) != 2 || row.Values[0][0] != sub.Admin.PasswordHash {
+		return "", fmt.Errorf("installed administrator password hash does not match")
+	}
+	var roles []string
+	value, _ := row.Values[0][1].(string)
+	if json.Unmarshal([]byte(value), &roles) != nil || len(roles) != 1 || roles[0] != "admin" {
+		return "", fmt.Errorf("installed administrator role does not match")
+	}
+	// Root already owns the signing key; use a short-lived token only for local readiness.
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"sub": sub.Admin.Username, "roles": roles, "exp": time.Now().Add(time.Minute).Unix()}).SignedString([]byte(sub.Host.JWTSecret))
+}
+
+func verifyNodeHealth(ctx context.Context, client *http.Client, token, nodeID string) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://127.0.0.1:8080/api/v1/nodes/"+nodeID+"/health", nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+token.Token)
-	response, err = client.Do(req)
+	req.Header.Set("Authorization", "Bearer "+token)
+	response, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("node health verification unavailable")
 	}

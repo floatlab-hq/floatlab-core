@@ -1,12 +1,7 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import UiNodePlate from './UiNodePlate.vue'
-import { applyTheme } from '../../themes'
 import { nodeCode } from '../../dashboard/node-code'
-
-function geometry(uri: string) {
-  return decodeURIComponent(uri.split(',')[1]!).replace(/#[a-f\d]{6}/gi, '#COLOR')
-}
 
 describe('Node plate', () => {
   it.each([
@@ -17,26 +12,24 @@ describe('Node plate', () => {
     expect(nodeCode(name)).toBe(expected)
   })
 
-  it('uses the full name for repeatable geometry and accessible identification', async () => {
+  it('shows only the host code with the full name available accessibly', async () => {
     const plate = mount(UiNodePlate, { props: { name: 'node-01' } })
-    const duplicate = mount(UiNodePlate, { props: { name: 'node-01' } })
     expect(plate.attributes('aria-label')).toBe('Node node-01')
+    expect(plate.attributes('title')).toBe('node-01')
     expect(plate.text()).toBe('ND1')
-    expect(plate.get('img').attributes('src')!).toBe(duplicate.get('img').attributes('src')!)
-    const original = plate.get('img').attributes('src')!
+    expect(plate.find('img, svg').exists()).toBe(false)
     await plate.setProps({ name: 'node-02' })
     expect(plate.text()).toBe('ND2')
-    expect(geometry(plate.get('img').attributes('src')!)).not.toBe(geometry(original))
+    expect(plate.attributes('aria-label')).toBe('Node node-02')
   })
 
-  it('recolors the shape across themes without changing geometry', async () => {
-    applyTheme('everforest')
-    const plate = mount(UiNodePlate, { props: { name: 'node-01' } })
-    const original = plate.get('img').attributes('src')!
-    applyTheme('nord')
-    await plate.vm.$nextTick()
-    expect(plate.get('img').attributes('src')!).not.toBe(original)
-    expect(geometry(plate.get('img').attributes('src')!)).toBe(geometry(original))
-    applyTheme('everforest')
+  it('uses a native button and edit affordance when interactive', async () => {
+    const plate = mount(UiNodePlate, { props: { name: 'node-01', editable: true } })
+    expect(plate.element.tagName).toBe('BUTTON')
+    expect(plate.attributes('aria-label')).toBe('Change host node-01')
+    expect(plate.find('.node-edit-icon').exists()).toBe(true)
+    await plate.trigger('click')
+    expect(plate.emitted('click')).toHaveLength(1)
   })
+
 })

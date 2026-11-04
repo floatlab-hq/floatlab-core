@@ -74,6 +74,8 @@ type Model struct {
 	manualScroll   bool
 	timezoneSearch textinput.Model
 	timezoneCursor int
+	answersPath    textinput.Model
+	answersSaved   string
 }
 
 func New(service string, args []string) *Model {
@@ -89,6 +91,9 @@ func New(service string, args []string) *Model {
 	confirmation.Prompt = ""
 	confirmation.CharLimit = 64
 	m := &Model{service: service, args: args, stage: "connecting", width: 80, height: 24, selected: map[int]bool{}, command: command, confirmation: confirmation, status: installer.Status{Phase: "Waiting for disk layout"}}
+	m.answersPath = textinput.New()
+	m.answersPath.Prompt = ""
+	m.answersPath.CharLimit = 4096
 	m.styleInputs()
 	return m
 }
@@ -327,6 +332,38 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.pending {
+			return m, nil
+		}
+		if m.stage == "review" && v.String() == "ctrl+e" {
+			m.stage = "export-answers"
+			m.actionFocus = 0
+			m.scroll, m.manualScroll = 0, false
+			m.answersPath.SetValue(installer.Runtime + "/floatlab-answers.toml")
+			m.validation = ""
+			return m, m.answersPath.Focus()
+		}
+		if m.stage == "export-answers" {
+			switch v.String() {
+			case "esc":
+				m.stage = "review"
+				m.validation = ""
+			case "enter":
+				answers, err := installer.NewAnswers(m.preview.Command, m.config())
+				if err == nil {
+					err = installer.WriteAnswers(m.answersPath.Value(), answers)
+				}
+				if err != nil {
+					m.validation = err.Error()
+				} else {
+					m.stage = "review"
+					m.validation = ""
+					m.answersSaved = "Saved private answers file: " + m.answersPath.Value()
+				}
+			default:
+				var cmd tea.Cmd
+				m.answersPath, cmd = m.answersPath.Update(v)
+				return m, cmd
+			}
 			return m, nil
 		}
 		if handled, cmd := m.wizardKey(v); handled {
@@ -634,6 +671,7 @@ func (m *Model) resize() {
 	m.command.SetHeight(max(3, min(6, m.bodyHeight()-7)))
 	m.timezoneSearch.Width = max(1, w-ansi.StringWidth(m.timezoneSearch.Prompt))
 	m.confirmation.Width = w
+	m.answersPath.Width = w
 	for i := range m.fields {
 		fieldWidth := m.inputColumnWidth()
 		switch i {
@@ -688,6 +726,8 @@ func diskSummary(d installer.Disk) string {
 func (m *Model) body() string {
 	var lines []string
 	switch m.stage {
+	case "export-answers":
+		lines = []string{"Save unattended installation answers", "", "TOML with bcrypt hashes for administrator and recovery passwords.", "Store on private media; review the disk paths before reuse.", "", "File path:", m.answersPath.View(), "", "Enter Save  Esc Cancel"}
 	case "connecting":
 		return "Starting installation service…"
 	case "disks":
@@ -847,6 +887,9 @@ func (m *Model) body() string {
 			}
 		}
 		lines = append(lines, "", "Choose Finish to apply this configuration.")
+		if m.answersSaved != "" {
+			lines = append(lines, "", m.answersSaved)
+		}
 	case "totp":
 		if m.focus == 0 {
 			lines = []string{"Enroll your authenticator"}

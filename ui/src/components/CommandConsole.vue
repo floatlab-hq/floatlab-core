@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { applyCompletion, CommandEngine, type CommandResult, type CommandRuntime, type Completion, type FloatLabApi } from "@floatlab/client";
+import { applyCompletion, CommandEngine, type CommandResult, type CommandRuntime, type Completion, type FloatLabApi, type HttpApi } from "@floatlab/client";
 import UiInput from "./UiInput.vue";
 import UiButton from "./UiButton.vue";
 import UiTextarea from "./UiTextarea.vue";
@@ -9,7 +9,7 @@ import '../command-console.css';
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 
 const props = defineProps<{ api: FloatLabApi; inline?: boolean }>();
-const emit = defineEmits<{ completed: [] }>();
+const emit = defineEmits<{ completed: []; mutation: [path: string] }>();
 
 const open = ref(false);
 const query = ref("");
@@ -77,7 +77,15 @@ const runtime: CommandRuntime = {
   },
 };
 
-const engine = new CommandEngine(props.api, runtime);
+const engineApi = props.api as FloatLabApi & Partial<HttpApi>;
+const engine = new CommandEngine(engineApi.request ? {
+  ...engineApi,
+  request: async (path, init) => {
+    const response = await engineApi.request!(path, init);
+    if (!["GET", "HEAD", "OPTIONS"].includes(init?.method?.toUpperCase() ?? "GET")) emit('mutation', path);
+    return response;
+  },
+} : engineApi, runtime);
 
 let completionRequest = 0;
 async function updateCompletions() {

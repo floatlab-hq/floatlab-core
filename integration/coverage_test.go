@@ -24,12 +24,10 @@ type coverageRun struct {
 	scenario   string
 	staged     map[string]map[int]bool
 	evidence   map[string]*endpointEvidence
+	completed  []string
 }
 
-// Only TestWorkloadConfidence enables this observer; integration tests are serial.
-var activeCoverage *coverageRun
-
-func newCoverage(t *testing.T) *coverageRun {
+func newCoverage(t testT) *coverageRun {
 	t.Helper()
 	operations, err := openapi.ManagementOperations()
 	if err != nil {
@@ -42,7 +40,7 @@ func newCoverage(t *testing.T) *coverageRun {
 			entry.Deferred = []string{"real multi-node success"}
 		}
 		if strings.HasPrefix(op.Path, "/api/v1/lab/") {
-			entry.Deferred = []string{"successful lab behavior is tested separately by scripts/test-multi-node.sh; this single-node report records unconfigured rejection only"}
+			entry.Deferred = []string{"successful lab behavior is tested separately by the multi-node Ginkgo suite; this single-node report records unconfigured rejection only"}
 		}
 		if strings.Contains(op.Path, "/release-peer-address") {
 			entry.Deferred = []string{"single-node rejection only; successful peer-address release is unit-tested, appliance reset and fresh enrollment acceptance remains outstanding"}
@@ -124,33 +122,29 @@ func (run *coverageRun) observe(method, path string, status int) {
 	}
 	run.staged[key][status] = true
 }
-func (run *coverageRun) scenarioTest(t *testing.T, name string, fn func(*testing.T)) bool {
+func (run *coverageRun) begin(name string) {
 	run.mu.Lock()
+	defer run.mu.Unlock()
 	run.scenario = name
 	run.staged = map[string]map[int]bool{}
-	run.mu.Unlock()
-	skipped := false
-	passed := t.Run(name, func(child *testing.T) { defer func() { skipped = child.Skipped() }(); fn(child) })
-	if skipped {
-		t.Errorf("required scenario skipped: %s", name)
-		passed = false
-	}
+}
+func (run *coverageRun) finish(passed bool) {
 	run.mu.Lock()
 	defer run.mu.Unlock()
 	if passed {
+		run.completed = appendUnique(run.completed, run.scenario)
 		for key, statuses := range run.staged {
 			for status := range statuses {
 				entry := run.evidence[key]
 				if status >= 200 && status < 300 || status == 101 {
-					entry.Successful = appendUnique(entry.Successful, name)
+					entry.Successful = appendUnique(entry.Successful, run.scenario)
 				} else if status >= 400 {
-					entry.Rejection = appendUnique(entry.Rejection, name)
+					entry.Rejection = appendUnique(entry.Rejection, run.scenario)
 				}
 			}
 		}
 	}
 	run.staged = nil
-	return passed
 }
 func appendUnique(values []string, value string) []string {
 	for _, old := range values {
@@ -160,7 +154,7 @@ func appendUnique(values []string, value string) []string {
 	}
 	return append(values, value)
 }
-func (run *coverageRun) report(t *testing.T) {
+func (run *coverageRun) report(t testT, path string, complete bool) {
 	t.Helper()
 	run.mu.Lock()
 	defer run.mu.Unlock()
@@ -184,17 +178,17 @@ func (run *coverageRun) report(t *testing.T) {
 		return entries[i].Operation.Path+entries[i].Operation.Method < entries[j].Operation.Path+entries[j].Operation.Method
 	})
 	sort.Strings(missing)
-	payload, err := json.MarshalIndent(map[string]interface{}{"passed": !t.Failed() && len(missing) == 0, "total": len(entries), "covered": len(entries) - len(missing), "missing": missing, "operations": entries}, "", "  ")
+	payload, err := json.MarshalIndent(map[string]interface{}{"passed": !t.Failed() && (!complete || len(missing) == 0), "complete": complete, "total": len(entries), "covered": len(entries) - len(missing), "missing": missing, "operations": entries}, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if path := os.Getenv("FLOATLAB_COVERAGE_REPORT"); path != "" {
+	if path != "" {
 		if err := os.WriteFile(path, payload, 0644); err != nil {
 			t.Error(err)
 		}
 	}
 	t.Logf("API endpoint coverage: %d/%d; multi-node success explicitly deferred", len(entries)-len(missing), len(entries))
-	if len(missing) > 0 {
+	if complete && len(missing) > 0 {
 		t.Errorf("uncovered required API operations:\n%s", strings.Join(missing, "\n"))
 	}
 }

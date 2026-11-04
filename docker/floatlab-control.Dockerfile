@@ -19,9 +19,10 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+ARG INTEGRATION_COVERAGE=0
 ARG VERSION=0.1.0-dev
 ARG GIT_COMMIT=unknown
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X github.com/floatlab/floatlab-core/pkg/release.Version=${VERSION} -X github.com/floatlab/floatlab-core/pkg/release.GitCommit=${GIT_COMMIT}" -o /floatlab-control ./cmd/floatlab-control
+RUN flags=""; if [ "$INTEGRATION_COVERAGE" = 1 ]; then flags="-cover -coverpkg=./... -covermode=atomic -tags=integrationcoverage"; fi; CGO_ENABLED=0 GOOS=linux go build $flags -ldflags="-s -w -X github.com/floatlab/floatlab-core/pkg/release.Version=${VERSION} -X github.com/floatlab/floatlab-core/pkg/release.GitCommit=${GIT_COMMIT}" -o /floatlab-control ./cmd/floatlab-control
 
 FROM debian:12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates wget openssh-client && rm -rf /var/lib/apt/lists/*

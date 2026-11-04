@@ -13,10 +13,10 @@ if [[ ! "$total_kib" =~ ^[0-9]+$ || ! "$default_max" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 total_bytes=$((total_kib * 1024))
-# Leave 3 GiB for production and bounded update tests, retaining at least a quarter for ARC.
+# Leave 3 GiB for production and bounded update tests, retaining a 128 MiB ARC floor.
 budget=$((total_bytes - 3 * 1024 * 1024 * 1024))
-if (( budget < total_bytes / 4 )); then
-  budget=$((total_bytes / 4))
+if (( budget < 128 * 1024 * 1024 )); then
+  budget=$((128 * 1024 * 1024))
 fi
 if (( budget < default_max )); then
   printf '%s\n' "$budget" > "$arc_max_file"

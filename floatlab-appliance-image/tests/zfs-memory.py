@@ -23,7 +23,8 @@ class ARCBudget(unittest.TestCase):
             return int((root / "arc_max").read_text())
 
     def test_minimum_host_leaves_room_for_production_and_update(self):
-        self.assertEqual(self.budget(4 * GIB, 3 * GIB), GIB)
+        for memory in (3584 << 20, 4 * GIB):
+            self.assertEqual(self.budget(memory, 3 * GIB), memory - 3 * GIB)
 
     def test_medium_host_reserves_three_gib(self):
         self.assertEqual(self.budget(8 * GIB, 6 * GIB), 5 * GIB)

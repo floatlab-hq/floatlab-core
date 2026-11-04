@@ -55,6 +55,12 @@ button, input { font: inherit; }
 
 button, a { -webkit-tap-highlight-color: transparent; }
 
+button { transition: color 120ms ease-out, background-color 120ms ease-out, border-color 120ms ease-out, transform 80ms ease-out; }
+
+button:enabled:active { transform: perspective(400px) translateY(1px) rotateX(3deg) scale(.98); }
+
+a, tbody td { transition: color 120ms ease-out, background-color 120ms ease-out, border-color 120ms ease-out; }
+
 button:focus-visible, a:focus-visible, input:focus-visible { outline: 1px solid var(--green); outline-offset: 2px; }
 
 .topbar { position: relative; display: grid; grid-template-columns: 240px minmax(420px, 600px) 1fr; align-items: start; gap: 100px; width: min(1280px, 100% - 64px); height: 100px; margin: 0px auto; padding-top: 28px; }
@@ -71,7 +77,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 1px solid 
 
 .button.primary { height: 36px; color: var(--void); background: var(--green); font-weight: 600; }
 
-.button.primary:hover { filter: brightness(1.08); }
+.button.primary:hover { background: color-mix(in srgb, var(--green) 90%, white); }
 
 .button.outline { border-color: var(--line); color: var(--green); }
 
@@ -286,5 +292,6 @@ td:first-child { font-size: 12px; white-space: nowrap; }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  button:enabled:active { transform: none; }
   *, ::before, ::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
 }

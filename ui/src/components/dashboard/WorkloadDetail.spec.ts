@@ -1,38 +1,152 @@
-import { flushPromises, mount } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import type { FloatLabApi } from '@floatlab/client'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { interactiveFixtureApi, stack } from '../../dashboard/live-fixtures'
+import AppPlateActions from './AppPlateActions.vue'
 import WorkloadDetail from './WorkloadDetail.vue'
+enableAutoUnmount(afterEach)
+afterEach(() => vi.useRealTimers())
 describe('Workload detail', () => {
-  it('offers only implemented actions and routes stack and container commands by ID', async () => {
-    const wrapper = mount(WorkloadDetail, { props: { stack, api: interactiveFixtureApi([stack]) } })
+  it('shows related data and settings in tabs without routing to the command palette', async () => {
+    const api: FloatLabApi = interactiveFixtureApi([stack])
+    const config = vi.spyOn(api, 'getStackConfig'), getStack = vi.spyOn(api, 'getStack')
+    const validate = vi.spyOn(api, 'validateCompose'), update = vi.spyOn(api, 'updateCompose'), upgrade = vi.spyOn(api, 'upgradeStack')
+    const stats = vi.spyOn(api, 'getStackStats').mockResolvedValue([{ label: 'CPU', unit: '%', points: [{ timestamp: 1, value: 25 }] }])
+    const wrapper = mount(WorkloadDetail, { props: { stack, api } })
     await flushPromises()
-    expect(wrapper.text()).not.toContain('Restart')
-    expect(wrapper.text()).not.toContain('Start after')
-    const commands = [
-      ['Stop', ['stop', stack.id]], ['View logs', ['logs', stack.id]],
-      ['Metrics', ['stats', stack.id]], ['View Compose', ['config', stack.id]], ['Inspect', ['info', stack.id]],
-      ['View snapshots', ['snapshot', 'list', stack.id]], ['Create snapshot', ['snapshot', 'create', stack.id]],
-      ['Edit Compose', ['edit', stack.id]], ['Upgrade images', ['upgrade', stack.id]], ['Delete app', ['delete', stack.id]],
-    ] as const
-    for (const [label, args] of commands) {
-      await wrapper.findAll('button').find(button => button.text() === label)!.trigger('click')
-      expect(wrapper.emitted('command')?.at(-1)).toEqual([[...args]])
-    }
-    const container = wrapper.get('.container-detail')
-    for (const [index, command] of ['logs', 'info', 'start', 'stop', 'exec'].entries()) {
-      await container.findAll('button')[index]!.trigger('click')
-      expect(wrapper.emitted('command')?.at(-1)).toEqual(command === 'exec' ? [[command, stack.id, 'container-1', '--'], false] : [[command, stack.id, 'container-1']])
-    }
-    await wrapper.setProps({ stack: { ...stack, state: 'Idle' } })
-    await wrapper.findAll('button').find(button => button.text() === 'Start')!.trigger('click')
-    expect(wrapper.emitted('command')?.at(-1)).toEqual([['start', stack.id]])
+    expect(wrapper.findAll('.workload-plates .plate-card')).toHaveLength(3)
+    const select = async (label: string) => { await wrapper.findAll('[role="tab"]').find(tab => tab.text() === label)!.trigger('click'); await flushPromises() }
+    expect(wrapper.findAll('[role="tab"]').map(tab => tab.text())).toEqual(['Containers', 'Logs', 'Metrics', 'Compose', 'Inspect', 'Edit Compose', 'Upgrade images'])
+    await select('Logs')
+    expect(wrapper.get('[role="tabpanel"]').text()).toContain('Demo web service ready')
+    await select('Metrics')
+    expect(stats).toHaveBeenCalledWith(stack.id, '1h')
+    expect(wrapper.get('dl').text()).toContain('25 %')
+    await wrapper.get('[aria-label="Metrics range"]').setValue('6h'); await flushPromises()
+    expect(stats).toHaveBeenLastCalledWith(stack.id, '6h')
+    await select('Compose')
+    expect(config).toHaveBeenCalledWith(stack.id)
+    expect(wrapper.get('pre').text()).toBe(stack.compose_file)
+    await select('Inspect')
+    expect(getStack).toHaveBeenCalledWith(stack.id)
+    expect(wrapper.get('pre').text()).toContain(stack.id)
+    await select('Edit Compose')
+    await wrapper.get('textarea').setValue('services:\n  web:\n    image: nginx:stable')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(validate).toHaveBeenCalledWith({ stack_id: stack.id, compose_file: 'services:\n  web:\n    image: nginx:stable' })
+    expect(update).toHaveBeenCalledWith(stack.id, expect.stringContaining('nginx:stable'), expect.any(String))
+    await select('Upgrade images')
+    await wrapper.get('[aria-label="Image for web"]').setValue('nginx:latest')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(upgrade).toHaveBeenCalledWith(stack.id, { web: 'nginx:latest' }, expect.any(String))
+    expect(wrapper.emitted('updated')).toHaveLength(2)
+    expect(wrapper.emitted('command')).toBeUndefined()
+    await wrapper.setProps({ stack: { ...stack, replica: true } }); await flushPromises()
+    expect(wrapper.findAll('[role="tab"]').map(tab => tab.text())).not.toContain('Edit Compose')
+    expect(wrapper.findAll('[role="tab"]').map(tab => tab.text())).not.toContain('Upgrade images')
+    expect(wrapper.text()).toContain('Cached peer view')
+    wrapper.getComponent(AppPlateActions).vm.$emit('action', 'start')
+    expect(wrapper.emitted('action')).toEqual([['start']])
     await wrapper.get('[aria-label="Close detail panel"]').trigger('click')
     expect(wrapper.emitted('close')).toHaveLength(1)
-    await wrapper.setProps({ stack: { ...stack, replica: true } })
-    expect(wrapper.text()).not.toContain('Stop container')
-    expect(wrapper.text()).not.toContain('Delete app')
-    expect(wrapper.text()).toContain('Cached peer view')
+  })
+  it('opens container logs and inspection in the corresponding tabs', async () => {
+    const api = interactiveFixtureApi([stack]), logs = vi.spyOn(api, 'getContainerLogs')
+    const wrapper = mount(WorkloadDetail, { props: { stack, api } })
+    await flushPromises()
+    await wrapper.get('.container-detail').findAll('button').find(button => button.text() === 'View logs')!.trigger('click'); await flushPromises()
+    expect(logs).toHaveBeenCalledWith('container-1', { tail: 200 })
+    expect(wrapper.get('[role="tab"][aria-selected="true"]').text()).toBe('Logs')
+    await wrapper.findAll('[role="tab"]').find(tab => tab.text() === 'Containers')!.trigger('click')
+    await wrapper.get('.container-detail').findAll('button').find(button => button.text() === 'Inspect')!.trigger('click'); await flushPromises()
+    expect(wrapper.get('pre').text()).toContain('container-1')
+    await wrapper.findAll('[role="tab"]').find(tab => tab.text() === 'Containers')!.trigger('click')
+    await wrapper.get('.container-detail').findAll('button').find(button => button.text() === 'Run command…')!.trigger('click')
+    expect(wrapper.emitted('command')).toEqual([[['exec', stack.id, 'container-1', '--'], false]])
+  })
+  it('preserves unsaved Compose across tabs and dashboard refreshes and surfaces validation errors', async () => {
+    const api = interactiveFixtureApi([stack]), update = vi.spyOn(api, 'updateCompose')
+    vi.spyOn(api, 'validateCompose').mockRejectedValue(new Error('Invalid Compose'))
+    const wrapper = mount(WorkloadDetail, { props: { stack, api, initialTab: 'edit' } })
+    await flushPromises()
+    await wrapper.get('textarea').setValue('unsaved draft')
+    await wrapper.setProps({ stack: { ...stack } }); await flushPromises()
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe('unsaved draft')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('Invalid Compose')
+    expect(update).not.toHaveBeenCalled()
+    await wrapper.findAll('[role="tab"]').find(tab => tab.text() === 'Compose')!.trigger('click')
+    await wrapper.findAll('[role="tab"]').find(tab => tab.text() === 'Edit Compose')!.trigger('click'); await flushPromises()
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe('unsaved draft')
+  })
+  it('retries failed reads and polls logs only while their tab is active', async () => {
+    vi.useFakeTimers()
+    const api = interactiveFixtureApi([stack])
+    const logs = vi.spyOn(api, 'getStackLogs').mockRejectedValueOnce(new Error('Logs offline'))
+    const wrapper = mount(WorkloadDetail, { props: { stack, api, initialTab: 'logs' } })
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('Logs offline')
+    await wrapper.findAll('button').find(button => button.text() === 'Retry')!.trigger('click'); await flushPromises()
+    expect(wrapper.get('pre').text()).toContain('Demo web service ready')
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(logs).toHaveBeenCalledTimes(3)
+    await wrapper.setProps({ initialTab: 'containers' }); await flushPromises()
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(logs).toHaveBeenCalledTimes(3)
     wrapper.unmount()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+  it('shows empty log, metric, Compose and image data honestly', async () => {
+    const api = { ...interactiveFixtureApi([stack]), getStackLogs: async () => [], getStackConfig: async () => '', listContainers: async () => [] }
+    const wrapper = mount(WorkloadDetail, { props: { stack, api, initialTab: 'logs' } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('No recent logs')
+    for (const [tab, text] of [['Metrics', 'No metrics available'], ['Compose', 'No Compose configuration'], ['Upgrade images', 'No container images available']]) {
+      await wrapper.findAll('[role="tab"]').find(button => button.text() === tab)!.trigger('click'); await flushPromises()
+      expect(wrapper.get('[role="tabpanel"]').text()).toContain(text)
+    }
+  })
+  it('retries loading Compose and prevents unchanged or duplicate saves', async () => {
+    const api = interactiveFixtureApi([stack])
+    vi.spyOn(api, 'getStackConfig').mockRejectedValueOnce(new Error('Config offline'))
+    const update = vi.spyOn(api, 'updateCompose')
+    let finish!: () => void
+    vi.spyOn(api, 'validateCompose').mockImplementation(() => new Promise<void>(resolve => { finish = resolve }))
+    const wrapper = mount(WorkloadDetail, { props: { stack, api, initialTab: 'edit' } })
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('Config offline')
+    await wrapper.findAll('button').find(button => button.text() === 'Retry loading Compose')!.trigger('click'); await flushPromises()
+    await wrapper.get('form').trigger('submit')
+    expect(update).not.toHaveBeenCalled()
+    await wrapper.get('textarea').setValue('services: { web: { image: nginx } }')
+    await wrapper.get('form').trigger('submit')
+    await wrapper.get('form').trigger('submit')
+    expect(api.validateCompose).toHaveBeenCalledOnce()
+    finish(); await flushPromises()
+    expect(update).toHaveBeenCalledOnce()
+  })
+  it('reports image upgrade failures within the upgrade tab', async () => {
+    const api = interactiveFixtureApi([stack])
+    vi.spyOn(api, 'upgradeStack').mockRejectedValue(new Error('Registry unavailable'))
+    const wrapper = mount(WorkloadDetail, { props: { stack, api, initialTab: 'upgrade' } })
+    await flushPromises()
+    await wrapper.get('form').trigger('submit')
+    expect(api.upgradeStack).not.toHaveBeenCalled()
+    await wrapper.get('[aria-label="Image for web"]').setValue('nginx:new')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('Registry unavailable')
+    expect(wrapper.emitted('updated')).toBeUndefined()
+  })
+  it('ignores stale tab responses after navigation or unmount', async () => {
+    let finish!: (value: string) => void
+    const api = { ...interactiveFixtureApi([stack]), getStackConfig: () => new Promise<string>(resolve => { finish = resolve }) }
+    const wrapper = mount(WorkloadDetail, { props: { stack, api, initialTab: 'compose' } })
+    await flushPromises()
+    await wrapper.setProps({ initialTab: 'inspect' }); await flushPromises()
+    finish('old compose'); await flushPromises()
+    expect(wrapper.get('pre').text()).not.toContain('old compose')
+    await wrapper.setProps({ initialTab: 'compose' }); await flushPromises()
+    wrapper.unmount(); finish('closed compose'); await flushPromises()
   })
   it('shows empty containers and API errors', async () => {
     const wrapper = mount(WorkloadDetail, { props: { stack, api: { ...interactiveFixtureApi(), listContainers: async () => [] } } })
@@ -57,4 +171,20 @@ describe('Workload detail', () => {
     expect(wrapper.text()).toContain('nginx:alpine · stopped')
     wrapper.unmount()
   })
+  it.each(['running', 'stopped', 'starting', 'paused', 'error'] as const)('keeps %s container state honest in its plate and dropdown', async status => {
+    const api = interactiveFixtureApi([stack])
+    api.listContainers = async () => [{ id: 'container', name: 'web', image: 'nginx', status, node_id: 'node-1', stack_id: stack.id, service: 'web' }]
+    const wrapper = mount(WorkloadDetail, { props: { stack, api }, global: { stubs: { Teleport: true } } })
+    await flushPromises()
+    const label = status[0]!.toUpperCase() + status.slice(1)
+    expect(wrapper.get('.container-detail .plate-card').text()).toContain(label)
+    await wrapper.get('.container-detail .plate-card').trigger('click')
+    const running = ['running', 'starting', 'paused'].includes(status)
+    const action = wrapper.findAll('[role="menuitem"]').find(button => button.text() === (running ? 'Stop container' : 'Start container'))!
+    expect(action.attributes('disabled')).toBeUndefined()
+    await action.trigger('click')
+    expect(wrapper.emitted('command')?.at(-1)).toEqual([[running ? 'stop' : 'start', stack.id, 'container']])
+    wrapper.unmount()
+  })
+
 })

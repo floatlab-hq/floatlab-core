@@ -3,6 +3,7 @@ package control
 import (
 	"fmt"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"math"
 	"net/http"
@@ -11,6 +12,29 @@ import (
 )
 
 const prefixProjection = `SELECT id,name,prefix,stack_id,created_at FROM prefix_pools`
+
+func (s *Server) handleDeletePrefixPool(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	result, err := s.db.Request(r.Context(), rqlite.Statement{SQL: `DELETE FROM prefix_pools WHERE id=? AND NOT EXISTS(SELECT 1 FROM ip_reservations WHERE prefix_pool=?)`, Params: []interface{}{id, id}})
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if result.RowsAffected == 0 {
+		rows, err := s.queryObjects(r, prefixProjection+" WHERE id=?", id)
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		if len(rows) == 0 {
+			writeError(w, 404, "prefix pool not found")
+			return
+		}
+		writeError(w, 409, "prefix pool has allocated addresses")
+		return
+	}
+	w.WriteHeader(204)
+}
 
 func (s *Server) handleListPrefixPools(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.queryObjects(r, `SELECT p.id,p.name,p.prefix,p.stack_id,p.created_at,count(i.id) AS allocated_addresses FROM prefix_pools p LEFT JOIN ip_reservations i ON i.prefix_pool=p.id GROUP BY p.id ORDER BY p.name`)
@@ -135,8 +159,13 @@ func (s *Server) handleCreateAllocation(w http.ResponseWriter, r *http.Request) 
 	id := uuid.NewString()
 	cidr := netip.PrefixFrom(address, prefix.Bits()).String()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.db.Execute(r.Context(), []rqlite.Statement{{SQL: `INSERT INTO ip_reservations(id,stack_id,service,address,prefix_pool,allocated_at) VALUES(?,?,?,?,?,?)`, Params: []interface{}{id, body.StackID, body.Service, cidr, body.Pool, now}}}); err != nil {
+	result, err := s.db.Request(r.Context(), rqlite.Statement{SQL: `INSERT INTO ip_reservations(id,stack_id,service,address,prefix_pool,allocated_at) SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM prefix_pools WHERE id=?)`, Params: []interface{}{id, body.StackID, body.Service, cidr, body.Pool, now, body.Pool}})
+	if err != nil {
 		writeError(w, 409, err.Error())
+		return
+	}
+	if result.RowsAffected == 0 {
+		writeError(w, 409, "prefix pool was removed")
 		return
 	}
 	writeJSON(w, 201, map[string]interface{}{"id": id, "stack_id": body.StackID, "service": body.Service, "address": cidr, "prefix_pool": body.Pool, "allocated_at": now})

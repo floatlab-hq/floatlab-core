@@ -133,7 +133,9 @@ command parsing and host, network, and account validation still run.
    you type. Choose TOTP Yes/No on the same screen with Left/Right or Space.
    If enabled, scan the compact, theme-colored QR or use the manual secret.
    Verify the authenticator code on that screen, then save the recovery codes.
-   Review the validated host, network, and account settings, then choose Finish.
+   Review the validated host, network, and account settings. Ctrl+E exports a private
+   TOML answers file with bcrypt password hashes for unattended installs. TOTP enrollment
+   cannot be exported. Choose Finish to submit the interactive configuration.
    Old disk partitions and pool commands are not repeated on Review.
 5. Watch the compact progress footer. Copy bytes and speed disappear when copying
    finishes; overall installation progress and status remain. Success starts the automatic reboot countdown;
@@ -188,6 +190,7 @@ service lifecycle, UI choices, progress, and reboot behavior.
 | Location | Responsibility |
 | --- | --- |
 | `internal/installtui` | Screens, keyboard handling, timezone choices, and progress display. |
+| `internal/installer/answers.go` | TOML answers, private hash export, and the shared unattended session. |
 | `internal/installer/service.go` | Stdio JSON protocol, validation, session state, and mock scenarios. |
 | `internal/installer/storage.go` | Disk discovery, partition layout, and ZFS command parsing. |
 | `internal/installer/worker.go` | Real installation, verified EFI copying, and configuration. |

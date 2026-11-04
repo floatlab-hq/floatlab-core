@@ -13,9 +13,9 @@ const fixture = { hosts, apps, events }
 
 describe('Lab dashboard', () => {
   it('uses the same composition for live data while hiding unwired controls', async () => {
-    const wrapper = mount(LabDashboard, { props: { ...fixture, live: true, labName: 'My lab', clusterStatus: 'Cluster status unavailable', clusterHealth: 'unknown', detailOpen: true }, slots: { detail: '<p>Host details</p>', 'footer-actions': '<button>Refresh</button>' } })
+    const wrapper = mount(LabDashboard, { props: { ...fixture, live: true, labName: 'My lab', detailOpen: true }, slots: { detail: '<p>Host details</p>', 'footer-actions': '<button>Refresh</button>' } })
     expect(wrapper.get('h1').text()).toBe('My lab')
-    expect(wrapper.get('[role="status"]').text()).toContain('Cluster status unavailable')
+    expect(wrapper.find('.dashboard-quorum').exists()).toBe(false)
     expect(wrapper.find('[aria-label="Filter apps"]').exists()).toBe(false)
     expect(wrapper.find('[aria-label="Choose app columns"]').exists()).toBe(false)
     expect(wrapper.find('.dashboard-filter-note').exists()).toBe(false)
@@ -56,6 +56,7 @@ describe('Lab dashboard', () => {
 
   it('forwards actions from its child patterns', async () => {
     const wrapper = mount(LabDashboard, { props: fixture })
+    wrapper.getComponent(DashboardNavigation).vm.$emit('events')
     wrapper.getComponent(DashboardNavigation).vm.$emit('settings')
     wrapper.getComponent(LabEventLog).vm.$emit('select', 'backup')
     const host = wrapper.getComponent(HostDirectory)
@@ -63,18 +64,19 @@ describe('Lab dashboard', () => {
     host.vm.$emit('inspect', 'node-02')
     host.vm.$emit('connect', 'node-01', 'network')
     const app = wrapper.getComponent(AppDirectory)
-    for (const event of ['state', 'tools', 'open', 'network']) app.vm.$emit(event, 'postgres')
-    app.vm.$emit('columns')
+    app.vm.$emit('open', 'postgres')
+    app.vm.$emit('command', 'postgres', 'stop')
     await wrapper.get('[aria-label="Filter apps"]').trigger('click')
     const buttons = wrapper.findAll('.dashboard-section-heading button')
     await buttons[0]!.trigger('click')
     await buttons[2]!.trigger('click')
-    await wrapper.get('.dashboard-footer button').trigger('click')
+    wrapper.getComponent(DashboardNavigation).vm.$emit('nodeKey')
+    wrapper.getComponent(DashboardNavigation).vm.$emit('logout')
     expect(wrapper.emitted('action')).toEqual([
-      ['settings'], ['event', 'backup'], ['host-tools', 'node-01'], ['host-inspect', 'node-02'],
-      ['host-network', 'node-01'], ['app-state', 'postgres'], ['app-tools', 'postgres'],
-      ['app-open', 'postgres'], ['app-network', 'postgres'], ['columns'], ['filters'],
-      ['add-host'], ['add-app'], ['node-key'],
+      ['events'], ['settings'], ['event', 'backup'], ['host-tools', 'node-01'], ['host-inspect', 'node-02'],
+      ['host-network', 'node-01'],
+      ['app-open', 'postgres'], ['app-stop', 'postgres'], ['filters'],
+      ['add-host'], ['add-app'], ['node-key'], ['logout'],
     ])
   })
 })

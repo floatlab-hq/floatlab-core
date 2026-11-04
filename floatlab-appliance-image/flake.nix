@@ -29,8 +29,11 @@
       };
       floatlab-version = let version = builtins.getEnv "FLOATLAB_INSTALLER_VERSION";
         in if version != "" then version else pkgs.lib.removeSuffix "-dirty" (self.shortRev or self.dirtyShortRev or "unknown");
+      integrationCoverage = builtins.getEnv "FLOATLAB_INTEGRATION_COVERAGE" == "1";
       hostVersion = let v = builtins.getEnv "FLOATLAB_HOST_VERSION"; in if v == "" then "0.1.0-dev" else v;
-      buildBinaries = name: version: subPackages: pkgs.buildGoModule {
+      buildBinaries = name: version: subPackages:
+        let instrument = integrationCoverage && builtins.elem name [ "floatlab-host" "floatlab-manage" ];
+        in pkgs.buildGoModule {
         pname = name;
         inherit version;
         ldflags = [ "-s" "-w" "-X github.com/floatlab/floatlab-core/pkg/release.Version=${version}" "-X github.com/floatlab/floatlab-core/pkg/release.GitCommit=${self.rev or self.dirtyRev or "unknown"}" ];
@@ -44,7 +47,12 @@
             && builtins.baseNameOf path != "node_modules";
         };
         inherit subPackages;
-        vendorHash = "sha256-pf6wVL6HqxV6RygqpGvCKxOyhtJYVQlBeJRey7821mw=";
+        env.CGO_ENABLED = "0";
+        tags = pkgs.lib.optionals instrument [ "integrationcoverage" ];
+        preBuild = pkgs.lib.optionalString instrument ''
+          export GOFLAGS="$GOFLAGS -cover -coverpkg=./... -covermode=atomic"
+        '';
+        vendorHash = "sha256-bW6mEKlDsR1oGYSAZj1OXj3atsuMbLzwQpSiwtkOHlg=";
       };
       floatlab-binaries = buildBinaries "floatlab-host" hostVersion [ "cmd/floatlab-hostd" ];
       floatlab-manage-binaries = buildBinaries "floatlab-manage" "0.1.0-dev" [ "cmd/floatlab-control" ];
@@ -99,19 +107,13 @@
         inherit system;
         modules = [ ./nixos/iso.nix ];
         pkgs = pkgs;
-        specialArgs = { inherit floatlab-binaries floatlab-installer-binaries floatlab-version; floatlab-development = false; floatlab-installer-command = null; };
+        specialArgs = { inherit floatlab-binaries floatlab-installer-binaries floatlab-version integrationCoverage; floatlab-installer-command = null; };
       };
 
-      nixosConfigurations.floatlab-dev-iso = nixpkgs.lib.nixosSystem {
-        inherit system;
-        modules = [ ./nixos/iso.nix ];
-        pkgs = pkgs;
-        specialArgs = { inherit floatlab-binaries floatlab-installer-binaries floatlab-version; floatlab-development = true; floatlab-dev-bundle = bundle; floatlab-installer-command = null; };
-      };
       nixosConfigurations.floatlab-installed = nixpkgs.lib.nixosSystem {
         inherit system pkgs;
         modules = [ ./nixos/installed.nix ];
-        specialArgs = { inherit floatlab-binaries floatlab-installer-binaries floatlab-version; floatlab-development = false; };
+        specialArgs = { inherit floatlab-binaries floatlab-installer-binaries floatlab-version integrationCoverage; };
       };
       nixosConfigurations.floatlab-installer-preview = nixpkgs.lib.nixosSystem {
         inherit system pkgs;
@@ -126,7 +128,6 @@
       };
       packages.${system} = {
         iso = makeISO self.nixosConfigurations.floatlab-iso;
-        dev-iso = makeISO self.nixosConfigurations.floatlab-dev-iso;
         installer-preview = self.nixosConfigurations.floatlab-installer-preview.config.system.build.vm;
         installer-test = pkgs.writeShellApplication {
           name = "floatlab-installer-test";
@@ -141,6 +142,22 @@
       };
 
       checks.${system} = {
+        power-management =
+        let
+          staysAwake = cfg:
+            pkgs.lib.all (name: cfg.services.logind.settings.Login.${name} == "ignore")
+              [ "IdleAction" "HandleLidSwitch" "HandleLidSwitchExternalPower" "HandleLidSwitchDocked" ]
+            && pkgs.lib.all (name: cfg.systemd.sleep.settings.Sleep.${name} == false)
+              [ "AllowSuspend" "AllowHibernation" "AllowHybridSleep" "AllowSuspendThenHibernate" ];
+        in assert pkgs.lib.all (name: staysAwake self.nixosConfigurations.${name}.config)
+             [ "floatlab-iso" "floatlab-installed" ];
+           pkgs.runCommand "floatlab-power-management-check" {} ''
+             touch "$out"
+           '';
+        installer-answers = pkgs.runCommand "floatlab-installer-answers-check" { nativeBuildInputs = [ pkgs.python3 pkgs.bash pkgs.coreutils ]; } ''
+          python3 ${./tests/installer-answers.py} ${./nixos/modules/installer-answers.sh}
+          touch "$out"
+        '';
         zfs-memory = pkgs.runCommand "floatlab-zfs-memory-check" { nativeBuildInputs = [ pkgs.python3 pkgs.bash pkgs.gawk ]; } ''
           python3 ${./tests/zfs-memory.py} ${./nixos/modules/zfs-memory.sh}
           touch "$out"
@@ -149,11 +166,11 @@
           mkdir -p "$out"
           export PATH=${pkgs.lib.makeBinPath [ pkgs.floatlab-zbm-kcl ]}
           zbm-kcl -r spl_hostid -r zbm.prefer -r zbm.import_policy -r zbm.timeout -r console \
-            -a 'spl_hostid=12345678 zbm.prefer=floatlab!! zbm.import_policy=strict zbm.timeout=5 console=tty0 console=ttyS0,115200n8' \
+            -a 'spl_hostid=0x20390125 zbm.prefer=floatlab!! zbm.import_policy=strict zbm.timeout=5 console=tty0 console=ttyS0,115200n8' \
             -o "$out/BOOTX64.EFI" ${zfsbootmenu}
           cmdline=$(zbm-kcl "$out/BOOTX64.EFI")
           case "$cmdline" in
-            *'spl_hostid=12345678 zbm.prefer=floatlab!! zbm.import_policy=strict zbm.timeout=5 console=tty0 console=ttyS0,115200n8'*) ;;
+            *'spl_hostid=0x20390125 zbm.prefer=floatlab!! zbm.import_policy=strict zbm.timeout=5 console=tty0 console=ttyS0,115200n8'*) ;;
             *) exit 1 ;;
           esac
         '';
@@ -182,7 +199,7 @@
         image-trim =
         let
           configurations = map (name: self.nixosConfigurations.${name}.config)
-            [ "floatlab-iso" "floatlab-dev-iso" "floatlab-installed" ];
+            [ "floatlab-iso" "floatlab-installed" ];
           trimmed = cfg:
             !cfg.documentation.enable && !cfg.services.rsyslogd.enable
             && !cfg.hardware.bluetooth.enable && !cfg.networking.wireless.enable
@@ -233,6 +250,14 @@
            assert pkgs.lib.hasInfix "Match User root" installed.services.openssh.extraConfig;
            assert pkgs.lib.hasInfix "/floatlab/system/etc/root-authorized-keys" installed.services.openssh.extraConfig;
            assert !(pkgs.lib.hasInfix "/floatlab/system/etc/root-authorized-keys" cfg.services.openssh.extraConfig);
+           assert map (key: key.path) installed.services.openssh.hostKeys == [
+             "/floatlab/system/etc/ssh/ssh_host_rsa_key"
+             "/floatlab/system/etc/ssh/ssh_host_ed25519_key"
+           ];
+           assert installed.environment.etc."ssh/ssh_host_ed25519_key.pub".source == "/floatlab/system/etc/ssh/ssh_host_ed25519_key.pub";
+           assert builtins.elem "sshd-keygen.service" cfg.systemd.services.floatlab-installer-root.requires;
+           assert builtins.elem "floatlab-datasets.service" installed.systemd.services.sshd-keygen.requires;
+           assert builtins.elem "sshd-keygen.service" installed.systemd.services.floatlab-hostd.requires;
            assert installed.hardware.enableAllHardware;
            assert pkgs.lib.all (name: builtins.elem name installed.boot.initrd.availableKernelModules)
              [ "virtio_blk" "virtio_scsi" "nvme" "ahci" "uas" "hpsa" "hv_storvsc" ];
@@ -252,16 +277,19 @@
            assert cfg.systemd.services."floatlab-installer-console@".serviceConfig.RestartForceExitStatus == "SIGHUP";
            assert pkgs.lib.hasSuffix "/bin/install-tui" cfg.systemd.services."floatlab-installer-console@".serviceConfig.ExecStart;
            assert cfg.systemd.services."floatlab-installer-console@".serviceConfig.TimeoutStopSec == "infinity";
+           assert cfg.systemd.services.floatlab-unattended-install.serviceConfig.Type == "oneshot";
            assert !(builtins.hasAttr "floatlab-install-worker" cfg.systemd.services);
            assert builtins.elem "--interface=floatlab-lan:routable" cfg.systemd.network.wait-online.extraArgs;
            pkgs.runCommand "floatlab-installer-boot-config" {} ''
+             grep -F 'floatlab-unattended-install.service' ${cfg.systemd.services.floatlab-install-discovery.serviceConfig.ExecStart} >/dev/null
              grep -F '${pkgs.nftables}/bin' ${installed.systemd.services.floatlab-core-stack.serviceConfig.ExecStart} >/dev/null
              touch "$out"
            '';
       };
 
       devShells.${system}.default = pkgs.mkShell {
-        packages = with pkgs; [ just qemu_kvm libvirt virt-manager coreutils jq python3 docker-client go gh ];
+        FLOATLAB_OVMF = "${pkgs.OVMF.fd}/FV";
+        packages = with pkgs; [ just qemu_kvm libvirt virt-manager coreutils jq python3 docker-client go gh xorriso bun pnpm ];
       };
     };
 }

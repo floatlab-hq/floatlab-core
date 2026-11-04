@@ -229,6 +229,21 @@ paths:
           description: Pool deleted.
         '409':
           description: Pool has allocations or is referenced by host settings.
+  /network/pools/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    delete:
+      summary: Delete an empty IPv6 prefix pool
+      operationId: deletePrefixPool
+      tags: [network]
+      responses:
+        '204': {description: Prefix pool deleted.}
+        '404': {description: Prefix pool not found.}
+        '409': {description: Pool still has allocated addresses.}
+
   /network/pools:
     get:
       summary: List all IPv6 prefix pools

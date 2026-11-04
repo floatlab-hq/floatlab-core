@@ -242,6 +242,20 @@ components:
           type: string
           nullable: true
           enum: [inactive, pending, firing, unknown, resolved]
+        kind:
+          type: string
+          description: Producer incident kind.
+        resource:
+          type: object
+          nullable: true
+          description: Exact resource of the currently open monitoring incident; null when unavailable.
+          properties:
+            host_id: {type: string}
+            workload_id: {type: string}
+            pool: {type: string}
+            dataset: {type: string}
+            source_id: {type: string}
+            destination_id: {type: string}
 
     Network:
       type: object
@@ -550,3 +564,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+    delete:
+      summary: Delete a resolved alert and its notifications
+      operationId: deleteAlert
+      tags: [config]
+      responses:
+        '204': {description: Resolved alert and linked notifications deleted.}
+        '404': {description: Alert not found.}
+        '409': {description: Alert must be resolved before deletion.}

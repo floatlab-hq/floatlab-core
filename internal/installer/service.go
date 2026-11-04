@@ -28,20 +28,23 @@ type Request struct {
 	Config       *InstallConfig `json:"config,omitempty"`
 }
 type InstallConfig struct {
-	SSHPublicKeys        []string           `json:"ssh_public_keys,omitempty"`
-	SSHKeySource         string             `json:"ssh_key_source,omitempty"`
-	SSHKeyReference      string             `json:"ssh_key_reference,omitempty"`
-	NodeName             string             `json:"node_name"`
-	Timezone             string             `json:"timezone"`
-	Network              hostnetwork.Config `json:"network"`
-	Username             string             `json:"username"`
-	Password             string             `json:"password"`
-	PasswordConfirmation string             `json:"password_confirmation"`
-	RecoveryPassword     string             `json:"recovery_password"`
-	RecoveryConfirmation string             `json:"recovery_password_confirmation"`
-	TOTP                 bool               `json:"totp"`
-	TOTPCode             string             `json:"totp_code,omitempty"`
-	RecoverySaved        bool               `json:"recovery_saved,omitempty"`
+	SSHPublicKeys        []string           `json:"ssh_public_keys,omitempty" toml:"ssh_public_keys,omitempty"`
+	SSHKeySource         string             `json:"ssh_key_source,omitempty" toml:"ssh_key_source,omitempty"`
+	SSHKeyReference      string             `json:"ssh_key_reference,omitempty" toml:"ssh_key_reference,omitempty"`
+	NodeName             string             `json:"node_name" toml:"node_name"`
+	Timezone             string             `json:"timezone" toml:"timezone"`
+	Network              hostnetwork.Config `json:"network" toml:"network"`
+	Username             string             `json:"username" toml:"username"`
+	Password             string             `json:"password" toml:"-"`
+	PasswordConfirmation string             `json:"password_confirmation" toml:"-"`
+	RecoveryPassword     string             `json:"recovery_password" toml:"-"`
+	RecoveryConfirmation string             `json:"recovery_password_confirmation" toml:"-"`
+	TOTP                 bool               `json:"totp" toml:"-"`
+	TOTPCode             string             `json:"totp_code,omitempty" toml:"-"`
+	RecoverySaved        bool               `json:"recovery_saved,omitempty" toml:"-"`
+	EnableLab            bool               `json:"enable_lab,omitempty" toml:"enable_lab,omitempty"`
+	PasswordHash         string             `json:"password_hash,omitempty" toml:"password_hash,omitempty"`
+	RecoveryPasswordHash string             `json:"recovery_password_hash,omitempty" toml:"recovery_password_hash,omitempty"`
 }
 type Enrollment struct {
 	URI           string   `json:"uri"`
@@ -499,6 +502,22 @@ func validateAccount(config InstallConfig) error {
 	if _, err := sshKeyURL(config.SSHKeySource, config.SSHKeyReference); err != nil {
 		return err
 	}
+	if config.PasswordHash != "" || config.RecoveryPasswordHash != "" {
+		if !credentials.Valid(config.Username, "unused") {
+			return fmt.Errorf("invalid administrator username")
+		}
+		if config.Password != "" || config.PasswordConfirmation != "" || config.RecoveryPassword != "" || config.RecoveryConfirmation != "" || config.TOTP {
+			return fmt.Errorf("pre-hashed credentials cannot be combined with plaintext passwords or TOTP enrollment")
+		}
+		for _, hash := range []string{config.PasswordHash, config.RecoveryPasswordHash} {
+			supported := strings.HasPrefix(hash, "$2a$") || strings.HasPrefix(hash, "$2b$") || strings.HasPrefix(hash, "$2y$")
+			validDigest := len(hash) == 60 && strings.Trim(hash[7:], "./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789") == ""
+			if _, err := bcrypt.Cost([]byte(hash)); err != nil || !supported || !validDigest {
+				return fmt.Errorf("administrator and recovery password hashes must be bcrypt hashes")
+			}
+		}
+		return nil
+	}
 	if config.Username == "" {
 		return fmt.Errorf("enter an administrator username")
 	}
@@ -532,6 +551,23 @@ func (s *Service) submission(ctx context.Context, config InstallConfig, enroll b
 	sub.Host = host
 	if err := validateAccount(config); err != nil {
 		return sub, err
+	}
+	if !enroll {
+		sub.SSHAuthorizedKeys, err = fetchSSHKeys(ctx, config.SSHKeySource, config.SSHKeyReference)
+		if err != nil {
+			return sub, err
+		}
+		if len(config.SSHPublicKeys) > 0 {
+			sub.SSHAuthorizedKeys, err = parseSSHKeys([]byte(sub.SSHAuthorizedKeys + strings.Join(config.SSHPublicKeys, "\n")))
+			if err != nil {
+				return sub, err
+			}
+		}
+	}
+	if config.PasswordHash != "" {
+		sub.Admin = credentials.Bootstrap{Username: config.Username, PasswordHash: config.PasswordHash, NodeID: host.NodeID, NodeName: host.NodeName}
+		sub.RecoveryPasswordHash = config.RecoveryPasswordHash
+		return sub, nil
 	}
 	if enroll || config.TOTP {
 		if !s.Mock {
@@ -568,16 +604,6 @@ func (s *Service) submission(ctx context.Context, config InstallConfig, enroll b
 			return sub, err
 		}
 		sub.Admin.TOTPSecret, sub.Admin.RecoveryHashes = secret, s.recoveryHashes
-	}
-	sub.SSHAuthorizedKeys, err = fetchSSHKeys(ctx, config.SSHKeySource, config.SSHKeyReference)
-	if err != nil {
-		return sub, err
-	}
-	if len(config.SSHPublicKeys) > 0 {
-		sub.SSHAuthorizedKeys, err = parseSSHKeys([]byte(sub.SSHAuthorizedKeys + strings.Join(config.SSHPublicKeys, "\n")))
-		if err != nil {
-			return sub, err
-		}
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(config.Password), bcrypt.DefaultCost)
 	if err != nil {
@@ -705,5 +731,6 @@ func (s *Service) hostSettings(config InstallConfig) (Appliance, error) {
 	}
 	host := s.identity
 	host.NodeName, host.Timezone, host.Network = config.NodeName, config.Timezone, config.Network
+	host.EnableLab = config.EnableLab
 	return host, host.Validate()
 }
