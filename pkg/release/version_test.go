@@ -53,7 +53,8 @@ func TestCheckHost(t *testing.T) {
 	}{
 		{hostReply{raw: `{"host_version":"0.1.0","git_commit":"abc"}`}, "compatible"},
 		{hostReply{raw: `{"host_version":"0.2.0"}`}, "compatible"},
-		{hostReply{raw: `{"host_version":"0.3.0"}`}, "incompatible"},
+		{hostReply{raw: `{"host_version":"0.3.0"}`}, "compatible"},
+		{hostReply{raw: `{"host_version":"0.4.0"}`}, "incompatible"},
 		{hostReply{raw: `{}`}, "unknown"},
 		{hostReply{raw: `invalid`}, "unknown"},
 		{hostReply{err: errors.New("unknown command")}, "unknown"},

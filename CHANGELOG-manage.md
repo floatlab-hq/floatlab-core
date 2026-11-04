@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.3.0
+
+- Complete the OpenAPI command contracts and publish standalone `lab` binaries for Linux and macOS on x64 and ARM64, with autocomplete installation for five shells.
+- Connect the live dashboard to workload actions and app creation; add sortable app rows, keyboard selection, inline containers, and workload details for logs, metrics, Compose, replication, and backups.
+- Keep the dashboard visible beneath the command palette, add audit events and keyboard shortcuts, and keep confirmation dialogs above the palette.
+- Recover interrupted snapshot restores with durable activation checkpoints and repaired mountpoints; purge operation-owned recovery trees when deleting workload data.
+- Share ownership of concurrent automated snapshot points and match replication transport incidents to the monitored resource.
+- Support host versions from 0.1.0 through the 0.3.x series.
+
 ## 0.2.0
 
 - Share modular OpenCLI command contracts across the CLI and web palette, with generated completions and coverage checks.

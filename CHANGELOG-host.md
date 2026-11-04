@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.3.0
+
+- Keep appliances available when idle or with the lid closed by disabling suspend, hibernation, and automatic sleep actions.
+- Persist SSH host keys across installer verification and OS trials; accept installer root public keys directly or from hosted sources through grouped SSH configuration. Installer changes require a separately published ISO.
+- Create and repair explicit workload dataset mountpoints so datasets remain usable when the pool has no inherited mountpoint.
+- Preserve update memory headroom on smaller hosts with a 128 MiB minimum ARC budget.
+- Exercise installation, workload recovery, replication, and updates through API-driven Ginkgo appliance suites, with persistent native coverage and serial boot diagnostics.
+
 ## 0.2.0
 
 - Bound update sandboxes to four 384 MiB services with no additional swap, explicit Go/cache budgets, and 512 MiB of extra host headroom; validate cloned-state recovery on 4 GiB appliances with measured cgroup peaks and OOM counters.
