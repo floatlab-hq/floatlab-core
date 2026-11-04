@@ -2,10 +2,10 @@
   "architecture": "amd64",
   "repository": "floatlab-hq/floatlab-core",
   "host": {
-    "tag": "host-v0.2.0",
+    "tag": "host-v0.3.0",
     "manifest": {
-      "version": "0.2.0",
-      "git_commit": "28963c0c6f81470b6362573f968751f9d1bb792d",
+      "version": "0.3.0",
+      "git_commit": "2340d02093ede0cacc5be80a783d6c37b9864189",
       "recovery_protocol": 1,
       "bootloader": "zfsbootmenu-3.1.0",
       "pool_compatibility": "openzfs-2.3-linux",
@@ -17,36 +17,36 @@
       },
       "qualified_sources": [],
       "architecture": "amd64",
-      "init": "/nix/store/vs7g20mnvjjz6ff8yiwkh9h91ivh6wjs-nixos-system-unnamed-26.05.20260719.fd14620/init",
+      "init": "/nix/store/rf1my08wvwfbi3g9wf6qx8lydckp9jj8-nixos-system-unnamed-26.05.20260719.fd14620/init",
       "kernel": "/nix/store/1fzwajz2v8bxwl86bb16db9gb8zxgjy5-linux-6.18.39",
       "nixpkgs_rev": "fd1462031fdee08f65fd0b4c6b64e22239a77870",
-      "root_bytes": 1812274763,
+      "root_bytes": 1812146589,
       "files": {
-        "floatlab-root.tar.gz": "698fd06c6964c7442a287f358d08431f561f1eef9a711e3f705c4a4bf24606f2",
+        "floatlab-root.tar.gz": "4745b62efabc5962a1d2a58cdfbe1af3dd0bbe2ce791d3397b11bcc92a76808b",
         "zfsbootmenu.EFI": "131d55c7b385df8cd319d267b6aa15d97f8c32c94f5149bd906556715fadf4e7"
       },
-      "bytes": 822561272
+      "bytes": 822520502
     }
   },
   "manage": {
-    "tag": "manage-v0.2.0",
+    "tag": "manage-v0.3.0",
     "manifest": {
-      "version": "0.2.0",
-      "git_commit": "28963c0c6f81470b6362573f968751f9d1bb792d",
+      "version": "0.3.0",
+      "git_commit": "2340d02093ede0cacc5be80a783d6c37b9864189",
       "architecture": "amd64",
       "required_host": {
         "min_host_version": "0.1.0",
-        "max_host_version": "0.3.0"
+        "max_host_version": "0.4.0"
       },
-      "image_id": "sha256:7610f0c9c3ba4f60ec3d7e2aa04ddca4997e06615e30dd53ab8b90e65a3e44c0",
+      "image_id": "sha256:2d774f47bd00a85dce6f59c466917cde6537d55f47b0cf015853008c1cb2e954",
       "registries": {
         "ghcr": {
-          "reference": "ghcr.io/floatlab-hq/floatlab-manage:0.2.0",
-          "digest": "sha256:7610f0c9c3ba4f60ec3d7e2aa04ddca4997e06615e30dd53ab8b90e65a3e44c0"
+          "reference": "ghcr.io/floatlab-hq/floatlab-manage:0.3.0",
+          "digest": "sha256:2d774f47bd00a85dce6f59c466917cde6537d55f47b0cf015853008c1cb2e954"
         },
         "dockerhub": {
-          "reference": "docker.io/floatlabhq/floatlab-manage:0.2.0",
-          "digest": "sha256:7610f0c9c3ba4f60ec3d7e2aa04ddca4997e06615e30dd53ab8b90e65a3e44c0"
+          "reference": "docker.io/floatlabhq/floatlab-manage:0.3.0",
+          "digest": "sha256:2d774f47bd00a85dce6f59c466917cde6537d55f47b0cf015853008c1cb2e954"
         }
       },
       "rqlite_version": "8.26.0",
@@ -54,7 +54,7 @@
         "8.26.0"
       ],
       "images": {
-        "floatlab-control": "ghcr.io/floatlab-hq/floatlab-manage@sha256:7610f0c9c3ba4f60ec3d7e2aa04ddca4997e06615e30dd53ab8b90e65a3e44c0",
+        "floatlab-control": "ghcr.io/floatlab-hq/floatlab-manage@sha256:2d774f47bd00a85dce6f59c466917cde6537d55f47b0cf015853008c1cb2e954",
         "rqlite": "rqlite/rqlite:8.26.0@sha256:b81e945809e1fcc92f3d72c07d7f8726252dfb5ed406db6faaf6879159193fe9",
         "victoria-metrics": "victoriametrics/victoria-metrics:v1.101.0@sha256:91d0456cc064e195869175074ced2a6849d72531613b320492698e5fe935d10a",
         "victoria-logs": "victoriametrics/victoria-logs:v0.28.0-victorialogs@sha256:dd1685ffb6ce0be3729b27e197e864be1bd9c274e097406d4005a83360846ff1"
