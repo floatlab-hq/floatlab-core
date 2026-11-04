@@ -18,6 +18,7 @@ describe('App authentication', () => {
     expect(login).toHaveBeenCalledWith({ username: 'admin', password: 'secret' })
     expect(browserApi).toHaveBeenCalledWith('story-only')
     expect(wrapper.text()).toContain('lab-alpha')
+    await wrapper.get('[aria-label="Settings"]').trigger('click')
     await wrapper.findAll('button').find(button => button.text() === 'Sign out')!.trigger('click')
     expect(wrapper.findComponent(LoginForm).exists()).toBe(true)
   })

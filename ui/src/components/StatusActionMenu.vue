@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import type { Operation, Status } from '../types'
 import UiButton from './UiButton.vue'
+import UiPlateCard from './UiPlateCard.vue'
 
 const props = defineProps<{
   status: Status
@@ -25,16 +26,18 @@ function selectOperation(operation: Operation) {
 
 <template>
   <div class="status-action" @keydown.esc="open = false">
-    <UiButton
+    <UiPlateCard
+      :label="status"
+      :busy="Boolean(pendingOperation)"
+      :active="status === 'Running'"
+      :tone="status === 'Failed' ? 'error' : 'default'"
       class="status"
       :class="statusClass"
       type="button"
       aria-haspopup="menu"
       :aria-expanded="open"
       @click="open = !open"
-    >
-      {{ status }} <b aria-hidden="true">⌄</b>
-    </UiButton>
+    />
 
     <div v-if="open" class="status-menu" role="menu">
       <UiButton

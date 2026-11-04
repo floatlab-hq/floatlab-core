@@ -39,9 +39,12 @@ describe('UiButton', () => {
     expect(onClick).toHaveBeenCalledOnce()
   })
 
-  it('passes the native disabled state to the button', () => {
-    const wrapper = mount(UiButton, { attrs: { disabled: true } })
+  it('keeps disabled buttons inactive', async () => {
+    const onClick = vi.fn()
+    const wrapper = mount(UiButton, { attrs: { disabled: true, onClick } })
 
     expect(wrapper.attributes('disabled')).toBe('')
+    await wrapper.trigger('click')
+    expect(onClick).not.toHaveBeenCalled()
   })
 })

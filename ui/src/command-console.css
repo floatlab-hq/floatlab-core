@@ -25,7 +25,8 @@
 .palette-trigger span { color: var(--text-placeholder); }
 
 .palette-inline { position: relative; min-width: 0; height: var(--height-control); }
-.palette-inline .button.palette-inline-trigger { width: 100%; justify-content: space-between; text-align: left; }
+.palette-inline .button.palette-inline-trigger { width: 100%; justify-content: space-between; text-align: left; overflow: hidden; }
+.palette-inline .command-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .palette-inline .command-hint { color: var(--text-placeholder); }
 .palette-inline-popover { position: absolute; z-index: 5; top: 0; left: 0; right: 0; }
 .palette-inline-popover .palette { width: 100%; padding: 0; max-height: calc(100dvh - 64px); }

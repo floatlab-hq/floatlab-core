@@ -5,6 +5,7 @@ type ButtonArgs = InstanceType<typeof UiButton>['$props'] & { disabled: boolean 
 
 const meta: Meta<ButtonArgs> = {
   title: '1. Primitive/UI Button', component: UiButton,
+  parameters: { docs: { description: { component: 'Hover fades colors without movement. Hold a button to see its quick press-down effect; disabled buttons do not depress. Reduced-motion preferences suppress transitions.' } } },
   args: { variant: 'primary', size: 'default', disabled: false },
   argTypes: {
     variant: { control: 'select', options: ['default', 'plain', 'primary', 'outline', 'ghost', 'surface'] },

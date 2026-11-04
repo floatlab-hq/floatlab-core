@@ -7,7 +7,11 @@ import UiHealthMark from './UiHealthMark.vue'
 import UiTelemetry from './UiTelemetry.vue'
 
 defineProps<{ hosts: HostItem[] }>()
-defineEmits<{ tools: [hostId: string]; inspect: [hostId: string]; connect: [hostId: string, target: 'network' | 'host'] }>()
+const emit = defineEmits<{ tools: [hostId: string]; inspect: [hostId: string]; connect: [hostId: string, target: 'network' | 'host'] }>()
+function openRow(event: globalThis.MouseEvent, id: string) {
+  if ((event.target as HTMLElement).closest('button, a')) return
+  emit('inspect', id)
+}
 </script>
 
 <template>
@@ -16,7 +20,7 @@ defineEmits<{ tools: [hostId: string]; inspect: [hostId: string]; connect: [host
       <div class="host-columns" role="row">
         <span v-for="label in ['State', 'Badge', 'Name', 'Network', 'Host', 'Hosting', 'HA target', 'Backup target', '']" :key="label" role="columnheader">{{ label }}</span>
       </div>
-      <div v-for="host in hosts" :key="host.id" class="host-row" role="row">
+      <div v-for="host in hosts" :key="host.id" class="host-row" role="row" tabindex="0" @click="openRow($event, host.id)" @keydown.enter.self="emit('inspect', host.id)" @keydown.space.self.prevent="emit('inspect', host.id)">
         <span class="host-state" role="cell"><UiHealthMark :state="host.health" /></span>
         <span role="cell"><UiNodePlate :name="host.name" /></span>
         <div class="host-identity" role="cell">
@@ -44,9 +48,12 @@ defineEmits<{ tools: [hostId: string]; inspect: [hostId: string]; connect: [host
 .host-row { min-height: var(--height-host-row); margin-bottom: var(--space-2); border-radius: var(--radius); background: var(--surface-default); font-size: var(--text-meta); line-height: var(--line-item); }
 .host-row:last-child { margin-bottom: 0; }
 .host-state { display: flex; justify-content: center; }
-.host-identity { display: flex; align-items: center; gap: var(--space-3); padding: 0 14px; }
+.host-identity { display: flex; align-items: center; gap: var(--space-3); padding: 0 14px 0 0; }
 .host-name { color: var(--text-primary); font-size: var(--text-item); }
 .host-inspect { margin-left: auto; }
+.host-row:focus-visible { outline: 1px solid var(--green); outline-offset: 2px; }
+.host-row { cursor: pointer; transition: background-color 120ms ease-out; }
+.host-row:hover { background: color-mix(in srgb, var(--surface-default) 90%, var(--text-secondary)); }
 .host-row > [role="cell"] { min-width: 0; }
 .directory-link { color: var(--text-secondary); font-size: var(--text-status); text-decoration: underline; }
 
@@ -54,7 +61,7 @@ defineEmits<{ tools: [hostId: string]; inspect: [hostId: string]; connect: [host
 .host-directory { min-width: 0; }
 .host-columns, .host-row { grid-template-columns: 28px 70px minmax(0,1fr) 30px; }
 .host-columns > :nth-child(n+4):not(:last-child), .host-row > :nth-child(n+4):not(:last-child) { display: none; }
-.host-identity { flex-wrap: wrap; gap: 4px 8px; padding: 8px; }
+.host-identity { flex-wrap: wrap; gap: 4px 8px; padding: 8px 8px 8px 0; }
 .host-identity :deep(.telemetry) { flex-basis: 100%; }
 .host-inspect { display: none; }
 }

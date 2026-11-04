@@ -1,24 +1,22 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { activeTheme } from '../../themes'
+import { IconPencil } from '@tabler/icons-vue'
+import UiButton from '../UiButton.vue'
 import { nodeCode } from '../../dashboard/node-code'
-import { generate } from '../../vendor/avatar-engine'
 
-const props = defineProps<{ name: string }>()
-const image = computed(() => {
-  const svg = generate(props.name, { ink: activeTheme.value.colors.lighter_background, paper: activeTheme.value.colors.foreground }).svg
-  return `data:image/svg+xml,${encodeURIComponent(svg)}`
-})
+defineProps<{ name: string; editable?: boolean }>()
 </script>
 
 <template>
-  <span class="node-plate" :title="name" :aria-label="`Node ${name}`">
-    <img :src="image" width="24" height="24" alt="" />
+  <component :is="editable ? UiButton : 'span'" class="node-plate" :class="{ editable }" :title="name" :aria-label="editable ? `Change host ${name}` : `Node ${name}`">
+    <IconPencil v-if="editable" class="node-edit-icon" :size="12" aria-hidden="true" />
     <span>{{ nodeCode(name) }}</span>
-  </span>
+  </component>
 </template>
 
 <style scoped>
-.node-plate { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); height: var(--height-plate); padding: 0 var(--space-2); border-radius: var(--radius); color: var(--text-inverse); background: var(--omarchy-foreground); font-size: var(--text-control); font-weight: var(--weight-ui); line-height: var(--line-body); white-space: nowrap; }
-.node-plate img { display: block; flex: 0 0 auto; }
+.node-plate { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); height: var(--height-plate); padding: 0 var(--space-2); border-radius: var(--radius); color: var(--text-secondary); background: var(--surface-canvas); font-size: var(--text-control); font-weight: var(--weight-ui); line-height: var(--line-body); white-space: nowrap; }
+.node-edit-icon { display: none; }
+.node-plate.editable:hover .node-edit-icon { display: block; }
+.node-plate.editable:hover > span { display: none; }
+.node-plate { border: 0; min-height: 0; }
 </style>

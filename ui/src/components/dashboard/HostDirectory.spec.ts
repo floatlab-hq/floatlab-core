@@ -26,4 +26,17 @@ describe('Host directory', () => {
     expect(wrapper.emitted('inspect')).toEqual([['node-02']])
     expect(wrapper.emitted('connect')).toEqual([['node-01', 'network'], ['node-01', 'host']])
   })
+  it('opens details from row cells and keyboard without duplicating nested actions', async () => {
+    const wrapper = mount(HostDirectory, { props: { hosts } })
+    const row = wrapper.get('.host-row')
+    expect(row.attributes('tabindex')).toBe('0')
+    await row.findAll('[role="cell"]')[1]!.trigger('click')
+    await row.trigger('keydown', { key: 'Enter' })
+    await row.trigger('keydown', { key: ' ' })
+    expect(wrapper.emitted('inspect')).toEqual([['node-01'], ['node-01'], ['node-01']])
+    await row.get('[aria-label="Tools for node-01"]').trigger('click')
+    expect(wrapper.emitted('tools')).toEqual([['node-01']])
+    expect(wrapper.emitted('inspect')).toHaveLength(3)
+  })
+
 })

@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ApiError, type DashboardApi, type FloatLabApi, type Node, type Stack, type NodeStats, type StorageStats, type Notification, type RaftHealth, type LogLine, type UpdateApi, type BackupApi, type BackupRestoreApi } from '@floatlab/client'
+import { ApiError, CommandEngine, type DashboardApi, type FloatLabApi, type Node, type Stack, type NodeStats, type StorageStats, type Notification, type RaftHealth, type LogLine, type UpdateApi, type BackupApi, type BackupRestoreApi, type BackupTarget } from '@floatlab/client'
 import { appItem, auditEvent, hostItem, labEvent } from '../../dashboard/live'
+import { protectionStatus } from '../../dashboard/protection'
+import UiPlateCard from '../UiPlateCard.vue'
+import AppPlateActions from './AppPlateActions.vue'
 import type { AuditEntry } from '@floatlab/client'
-import UiButton from '../UiButton.vue'
 import DetailPanel from '../DetailPanel.vue'
 import CommandConsole from '../CommandConsole.vue'
 import LabDashboard from './LabDashboard.vue'
@@ -34,19 +36,55 @@ const creating = ref(false)
 const utility = ref('')
 const commandConsole = ref<InstanceType<typeof CommandConsole>>()
 const hosts = computed(() => nodes.value.map(node => hostItem(node, stacks.value, stats.value[node.id], storage.value[node.id])))
-const apps = computed(() => stacks.value.map(stack => appItem(stack, nodes.value)))
+const protection = ref<Record<string, { targets: BackupTarget[]; jobs: Record<string, unknown>[]; error?: string; unavailable?: boolean }>>({})
+const pendingActions = ref(new Set<string>())
+const restartMotion = ref<Record<string, 'restart'>>({})
+const restartTimers = new Map<string, ReturnType<typeof setTimeout>>()
+function acceptedMutation(path: string) {
+  const match = /^\/stacks\/([^/]+)\/restart$/.exec(path)
+  if (!active || !match) return
+  const id = decodeURIComponent(match[1]!)
+  clearTimeout(restartTimers.get(id))
+  restartMotion.value[id] = 'restart'
+  restartTimers.set(id, setTimeout(() => { delete restartMotion.value[id]; restartTimers.delete(id) }, 3200))
+}
+const apps = computed(() => stacks.value.map(stack => ({ ...appItem(stack, nodes.value), actionPending: pendingActions.value.has(stack.id), runtimeMotion: restartMotion.value[stack.id], protectionAvailable: Boolean(backupApi.value) && !protection.value[stack.id]?.unavailable, ...protectionStatus(stack, nodes.value, protection.value[stack.id]?.targets ?? [], protection.value[stack.id]?.jobs ?? [], protection.value[stack.id]?.error) })))
 const events = computed(() => [
   ...notifications.value.map(notification => ({ ts: notification.created_at, event: labEvent(notification, nodes.value) })),
   ...activity.value.map(entry => ({ ts: entry.ts, event: auditEvent(entry, stacks.value, nodes.value) })),
 ].sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts)).slice(0, 50).map(value => value.event))
 const selectedNode = computed(() => nodes.value.find(node => node.id === selected.value))
 const selectedStack = computed(() => stacks.value.find(stack => stack.id === selectedApp.value))
-const selectedApps = computed(() => stacks.value.filter(stack => stack.primary_node === selected.value || stack.secondary_node === selected.value).map(stack => appItem(stack, nodes.value)))
-const cluster = computed(() => raft.value ? `${raft.value.state} · ${raft.value.peers.length} peers` : 'Cluster status unavailable')
-const clusterHealth = computed(() => raft.value ? ['Leader', 'Follower'].includes(raft.value.state) ? 'ready' : 'degraded' : 'unknown')
+const selectedApps = computed(() => apps.value.filter(app => stacks.value.some(stack => stack.id === app.id && (stack.primary_node === selected.value || stack.secondary_node === selected.value))))
+const selectedItem = computed(() => apps.value.find(app => app.id === selectedApp.value))
 let active = true
 let origin: HTMLElement | undefined
 let timer: ReturnType<typeof setInterval> | undefined
+let protectionTimer: ReturnType<typeof setInterval> | undefined
+let protectionGeneration = 0
+let protectionLoading = false
+async function refreshProtection() {
+  if (!active || protectionLoading || !backupApi.value) return
+  protectionLoading = true
+  const generation = ++protectionGeneration
+  const api = backupApi.value
+  await Promise.all(stacks.value.map(async stack => {
+    try {
+      const [targets, jobs] = await Promise.all([api.listBackupTargets(stack.id), api.listReplication(stack.id)])
+      if (active && generation === protectionGeneration) protection.value[stack.id] = { targets, jobs }
+    } catch (cause) {
+      if (!active || generation !== protectionGeneration) return
+      if (cause instanceof ApiError && cause.status === 401) { active = false; emit('logout'); return }
+      protection.value[stack.id] = { targets: [], jobs: [], error: cause instanceof Error ? cause.message : 'Protection status unavailable', unavailable: cause instanceof ApiError && [404, 501].includes(cause.status) }
+    }
+  }))
+  protectionLoading = false
+}
+function refreshActiveJobs() {
+  if (document.visibilityState !== 'visible') return
+  if (stacks.value.some(stack => !['RunningPrimary', 'RunningBackup', 'Idle', 'Failed'].includes(stack.state))) { void refresh(); return }
+  if (Object.values(protection.value).some(value => value.jobs.some(job => ['running', 'idle', 'pending'].includes(String(job.state))))) void refreshProtection()
+}
 async function read<T>(label: string, request: Promise<T>, save: (value: T) => void) {
   try { const value = await request; if (active) save(value) }
   catch (cause) {
@@ -67,6 +105,7 @@ async function refresh() {
     read('Cluster', props.api.getRaftHealth(), value => { raft.value = value }),
   ])
   if (!active) return
+  await refreshProtection()
   await Promise.all(nodes.value.map(node => Promise.all([
     read(`${node.name} metrics`, props.api.getNodeStats(node.id), value => { stats.value[node.id] = value }),
     read(`${node.name} storage`, props.api.getStorageStats(node.id), value => { storage.value[node.id] = value }),
@@ -86,9 +125,49 @@ function inspectApp(id: string) {
   origin = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
   selected.value = ''; selectedApp.value = id; utility.value = ''
 }
+async function runAction(args: string[], id: string) {
+  if (pendingActions.value.has(id)) return
+  pendingActions.value.add(id)
+  try {
+    const engine = new CommandEngine(props.api, {
+      interactive: false,
+      confirm: async () => true,
+      editCompose: async () => undefined,
+      present: async () => {},
+    })
+    const { result } = await engine.dispatch(args)
+    if (!active) return
+    if (result.kind === 'error') {
+      if (result.status === 401) { active = false; emit('logout'); return }
+      errors.value.push(`${stacks.value.find(stack => stack.id === id)?.name ?? id}: ${result.message}`)
+      return
+    }
+    if (args[2] === 'restartStack') acceptedMutation(`/stacks/${encodeURIComponent(id)}/restart`)
+    await refresh()
+  } finally { pendingActions.value.delete(id) }
+}
+function workloadCommand(args: string[], run = true) {
+  if (run && ['start', 'stop'].includes(args[0]!) && args[1]) { void runAction(args, args[1]); return }
+  commandConsole.value?.launch(args, run)
+}
 function action(name: string, id?: string) {
+  if (name === 'logout') { emit('logout'); return }
   if (name === 'command') { commandConsole.value?.show(); return }
   if (name === 'settings') { commandConsole.value?.launch(['alert-rules', 'list']); return }
+  if (id && name === 'app-snapshot-create') { void runAction(['snapshot', 'create', id], id); return }
+  if (id && name === 'app-snapshots') { commandConsole.value?.launch(['snapshot', 'list', id]); return }
+  if (id && name === 'app-logs') { inspectApp(id); utility.value = 'logs'; return }
+  if (id && name === 'app-delete') { commandConsole.value?.launch([name.slice(4), id]); return }
+  if (id && name === 'app-host') { const host = apps.value.find(app => app.id === id)?.hostId; if (host) void inspect(host); return }
+  if (id && ['app-sync', 'app-backup-run'].includes(name)) {
+    const args = ['api', 'store', 'triggerReplication', '--path-stack-id', id]
+    const standby = stacks.value.find(stack => stack.id === id)?.secondary_node
+    if (name === 'app-sync' && standby) args.push('--query-dest-node-id', standby)
+    void runAction(args, id); return
+  }
+  if (id && ['app-backups', 'app-replication'].includes(name)) { inspectApp(id); utility.value = name.slice(4); return }
+  if (id && ['app-start', 'app-stop'].includes(name)) { void runAction([name.slice(4), id], id); return }
+  if (id && ['app-restartStack', 'app-triggerFailover', 'app-restoreStack'].includes(name)) { void runAction(['api', 'stacks', name.slice(4), '--path-id', id], id); return }
   if (name.startsWith('host-') && id) { void inspect(id); return }
   if (name.startsWith('app-') && id) { inspectApp(id); return }
   if (name === 'add-app') { creating.value = true; return }
@@ -100,17 +179,16 @@ async function createApp(args: string[]) { creating.value = false; await nextTic
 async function close() { selected.value = ''; selectedApp.value = ''; utility.value = ''; await nextTick(); origin?.focus({ preventScroll: true }) }
 function restoreFocus() { origin?.focus({ preventScroll: true }) }
 function visibleRefresh() { if (document.visibilityState === 'visible') void refresh() }
-onMounted(() => { void refresh(); timer = setInterval(visibleRefresh, 30_000); document.addEventListener('visibilitychange', visibleRefresh) })
-onBeforeUnmount(() => { active = false; clearInterval(timer); document.removeEventListener('visibilitychange', visibleRefresh) })
+onMounted(() => { void refresh(); timer = setInterval(visibleRefresh, 30_000); protectionTimer = setInterval(refreshActiveJobs, 5_000); document.addEventListener('visibilitychange', visibleRefresh) })
+onBeforeUnmount(() => { active = false; protectionGeneration++; clearInterval(timer); clearInterval(protectionTimer); restartTimers.forEach(clearTimeout); restartTimers.clear(); document.removeEventListener('visibilitychange', visibleRefresh) })
 </script>
 <template>
   <main class="live-dashboard">
-    <LabDashboard :hosts="hosts" :apps="apps" :events="events.slice(0, 3)" lab-name="My lab" live :loading="loading" :cluster-status="loading ? 'Refreshing…' : cluster" :cluster-health="clusterHealth" :detail-open="Boolean(selectedNode || selectedStack || utility)" @action="action" @closed="restoreFocus">
-      <template #command><CommandConsole ref="commandConsole" :api="api" inline @completed="refresh" /></template>
+    <LabDashboard :hosts="hosts" :apps="apps" :load-containers="id => api.listContainers(id)" :events="events" :events-open="utility === 'events'" lab-name="My lab" live :loading="loading" :detail-open="Boolean(selectedNode || selectedStack || utility)" @action="action" @closed="restoreFocus">
+      <template #command><CommandConsole ref="commandConsole" :api="api" inline @completed="refresh" @mutation="acceptedMutation" /></template>
       <template #messages>
         <div v-if="errors.length" role="alert"><p v-for="error in errors" :key="error">{{ error }}</p></div>
         <p v-if="!events.length && !loading">{{ errors.some(error => /^(Events|Activity):/.test(error)) ? 'Events unavailable' : 'No recent events' }}</p>
-        <UiButton v-if="events.length > 3" variant="plain" class="event-history" @click="action('events')">View all {{ events.length }} events</UiButton>
       </template>
       <template #hosts-empty>
         <p v-if="!hosts.length && !loading">{{ errors.some(error => error.startsWith('Hosts:')) ? 'Hosts unavailable' : 'No registered hosts' }}</p>
@@ -118,12 +196,18 @@ onBeforeUnmount(() => { active = false; clearInterval(timer); document.removeEve
       <template #detail>
         <DetailPanel v-if="utility === 'node-key'" title="Node key" @close="close"><dl class="node-key"><template v-for="host in hosts" :key="host.id"><dt><UiNodePlate :name="host.name" /></dt><dd>{{ host.name }}<span>{{ host.address || 'Address unavailable' }}</span></dd></template></dl><p v-if="!hosts.length">No registered hosts</p></DetailPanel>
         <DetailPanel v-if="utility === 'events'" title="Recent lab events" @close="close"><LabEventLog :events="events" readonly /></DetailPanel>
-        <WorkloadDetail v-if="selectedStack" :key="selectedStack.id" :stack="selectedStack" :api="api" @close="close" @command="(args, run) => commandConsole?.launch(args, run)" />
-        <details v-if="selectedStack && backupApi" class="backup-details"><summary>Backups and restore</summary><BackupTargets :key="selectedStack.id + '-backups'" :api="backupApi" :nodes="nodes" :stacks="[selectedStack]" @restored="refresh" /></details>
+        <WorkloadDetail v-if="selectedStack && !['backups', 'replication'].includes(utility)" :key="selectedStack.id" :app="selectedItem" :initial-tab="utility === 'logs' ? 'logs' : 'containers'" :stack="selectedStack" :api="api" @close="close" @action="name => action(`app-${name}`, selectedStack?.id)" @command="workloadCommand" @updated="refresh" />
+        <DetailPanel v-if="selectedStack && utility === 'backups' && backupApi" title="Backups and recovery" @close="close"><BackupTargets :key="selectedStack.id" :api="backupApi" :nodes="nodes" :stacks="[selectedStack]" @restored="refresh" /></DetailPanel>
+        <DetailPanel v-if="selectedStack && utility === 'replication'" title="Replication" @close="close">
+          <AppPlateActions v-if="selectedItem" :app="selectedItem" kind="replication" @action="name => action(`app-${name}`, selectedStack?.id)" />
+          <p v-if="protection[selectedStack.id]?.error" role="alert">{{ protection[selectedStack.id]?.error }}</p>
+          <p v-if="!protection[selectedStack.id]?.jobs.length">No replication jobs</p>
+          <ul class="replication-history"><li v-for="job in protection[selectedStack.id]?.jobs" :key="String(job.id)"><UiPlateCard kind="replication" :label="String(job.state)" :busy="['running', 'idle', 'pending'].includes(String(job.state))" :detail="String(job.error || job.started_at || job.created_at || '')" disabled /><span>{{ job.dataset }} → {{ nodes.find(node => node.id === job.dest_node_id)?.name ?? job.dest_node_id }}</span><p v-if="job.error" role="alert">{{ job.error }}</p></li></ul>
+        </DetailPanel>
         <LiveHostDetail v-if="selectedNode" :key="selectedNode.id" :node="selectedNode" :apps="selectedApps" :storage="storage[selected]" :logs="logs[selected]" :loading="loading" @close="close" />
         <ApplianceUpdates v-if="selectedNode && updateApi" :key="selectedNode.id + '-updates'" :api="updateApi" :node-id="selectedNode.id" />
       </template>
-      <template #footer-actions><div class="dashboard-controls"><span v-if="raft?.dev_mode" role="status">Development mode</span><UiButton variant="plain" :disabled="loading" @click="refresh">{{ loading ? 'Refreshing…' : 'Refresh' }}</UiButton><UiButton variant="plain" @click="emit('logout')">Sign out</UiButton></div></template>
+      <template #footer-actions><div class="dashboard-controls"><span v-if="raft?.dev_mode" role="status">Development mode</span></div></template>
     </LabDashboard>
     <CreateApp v-if="creating" :nodes="nodes" @close="creating = false" @create="createApp" />
   </main>
@@ -131,11 +215,10 @@ onBeforeUnmount(() => { active = false; clearInterval(timer); document.removeEve
 <style scoped>
 .live-dashboard { width: 100%; margin: 0; padding: 0; min-height: 100vh; }
 .dashboard-controls { display: flex; align-items: center; gap: 16px; margin-left: auto; flex-wrap: wrap; }
-.event-history { display: block; margin: 8px 0 0 auto; }
 .node-key { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 16px; }
 .node-key dd { margin: 0; overflow-wrap: anywhere; }
 .node-key dd span { display: block; margin-top: 4px; color: var(--text-placeholder); font-size: var(--text-meta); }
-.backup-details { padding: 16px; background: var(--surface-recessed); }
-.backup-details summary { cursor: pointer; }
+.replication-history { list-style: none; padding: 0; }
+.replication-history li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 [role="alert"] { color: var(--status-error); }
 </style>

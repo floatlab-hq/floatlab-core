@@ -1,4 +1,5 @@
 import type { AuditEntry, Node, Stack, NodeStats, StorageStats, Notification, components } from '@floatlab/client'
+import { parse } from 'yaml'
 import type { HostItem, DirectoryApp, LabEvent } from './types'
 
 export function latest(series?: components['schemas']['MetricSeries']): number | undefined {
@@ -26,15 +27,28 @@ export function hostItem(node: Node, stacks: Stack[], stats?: NodeStats, storage
   }
 }
 
+export function composeNetwork(source: string): { address: string; ports: string[] } {
+  try {
+    const compose = parse(source) as { services?: Record<string, { ports?: (string | number | { published?: string | number; target?: number })[]; networks?: Record<string, { ipv4_address?: string }> }> }
+    const services = Object.values(compose?.services ?? {})
+    const address = services.flatMap(service => Object.values(service?.networks ?? {}).map(network => network?.ipv4_address)).find(Boolean) ?? '—'
+    const ports = [...new Set(services.flatMap(service => Array.isArray(service?.ports) ? service.ports.map(port => typeof port === 'object' && port ? String(port.published ?? port.target ?? '') : String(port).split('/')[0]!.split(':').slice(-2, -1)[0] ?? String(port).split('/')[0]!) : []))].filter(Boolean)
+    return { address, ports }
+  } catch { return { address: '—', ports: [] } }
+}
+
 export function appItem(stack: Stack, nodes: Node[]): DirectoryApp {
   const nodeName = (id?: string | null) => nodes.find(node => node.id === id)?.name ?? id ?? ''
   return {
     id: stack.id, name: stack.name + (stack.replica ? ' (cached)' : ''), logo: '',
     state: stack.state === 'RunningPrimary' || stack.state === 'RunningBackup' ? 'Running'
       : stack.state === 'Idle' ? 'Stopped' : stack.state,
+    hostId: (stack.state === 'RunningBackup' ? stack.secondary_node : stack.primary_node) ?? undefined,
+    hostHealth: nodes.find(node => node.id === (stack.state === 'RunningBackup' ? stack.secondary_node : stack.primary_node))?.status,
     host: nodeName(stack.state === 'RunningBackup' ? stack.secondary_node : stack.primary_node),
     standby: nodeName(stack.state === 'RunningBackup' ? stack.primary_node : stack.secondary_node),
-    address: '—', backup: '', group: '—', tls: undefined,
+    ...composeNetwork(stack.compose_file), backup: '', group: '—', tls: undefined, replica: stack.replica,
+    hostSwitch: stack.secondary_node && !stack.replica ? stack.state === 'RunningPrimary' ? 'triggerFailover' : stack.state === 'RunningBackup' ? 'restoreStack' : undefined : undefined,
   }
 }
 
