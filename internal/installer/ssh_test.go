@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
@@ -123,6 +124,56 @@ func TestFetchSSHKeys(t *testing.T) {
 	sub, err := (&Service{identity: Appliance{NodeID: "node", HostID: "12345678", JWTSecret: strings.Repeat("a", 64)}, key: make([]byte, 32)}).submission(context.Background(), config, false)
 	if err != nil || sub.SSHAuthorizedKeys != key {
 		t.Fatalf("submission: %v %q", err, sub.SSHAuthorizedKeys)
+	}
+	other := testSSHKey(t)
+	config.SSHPublicKeys = []string{key, other}
+	sub, err = (&Service{identity: Appliance{NodeID: "node", HostID: "12345678", JWTSecret: strings.Repeat("a", 64)}, key: make([]byte, 32)}).submission(context.Background(), config, false)
+	if err != nil || sub.SSHAuthorizedKeys != key+other {
+		t.Fatalf("combined keys: %v %q", err, sub.SSHAuthorizedKeys)
+	}
+}
+
+func TestConfiguredSSHPublicKeys(t *testing.T) {
+	key, other := testSSHKey(t), testSSHKey(t)
+	for _, tc := range []struct {
+		name string
+		keys []string
+		want string
+	}{
+		{"omitted", nil, ""},
+		{"empty", []string{}, ""},
+		{"one", []string{key}, key},
+		{"multiple", []string{key, other}, key + other},
+		{"duplicates", []string{strings.TrimSpace(key) + " laptop", key}, key},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := validConfig()
+			config.SSHPublicKeys = tc.keys
+			data, err := json.Marshal(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded InstallConfig
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			s := &Service{identity: Appliance{NodeID: "node", HostID: "12345678", JWTSecret: strings.Repeat("a", 64)}, key: make([]byte, 32)}
+			sub, err := s.submission(context.Background(), decoded, false)
+			if err != nil || sub.SSHAuthorizedKeys != tc.want {
+				t.Fatalf("submission: %v %q", err, sub.SSHAuthorizedKeys)
+			}
+		})
+	}
+	for _, keys := range [][]string{{""}, {"not a key"}, {key, "bad"}, {"command=\"id\" " + key}, {"-----BEGIN OPENSSH PRIVATE KEY-----"}} {
+		config := validConfig()
+		config.SSHPublicKeys = keys
+		if err := validateAccount(config); err == nil || !strings.Contains(err.Error(), "ssh_public_keys") {
+			t.Fatalf("accepted invalid keys: %v", err)
+		}
+	}
+	var config InstallConfig
+	if err := json.Unmarshal([]byte(`{"ssh_public_keys":"not-an-array"}`), &config); err == nil {
+		t.Fatal("accepted non-array keys")
 	}
 }
 

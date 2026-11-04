@@ -409,3 +409,21 @@ configuration editable for retry or selecting None. Imported keys are an
 installation-time snapshot: later provider changes are not synchronized. They
 are stored in `/floatlab/system/etc/root-authorized-keys` and survive reboots and
 OS updates. Root SSH password login remains disabled.
+
+Installer JSON configuration also accepts an optional `ssh_public_keys` array
+for supplying keys directly, without a network fetch:
+
+```json
+{
+  "ssh_public_keys": [
+    "ssh-ed25519 <base64-public-key> laptop",
+    "ssh-ed25519 <base64-public-key> desktop"
+  ]
+}
+```
+
+These are additional configuration fields; other required installation settings
+still apply. This field is not exposed in the installer UI. If a key source is
+also selected, its keys are combined with the supplied keys and duplicates are
+removed. Invalid keys, private keys, certificates, and authorized-key options
+are rejected. All supplied keys grant root SSH access.

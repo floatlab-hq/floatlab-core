@@ -28,6 +28,7 @@ type Request struct {
 	Config       *InstallConfig `json:"config,omitempty"`
 }
 type InstallConfig struct {
+	SSHPublicKeys        []string           `json:"ssh_public_keys,omitempty"`
 	SSHKeySource         string             `json:"ssh_key_source,omitempty"`
 	SSHKeyReference      string             `json:"ssh_key_reference,omitempty"`
 	NodeName             string             `json:"node_name"`
@@ -490,6 +491,11 @@ func checkFirmware() error {
 }
 
 func validateAccount(config InstallConfig) error {
+	if len(config.SSHPublicKeys) > 0 {
+		if _, err := parseSSHKeys([]byte(strings.Join(config.SSHPublicKeys, "\n"))); err != nil {
+			return fmt.Errorf("ssh_public_keys: %w", err)
+		}
+	}
 	if _, err := sshKeyURL(config.SSHKeySource, config.SSHKeyReference); err != nil {
 		return err
 	}
@@ -566,6 +572,12 @@ func (s *Service) submission(ctx context.Context, config InstallConfig, enroll b
 	sub.SSHAuthorizedKeys, err = fetchSSHKeys(ctx, config.SSHKeySource, config.SSHKeyReference)
 	if err != nil {
 		return sub, err
+	}
+	if len(config.SSHPublicKeys) > 0 {
+		sub.SSHAuthorizedKeys, err = parseSSHKeys([]byte(sub.SSHAuthorizedKeys + strings.Join(config.SSHPublicKeys, "\n")))
+		if err != nil {
+			return sub, err
+		}
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(config.Password), bcrypt.DefaultCost)
 	if err != nil {
