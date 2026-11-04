@@ -1,6 +1,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -27,6 +28,19 @@ def lock_fixture():
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_management_workflow_checksums(self):
+        workflow = (release.ROOT / ".github/workflows/release-manage.yml").read_text()
+        command, = [line.strip() for line in workflow.splitlines()
+                    if line.lstrip().startswith("sha256sum ")]
+        names = {"lab-linux-x64", "lab-linux-arm64", "lab-darwin-x64", "lab-darwin-arm64", "manage-manifest.json"}
+        with tempfile.TemporaryDirectory() as directory:
+            for name in names:
+                (Path(directory) / name).write_text(name)
+            subprocess.run(command, shell=True, cwd=directory, check=True, capture_output=True)
+            checksums = (Path(directory) / "SHA256SUMS").read_text()
+            self.assertEqual({line.split("  ", 1)[1] for line in checksums.splitlines()}, names)
+            subprocess.run(["sha256sum", "-c", "SHA256SUMS"], cwd=directory, check=True, capture_output=True)
+
     def test_lock_validation(self):
         with patch.object(release, "run") as run:
             release.validate_lock(lock_fixture())

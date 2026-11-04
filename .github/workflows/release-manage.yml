@@ -1,5 +1,11 @@
 name: Release management
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing management release tag to publish
+        type: string
+        required: true
   workflow_call:
     inputs:
       prerelease:
@@ -18,22 +24,29 @@ permissions:
 jobs:
   manage:
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - name: Validate publication configuration
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_NAMESPACE }}
         run: |
+          [[ "$RELEASE_TAG" == manage-v* ]]
+          bash scripts/check-release-tag.sh "$RELEASE_TAG"
           test -n "$DOCKERHUB_USERNAME" && test -n "$DOCKERHUB_TOKEN" && test -n "$DOCKERHUB_NAMESPACE"
           [[ "$DOCKERHUB_NAMESPACE" =~ ^[a-z0-9][a-z0-9_-]*$ ]]
           {
-            echo "VERSION=${GITHUB_REF_NAME#manage-v}"
-            echo "GHCR=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/floatlab-manage:${GITHUB_REF_NAME#manage-v}"
-            echo "DOCKERHUB=docker.io/$DOCKERHUB_NAMESPACE/floatlab-manage:${GITHUB_REF_NAME#manage-v}"
+            echo "VERSION=${RELEASE_TAG#manage-v}"
+            echo "GHCR=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/floatlab-manage:${RELEASE_TAG#manage-v}"
+            echo "DOCKERHUB=docker.io/$DOCKERHUB_NAMESPACE/floatlab-manage:${RELEASE_TAG#manage-v}"
+            echo "GIT_COMMIT=$(git rev-parse HEAD)"
           } >> "$GITHUB_ENV"
-          python3 scripts/release.py notes "$GITHUB_REF_NAME" > /tmp/release-notes.md
+          python3 scripts/release.py notes "$RELEASE_TAG" > /tmp/release-notes.md
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -70,7 +83,7 @@ jobs:
       - name: Build management image once
         run: |
           docker buildx build --platform linux/amd64 --load --provenance=false --sbom=false \
-            --build-arg VERSION="$VERSION" --build-arg GIT_COMMIT="$GITHUB_SHA" \
+            --build-arg VERSION="$VERSION" --build-arg GIT_COMMIT="$GIT_COMMIT" \
             --tag "$GHCR" --tag "$DOCKERHUB" --file docker/floatlab-control.Dockerfile .
       - name: Verify management UI and API over HTTP
         run: python3 scripts/check-manage-image.py "$GHCR" "$VERSION"
@@ -81,12 +94,13 @@ jobs:
       - name: Verify registry images and publish metadata
         run: |
           mkdir -p release-dist
-          python3 scripts/release.py manage-manifest "$VERSION" "$GITHUB_SHA" "$GHCR" "$DOCKERHUB" release-dist
+          python3 scripts/release.py manage-manifest "$VERSION" "$GIT_COMMIT" "$GHCR" "$DOCKERHUB" release-dist
           cd release-dist
-          sha256sum floatlab-* lab-* manage-manifest.json > SHA256SUMS
+          sha256sum lab-* manage-manifest.json > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: release-dist/*
           body_path: /tmp/release-notes.md
           fail_on_unmatched_files: true
-          prerelease: ${{ inputs.prerelease }}
+          prerelease: ${{ contains(env.VERSION, '-') }}
