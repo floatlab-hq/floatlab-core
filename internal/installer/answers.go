@@ -18,6 +18,13 @@ type Answers struct {
 	Command      string        `toml:"command"`
 	Confirmation string        `toml:"confirmation"`
 	Config       InstallConfig `toml:"config"`
+	SSH          SSHConfig     `toml:"ssh,omitempty"`
+}
+
+func (a Answers) installConfig() InstallConfig {
+	config := a.Config
+	config.SSH = a.SSH
+	return config
 }
 
 func NewAnswers(command string, config InstallConfig) (Answers, error) {
@@ -36,7 +43,9 @@ func NewAnswers(command string, config InstallConfig) (Answers, error) {
 		config.PasswordHash, config.RecoveryPasswordHash = string(password), string(recovery)
 		config.Password, config.PasswordConfirmation, config.RecoveryPassword, config.RecoveryConfirmation = "", "", "", ""
 	}
-	answers := Answers{Version: 1, Command: command, Confirmation: "ERASE ALL DATA", Config: config}
+	ssh := config.SSH
+	config.SSH = SSHConfig{}
+	answers := Answers{Version: 1, Command: command, Confirmation: "ERASE ALL DATA", Config: config, SSH: ssh}
 	return answers, answers.Validate()
 }
 
@@ -56,7 +65,7 @@ func (a Answers) Validate() error {
 	if err := (Appliance{NodeName: a.Config.NodeName, Timezone: a.Config.Timezone, Network: a.Config.Network, EnableLab: a.Config.EnableLab}).validateSettings(); err != nil {
 		return err
 	}
-	return validateAccount(a.Config)
+	return validateAccount(a.installConfig())
 }
 
 func ReadAnswers(input io.Reader) (Answers, error) {
@@ -90,6 +99,7 @@ func (s *Service) InstallAnswers(parent context.Context, answers Answers, reboot
 		return err
 	}
 	ctx, cancel := context.WithCancel(parent)
+	config := answers.installConfig()
 	input, requests := io.Pipe()
 	events, writer := io.Pipe()
 	done := make(chan error, 1)
@@ -122,7 +132,7 @@ func (s *Service) InstallAnswers(parent context.Context, answers Answers, reboot
 		case "preview":
 			request = Request{Type: "confirm", Command: event.Command, Confirmation: answers.Confirmation}
 		case "confirm":
-			request = Request{Type: "configure", Config: &answers.Config}
+			request = Request{Type: "configure", Config: &config}
 		case "complete":
 			if !reboot {
 				return nil

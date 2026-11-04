@@ -330,6 +330,9 @@ username = 'admin'
 password_hash = 'REPLACE_WITH_EXPORTED_BCRYPT_HASH'
 recovery_password_hash = 'REPLACE_WITH_EXPORTED_BCRYPT_HASH'
 
+[ssh]
+public_keys = ['ssh-ed25519 REPLACE_WITH_PUBLIC_KEY laptop']
+
 [config.network]
 version = 1
 excluded_macs = []
@@ -482,12 +485,12 @@ installation-time snapshot: later provider changes are not synchronized. They
 are stored in `/floatlab/system/etc/root-authorized-keys` and survive reboots and
 OS updates. Root SSH password login remains disabled.
 
-The answer file's `[config]` section accepts an optional `ssh_public_keys` array
+The answer file's optional `[ssh]` section accepts a `public_keys` array
 for supplying keys directly, without a network fetch:
 
 ```toml
-[config]
-ssh_public_keys = [
+[ssh]
+public_keys = [
   "ssh-ed25519 <base64-public-key> laptop",
   "ssh-ed25519 <base64-public-key> desktop"
 ]
@@ -498,5 +501,17 @@ still apply. This field is not exposed in the installer UI. If a key source is
 also selected, its keys are combined with the supplied keys and duplicates are
 removed. Invalid keys, private keys, certificates, and authorized-key options
 are rejected. All supplied keys grant root SSH access.
-The same field is also accepted in installer JSON configuration. Answer files
-can additionally use `ssh_key_source` and `ssh_key_reference` for hosted imports.
+For hosted imports, add `source = "github"` and `reference = "username"` under
+`[ssh]`. Other sources are `gitlab`, `launchpad`, and `web`; Web uses a URL as
+its reference. Omit `[ssh]` when no SSH keys are needed.
+Installer JSON configuration uses the same fields in a nested `ssh` object:
+
+```json
+{
+  "ssh": {
+    "public_keys": ["ssh-ed25519 <base64-public-key> laptop"],
+    "source": "github",
+    "reference": "username"
+  }
+}
+```

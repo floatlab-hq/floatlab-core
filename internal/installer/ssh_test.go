@@ -48,7 +48,7 @@ func TestSSHKeyURL(t *testing.T) {
 		}
 	}
 	config := validConfig()
-	config.SSHKeySource, config.SSHKeyReference = "github", "a/b"
+	config.SSH.Source, config.SSH.Reference = "github", "a/b"
 	if validateAccount(config) == nil {
 		t.Fatal("account validation accepted invalid key reference")
 	}
@@ -120,13 +120,13 @@ func TestFetchSSHKeys(t *testing.T) {
 		t.Fatal("ignored timeout")
 	}
 	config := validConfig()
-	config.SSHKeySource, config.SSHKeyReference = "web", server.URL+"/keys"
+	config.SSH.Source, config.SSH.Reference = "web", server.URL+"/keys"
 	sub, err := (&Service{identity: Appliance{NodeID: "node", HostID: "12345678", JWTSecret: strings.Repeat("a", 64)}, key: make([]byte, 32)}).submission(context.Background(), config, false)
 	if err != nil || sub.SSHAuthorizedKeys != key {
 		t.Fatalf("submission: %v %q", err, sub.SSHAuthorizedKeys)
 	}
 	other := testSSHKey(t)
-	config.SSHPublicKeys = []string{key, other}
+	config.SSH.PublicKeys = []string{key, other}
 	sub, err = (&Service{identity: Appliance{NodeID: "node", HostID: "12345678", JWTSecret: strings.Repeat("a", 64)}, key: make([]byte, 32)}).submission(context.Background(), config, false)
 	if err != nil || sub.SSHAuthorizedKeys != key+other {
 		t.Fatalf("combined keys: %v %q", err, sub.SSHAuthorizedKeys)
@@ -148,10 +148,13 @@ func TestConfiguredSSHPublicKeys(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			config := validConfig()
-			config.SSHPublicKeys = tc.keys
+			config.SSH.PublicKeys = tc.keys
 			data, err := json.Marshal(config)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if len(tc.keys) > 0 && !strings.Contains(string(data), `"ssh":{"public_keys":`) {
+				t.Fatal("JSON must nest public_keys under ssh")
 			}
 			var decoded InstallConfig
 			if err := json.Unmarshal(data, &decoded); err != nil {
@@ -166,13 +169,13 @@ func TestConfiguredSSHPublicKeys(t *testing.T) {
 	}
 	for _, keys := range [][]string{{""}, {"not a key"}, {key, "bad"}, {"command=\"id\" " + key}, {"-----BEGIN OPENSSH PRIVATE KEY-----"}} {
 		config := validConfig()
-		config.SSHPublicKeys = keys
-		if err := validateAccount(config); err == nil || !strings.Contains(err.Error(), "ssh_public_keys") {
+		config.SSH.PublicKeys = keys
+		if err := validateAccount(config); err == nil || !strings.Contains(err.Error(), "ssh.public_keys") {
 			t.Fatalf("accepted invalid keys: %v", err)
 		}
 	}
 	var config InstallConfig
-	if err := json.Unmarshal([]byte(`{"ssh_public_keys":"not-an-array"}`), &config); err == nil {
+	if err := json.Unmarshal([]byte(`{"ssh":{"public_keys":"not-an-array"}}`), &config); err == nil {
 		t.Fatal("accepted non-array keys")
 	}
 }

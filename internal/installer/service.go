@@ -28,9 +28,7 @@ type Request struct {
 	Config       *InstallConfig `json:"config,omitempty"`
 }
 type InstallConfig struct {
-	SSHPublicKeys        []string           `json:"ssh_public_keys,omitempty" toml:"ssh_public_keys,omitempty"`
-	SSHKeySource         string             `json:"ssh_key_source,omitempty" toml:"ssh_key_source,omitempty"`
-	SSHKeyReference      string             `json:"ssh_key_reference,omitempty" toml:"ssh_key_reference,omitempty"`
+	SSH                  SSHConfig          `json:"ssh,omitempty" toml:"-"`
 	NodeName             string             `json:"node_name" toml:"node_name"`
 	Timezone             string             `json:"timezone" toml:"timezone"`
 	Network              hostnetwork.Config `json:"network" toml:"network"`
@@ -494,12 +492,12 @@ func checkFirmware() error {
 }
 
 func validateAccount(config InstallConfig) error {
-	if len(config.SSHPublicKeys) > 0 {
-		if _, err := parseSSHKeys([]byte(strings.Join(config.SSHPublicKeys, "\n"))); err != nil {
-			return fmt.Errorf("ssh_public_keys: %w", err)
+	if len(config.SSH.PublicKeys) > 0 {
+		if _, err := parseSSHKeys([]byte(strings.Join(config.SSH.PublicKeys, "\n"))); err != nil {
+			return fmt.Errorf("ssh.public_keys: %w", err)
 		}
 	}
-	if _, err := sshKeyURL(config.SSHKeySource, config.SSHKeyReference); err != nil {
+	if _, err := sshKeyURL(config.SSH.Source, config.SSH.Reference); err != nil {
 		return err
 	}
 	if config.PasswordHash != "" || config.RecoveryPasswordHash != "" {
@@ -553,12 +551,12 @@ func (s *Service) submission(ctx context.Context, config InstallConfig, enroll b
 		return sub, err
 	}
 	if !enroll {
-		sub.SSHAuthorizedKeys, err = fetchSSHKeys(ctx, config.SSHKeySource, config.SSHKeyReference)
+		sub.SSHAuthorizedKeys, err = fetchSSHKeys(ctx, config.SSH.Source, config.SSH.Reference)
 		if err != nil {
 			return sub, err
 		}
-		if len(config.SSHPublicKeys) > 0 {
-			sub.SSHAuthorizedKeys, err = parseSSHKeys([]byte(sub.SSHAuthorizedKeys + strings.Join(config.SSHPublicKeys, "\n")))
+		if len(config.SSH.PublicKeys) > 0 {
+			sub.SSHAuthorizedKeys, err = parseSSHKeys([]byte(sub.SSHAuthorizedKeys + strings.Join(config.SSH.PublicKeys, "\n")))
 			if err != nil {
 				return sub, err
 			}

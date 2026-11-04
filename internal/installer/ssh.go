@@ -13,6 +13,12 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+type SSHConfig struct {
+	PublicKeys []string `json:"public_keys,omitempty" toml:"public_keys,omitempty"`
+	Source     string   `json:"source,omitempty" toml:"source,omitempty"`
+	Reference  string   `json:"reference,omitempty" toml:"reference,omitempty"`
+}
+
 const maxSSHKeyBytes = 1 << 20
 
 func sshKeyURL(source, reference string) (string, error) {

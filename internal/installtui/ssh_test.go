@@ -51,7 +51,7 @@ func TestSSHSourceSelectorAndSubmission(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &req); err != nil {
 		t.Fatal(err)
 	}
-	if req.Config.SSHKeySource != "web" || req.Config.SSHKeyReference != "http://localhost:8080/keys" {
+	if req.Config.SSH.Source != "web" || req.Config.SSH.Reference != "http://localhost:8080/keys" {
 		t.Fatal("lost SSH config")
 	}
 	m.pending = false

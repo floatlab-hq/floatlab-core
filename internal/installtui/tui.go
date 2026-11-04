@@ -702,7 +702,7 @@ func (m *Model) config() installer.InstallConfig {
 			network.DNSServers = append(network.DNSServers, v)
 		}
 	}
-	return installer.InstallConfig{SSHKeySource: value(13), SSHKeyReference: value(14), NodeName: value(0), Timezone: value(1), Network: network, Username: value(7), Password: value(8), PasswordConfirmation: value(9), RecoveryPassword: value(11), RecoveryConfirmation: value(12), TOTP: value(10) == "yes", TOTPCode: m.totpCode, RecoverySaved: m.enrollment != nil && m.confirmation.Value() == "SAVED"}
+	return installer.InstallConfig{SSH: installer.SSHConfig{Source: value(13), Reference: value(14)}, NodeName: value(0), Timezone: value(1), Network: network, Username: value(7), Password: value(8), PasswordConfirmation: value(9), RecoveryPassword: value(11), RecoveryConfirmation: value(12), TOTP: value(10) == "yes", TOTPCode: m.totpCode, RecoverySaved: m.enrollment != nil && m.confirmation.Value() == "SAVED"}
 }
 func size(bytes int64) string { return fmt.Sprintf("%.1f GiB", float64(bytes)/float64(installer.GiB)) }
 func partitions(d installer.Disk) string {
@@ -865,8 +865,8 @@ func (m *Model) body() string {
 		}
 		rows = append(rows, [2]string{"Console recovery", recoveryPassword})
 		sshSource := "Disabled"
-		if c.SSHKeySource != "none" && c.SSHKeySource != "" {
-			sshSource = c.SSHKeySource + ": " + c.SSHKeyReference
+		if c.SSH.Source != "none" && c.SSH.Source != "" {
+			sshSource = c.SSH.Source + ": " + c.SSH.Reference
 		}
 		rows = append(rows, [2]string{"Root SSH access", sshSource})
 		if c.TOTP {

@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,8 +75,8 @@ func TestAnswersRejectInvalidInputBeforeStartingInstaller(t *testing.T) {
 		"network":      func(a *Answers) { a.Config.Network.Version = 999 },
 		"totp":         func(a *Answers) { a.Config.TOTP = true },
 		"lab DHCP":     func(a *Answers) { a.Config.EnableLab = true },
-		"SSH keys":     func(a *Answers) { a.Config.SSHPublicKeys = []string{"not a public key"} },
-		"SSH source":   func(a *Answers) { a.Config.SSHKeySource, a.Config.SSHKeyReference = "github", "bad/name" },
+		"SSH keys":     func(a *Answers) { a.SSH.PublicKeys = []string{"not a public key"} },
+		"SSH source":   func(a *Answers) { a.SSH.Source, a.SSH.Reference = "github", "bad/name" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			answers := base
@@ -94,9 +96,13 @@ func TestAnswersRejectInvalidInputBeforeStartingInstaller(t *testing.T) {
 }
 
 func TestAnswersPreserveSSHPublicKeys(t *testing.T) {
-	answers := testAnswers(t)
 	key, other := testSSHKey(t), testSSHKey(t)
-	answers.Config.SSHPublicKeys = []string{strings.TrimSpace(key), strings.TrimSpace(other), strings.TrimSpace(key)}
+	config := validConfig()
+	config.SSH.PublicKeys = []string{strings.TrimSpace(key), strings.TrimSpace(other), strings.TrimSpace(key)}
+	answers, err := NewAnswers(ZPoolCommand([]Disk{{Path: "/dev/disk/by-id/mock-a"}}), config)
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(t.TempDir(), "answers.toml")
 	if err := WriteAnswers(path, answers); err != nil {
 		t.Fatal(err)
@@ -105,17 +111,57 @@ func TestAnswersPreserveSSHPublicKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(data, []byte("ssh_public_keys")) {
+	if !bytes.Contains(data, []byte("[ssh]")) || !bytes.Contains(data, []byte("public_keys")) || bytes.Contains(data, []byte("ssh_public_keys")) {
 		t.Fatal("answer file is missing SSH public keys")
 	}
 	loaded, err := ReadAnswers(bytes.NewReader(data))
-	if err != nil || len(loaded.Config.SSHPublicKeys) != 3 {
+	if err != nil || len(loaded.SSH.PublicKeys) != 3 {
 		t.Fatal("answer file lost SSH keys", err)
 	}
 	s := &Service{identity: Appliance{NodeID: "node", HostID: "12345678", JWTSecret: strings.Repeat("a", 64)}}
-	sub, err := s.submission(context.Background(), loaded.Config, false)
+	sub, err := s.submission(context.Background(), loaded.installConfig(), false)
 	if err != nil || sub.SSHAuthorizedKeys != key+other {
 		t.Fatalf("pre-hashed answer submission lost or duplicated SSH keys: %q %v", sub.SSHAuthorizedKeys, err)
+	}
+}
+
+func TestAnswersSSHSourceReachesUnattendedInstallation(t *testing.T) {
+	key := testSSHKey(t)
+	fetched := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetched <- struct{}{}
+		_, _ = io.WriteString(w, key)
+	}))
+	defer server.Close()
+	config := validConfig()
+	config.SSH.Source, config.SSH.Reference = "web", server.URL
+	answers, err := NewAnswers(ZPoolCommand([]Disk{{Path: "/dev/disk/by-id/mock-a"}}), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "answers.toml")
+	if err := WriteAnswers(path, answers); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := ReadAnswers(bytes.NewReader(data))
+	if err != nil || loaded.SSH.Source != "web" || loaded.SSH.Reference != server.URL {
+		t.Fatal("answer file lost SSH source", err)
+	}
+	if len(fetched) != 0 {
+		t.Fatal("export or validation fetched keys")
+	}
+	s := &Service{Mock: true, StepDelay: time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.InstallAnswers(ctx, loaded, false, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if len(fetched) != 1 {
+		t.Fatal("unattended configuration did not fetch the SSH source")
 	}
 }
 
