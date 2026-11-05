@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -64,6 +65,42 @@ def image_info(reference):
     if info["Architecture"] != "amd64" or info["Os"] != "linux":
         raise ValueError(f"Expected linux/amd64: {reference}")
     return info
+
+
+def archive_image_id(path, image):
+    with tarfile.open(path) as archive:
+        manifest = json.load(archive.extractfile("manifest.json"))
+        if len(manifest) != 1 or image not in manifest[0].get("RepoTags", []):
+            raise ValueError(f"Expected exactly one image tagged {image} in {path.name}")
+        config = archive.extractfile(manifest[0]["Config"]).read()
+        info = json.loads(config)
+        if info.get("architecture") != "amd64" or info.get("os") != "linux":
+            raise ValueError(f"Expected linux/amd64 configuration in {path.name}")
+        return "sha256:" + hashlib.sha256(config).hexdigest()
+
+
+def verify_bundle(directory):
+    images = read(directory / "images.json")
+    expected = {name + ".tar" for name in ["floatlab-control", "rqlite", "victoria-metrics", "victoria-logs"]}
+    if len(images) != len(expected) or {image["archive"] for image in images} != expected:
+        raise ValueError("Expected exactly the four core image archives")
+    compose = (directory / "docker-compose.yml").read_text()
+    for image in images:
+        actual = archive_image_id(directory / "images" / image["archive"], image["image"])
+        if image["id"] != actual:
+            raise ValueError(f"Bundled image ID mismatch for {image['archive']}: metadata {image['id']}, saved configuration {actual}")
+        if "image: " + image["image"] + "\n" not in compose:
+            raise ValueError(f"Compose does not reference bundled image {image['image']}")
+
+
+def verify_iso(path):
+    with tempfile.TemporaryDirectory(prefix="floatlab-verify-iso-") as temporary:
+        directory = Path(temporary)
+        run("xorriso", "-osirrox", "on", "-indev", str(path),
+            "-extract", "/images", str(directory / "images"),
+            "-extract", "/images.json", str(directory / "images.json"),
+            "-extract", "/docker-compose.yml", str(directory / "docker-compose.yml"))
+        verify_bundle(directory)
 
 
 def manage_manifest(version, commit, ghcr, dockerhub, directory):
@@ -158,12 +195,13 @@ def container_bundle(directory, management, sidecars, expected_manage_id=None):
         info = image_info(reference)
         if service == "floatlab-control" and expected_manage_id and info["Id"] != expected_manage_id:
             raise ValueError("Management image does not match release metadata")
-        # Docker save/load does not retain RepoDigests; an ID-derived tag survives offline loading.
+        # Local tags survive save/load; daemon IDs can differ between image stores.
         local = "floatlab-bundle/" + service + ":" + info["Id"].split(":")[1]
         run("docker", "tag", reference, local)
         archive = service + ".tar"
         run("docker", "save", "--output", str(directory / "images" / archive), local)
-        images.append({"archive": archive, "image": local, "id": info["Id"], "source": reference})
+        images.append({"archive": archive, "image": local,
+                       "id": archive_image_id(directory / "images" / archive, local), "source": reference})
         pattern = rf"(^  {re.escape(service)}:\n(?:.*\n)*?    image: )[^\n]+"
         compose, count = re.subn(pattern, lambda m: m[1] + local, compose, count=1, flags=re.M)
         if count != 1:
@@ -172,6 +210,7 @@ def container_bundle(directory, management, sidecars, expected_manage_id=None):
         compose = compose.replace("      FLOATLAB_ACTIVATION_DIR:", "      GOCOVERDIR: /floatlab/system/integration-coverage\n      FLOATLAB_ACTIVATION_DIR:")
     (directory / "docker-compose.yml").write_text(compose)
     write(directory / "images.json", images)
+    verify_bundle(directory)
 
 
 def finish_bundle(directory, host, iso_version, manage_version):
@@ -236,6 +275,8 @@ def main():
     prepare.add_argument("--version", required=True)
     prepare.add_argument("--local-host", type=Path)
     sub.add_parser("validate-lock")
+    verify = sub.add_parser("verify-iso")
+    verify.add_argument("iso", type=Path)
     args = parser.parse_args()
     if args.command == "notes":
         print(release_notes(args.tag), end="")
@@ -245,6 +286,8 @@ def main():
         manage_manifest(args.version, args.commit, args.ghcr, args.dockerhub, args.directory)
     elif args.command == "prepare-iso":
         prepare_iso(args.directory.resolve(), args.version, args.local_host)
+    elif args.command == "verify-iso":
+        verify_iso(args.iso.resolve())
     else:
         validate_lock(read(LOCK))
 

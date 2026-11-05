@@ -39,6 +39,13 @@ jobs:
           cp /tmp/floatlab-iso-bundle/floatlab-manifest.json release-dist/
           cd release-dist
           sha256sum ./*.iso floatlab-manifest.json > SHA256SUMS
+      - name: Verify saved image identities inside finished ISO
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xorriso
+          for iso in release-dist/*.iso; do
+            python3 scripts/release.py verify-iso "$iso"
+          done
       - uses: softprops/action-gh-release@v2
         with:
           files: release-dist/*

@@ -125,9 +125,20 @@ compatibility, saves all four container images, and builds only the installer
 and live environment. It selects the host's pinned Nixpkgs revision and rejects
 a live kernel that differs from the released host kernel. Host and management
 are never rebuilt by the ISO release job. The installer persists verified image
-archives and ID-derived local image tags, then loads them without pulling.
+archives and stable local image tags, then loads them without pulling.
 The OS dataset uses the host version; ISO and management versions are separate
 fields in the installation manifest.
+
+Bundle assembly derives each install-time image ID from the saved image's
+configuration bytes, independent of the build daemon's image store. Before
+publication, CI extracts the images and metadata from the finished ISO and checks
+all four IDs, Linux/amd64 configurations, archive tags, and Compose references.
+Any mismatch fails the release before its assets are uploaded. To run the same
+check locally with Python 3.11+ and `xorriso` installed:
+
+```bash
+python3 scripts/release.py verify-iso /path/to/floatlab-installer.iso
+```
 
 Management's host range lives in `pkg/release/compatibility.json`: minimum is
 inclusive, maximum exclusive. Hostd's Unix-socket `sys.version` command reports

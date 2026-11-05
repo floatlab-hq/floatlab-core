@@ -1,14 +1,45 @@
 import importlib.util
+import hashlib
+import io
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
+import tarfile
 import unittest
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("release", Path(__file__).with_name("release.py"))
 release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
+
+
+def image_archive(path, tag, architecture="amd64"):
+    config = json.dumps({"architecture": architecture, "os": "linux", "config": {}}).encode()
+    digest = hashlib.sha256(config).hexdigest()
+    config_path = "blobs/sha256/" + digest
+    manifest = json.dumps([{"Config": config_path, "RepoTags": [tag], "Layers": []}]).encode()
+    with tarfile.open(path, "w") as archive:
+        for name, data in [("manifest.json", manifest), (config_path, config)]:
+            member = tarfile.TarInfo(name)
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+    return "sha256:" + digest
+
+
+def bundle_fixture(directory):
+    (directory / "images").mkdir()
+    images = []
+    for service in ["floatlab-control", "rqlite", "victoria-metrics", "victoria-logs"]:
+        tag = "floatlab-bundle/" + service + ":test"
+        archive = service + ".tar"
+        digest = image_archive(directory / "images" / archive, tag)
+        images.append({"archive": archive, "image": tag, "id": digest})
+    release.write(directory / "images.json", images)
+    (directory / "docker-compose.yml").write_text("services:\n" + "".join(
+        f"  {image['archive'][:-4]}:\n    image: {image['image']}\n" for image in images))
+    return images
 
 
 def lock_fixture():
@@ -28,6 +59,62 @@ def lock_fixture():
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_archive_requires_expected_tag_and_platform(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "image.tar"
+            image_archive(path, "example:test")
+            with self.assertRaisesRegex(ValueError, "tagged"):
+                release.archive_image_id(path, "other:test")
+            image_archive(path, "example:test", architecture="arm64")
+            with self.assertRaisesRegex(ValueError, "linux/amd64"):
+                release.archive_image_id(path, "example:test")
+
+    def test_bundle_rejects_image_store_digest_instead_of_saved_config_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            images = bundle_fixture(directory)
+            release.verify_bundle(directory)
+            images[0]["id"] = "sha256:" + "a" * 64
+            release.write(directory / "images.json", images)
+            with self.assertRaisesRegex(ValueError, "ID mismatch for floatlab-control.tar"):
+                release.verify_bundle(directory)
+
+    def test_bundle_rejects_missing_images_and_compose_mismatches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            images = bundle_fixture(directory)
+            release.write(directory / "images.json", images[:-1])
+            with self.assertRaisesRegex(ValueError, "four core"):
+                release.verify_bundle(directory)
+            release.write(directory / "images.json", images)
+            (directory / "docker-compose.yml").write_text("services: {}\n")
+            with self.assertRaisesRegex(ValueError, "Compose does not reference"):
+                release.verify_bundle(directory)
+
+    def test_iso_verifies_extracted_archives_not_build_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            images = bundle_fixture(directory)
+
+            def extract(*args):
+                self.assertEqual(args[:5], ("xorriso", "-osirrox", "on", "-indev", "/finished.iso"))
+                for i in range(5, len(args), 3):
+                    self.assertEqual(args[i], "-extract")
+                    source = directory / args[i + 1].lstrip("/")
+                    target = Path(args[i + 2])
+                    if source.is_dir():
+                        shutil.copytree(source, target)
+                    else:
+                        shutil.copyfile(source, target)
+                return ""
+
+            with patch.object(release, "run", side_effect=extract):
+                release.verify_iso(Path("/finished.iso"))
+                images[0]["id"] = "sha256:" + "a" * 64
+                release.write(directory / "images.json", images)
+                with self.assertRaisesRegex(ValueError, "ID mismatch"):
+                    release.verify_iso(Path("/finished.iso"))
+
     def test_management_workflow_checksums(self):
         workflow = (release.ROOT / ".github/workflows/release-manage.yml").read_text()
         command, = [line.strip() for line in workflow.splitlines()
@@ -79,7 +166,7 @@ class ReleaseTests(unittest.TestCase):
     def test_container_bundle_and_checksums(self):
         def docker(*args):
             if args[:2] == ("docker", "save"):
-                Path(args[3]).write_bytes(b"image archive")
+                image_archive(Path(args[3]), args[4])
             return ""
 
         with tempfile.TemporaryDirectory() as directory, \
@@ -94,6 +181,8 @@ class ReleaseTests(unittest.TestCase):
             self.assertNotIn("floatlab-control:local", compose)
             for image in images:
                 self.assertIn("image: " + image["image"], compose)
+                self.assertNotEqual(image["id"], "sha256:" + "a" * 64)
+                self.assertEqual(image["id"], release.archive_image_id(directory / "images" / image["archive"], image["image"]))
             for name in ["floatlab-root.tar.gz", "zfsbootmenu.EFI"]:
                 (directory / name).write_bytes(b"host")
             release.finish_bundle(directory, {"version": "0.1.0"}, "0.2.0", "0.3.0")
