@@ -67,7 +67,7 @@ def image_info(reference):
     return info
 
 
-def archive_image_id(path, image):
+def saved_image_id(path, image):
     with tarfile.open(path) as archive:
         manifest = json.load(archive.extractfile("manifest.json"))
         if len(manifest) != 1 or image not in manifest[0].get("RepoTags", []):
@@ -86,7 +86,7 @@ def verify_bundle(directory):
         raise ValueError("Expected exactly the four core image archives")
     compose = (directory / "docker-compose.yml").read_text()
     for image in images:
-        actual = archive_image_id(directory / "images" / image["archive"], image["image"])
+        actual = saved_image_id(directory / "images" / image["archive"], image["image"])
         if image["id"] != actual:
             raise ValueError(f"Bundled image ID mismatch for {image['archive']}: metadata {image['id']}, saved configuration {actual}")
         if "image: " + image["image"] + "\n" not in compose:
@@ -187,6 +187,7 @@ def update_lock(repository, host, manage):
     write(LOCK, lock)
 
 
+
 def container_bundle(directory, management, sidecars, expected_manage_id=None):
     images = []
     refs = {"floatlab-control": management, **sidecars}
@@ -195,13 +196,13 @@ def container_bundle(directory, management, sidecars, expected_manage_id=None):
         info = image_info(reference)
         if service == "floatlab-control" and expected_manage_id and info["Id"] != expected_manage_id:
             raise ValueError("Management image does not match release metadata")
-        # Local tags survive save/load; daemon IDs can differ between image stores.
+        # The local tag survives offline loading even when the source image ID changes.
         local = "floatlab-bundle/" + service + ":" + info["Id"].split(":")[1]
         run("docker", "tag", reference, local)
         archive = service + ".tar"
-        run("docker", "save", "--output", str(directory / "images" / archive), local)
-        images.append({"archive": archive, "image": local,
-                       "id": archive_image_id(directory / "images" / archive, local), "source": reference})
+        archive_path = directory / "images" / archive
+        run("docker", "save", "--output", str(archive_path), local)
+        images.append({"archive": archive, "image": local, "id": saved_image_id(archive_path, local), "source": reference})
         pattern = rf"(^  {re.escape(service)}:\n(?:.*\n)*?    image: )[^\n]+"
         compose, count = re.subn(pattern, lambda m: m[1] + local, compose, count=1, flags=re.M)
         if count != 1:
