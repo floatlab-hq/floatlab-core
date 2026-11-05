@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -150,6 +151,17 @@ def update_lock(repository, host, manage):
     write(LOCK, lock)
 
 
+def saved_image_id(path, reference):
+    # The appliance's ZFS image store identifies loaded images by their config digest.
+    with tarfile.open(path) as archive:
+        manifest = json.load(archive.extractfile("manifest.json"))
+        configs = [entry["Config"] for entry in manifest if reference in (entry.get("RepoTags") or [])]
+        if len(configs) != 1:
+            raise ValueError(f"Expected one saved image for {reference} in {path}")
+        with archive.extractfile(configs[0]) as config:
+            return "sha256:" + hashlib.sha256(config.read()).hexdigest()
+
+
 def container_bundle(directory, management, sidecars, expected_manage_id=None):
     images = []
     refs = {"floatlab-control": management, **sidecars}
@@ -158,12 +170,13 @@ def container_bundle(directory, management, sidecars, expected_manage_id=None):
         info = image_info(reference)
         if service == "floatlab-control" and expected_manage_id and info["Id"] != expected_manage_id:
             raise ValueError("Management image does not match release metadata")
-        # Docker save/load does not retain RepoDigests; an ID-derived tag survives offline loading.
+        # The local tag survives offline loading even when the source image ID changes.
         local = "floatlab-bundle/" + service + ":" + info["Id"].split(":")[1]
         run("docker", "tag", reference, local)
         archive = service + ".tar"
-        run("docker", "save", "--output", str(directory / "images" / archive), local)
-        images.append({"archive": archive, "image": local, "id": info["Id"], "source": reference})
+        archive_path = directory / "images" / archive
+        run("docker", "save", "--output", str(archive_path), local)
+        images.append({"archive": archive, "image": local, "id": saved_image_id(archive_path, local), "source": reference})
         pattern = rf"(^  {re.escape(service)}:\n(?:.*\n)*?    image: )[^\n]+"
         compose, count = re.subn(pattern, lambda m: m[1] + local, compose, count=1, flags=re.M)
         if count != 1:

@@ -1,7 +1,10 @@
+import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import subprocess
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -77,9 +80,17 @@ class ReleaseTests(unittest.TestCase):
             self.assertFalse((Path(directory) / "manage-manifest.json").exists())
 
     def test_container_bundle_and_checksums(self):
+        config = b'{"architecture":"amd64","os":"linux"}'
+        config_id = "sha256:" + hashlib.sha256(config).hexdigest()
+
         def docker(*args):
             if args[:2] == ("docker", "save"):
-                Path(args[3]).write_bytes(b"image archive")
+                manifest = [{"Config": "config.json", "RepoTags": [args[4]]}]
+                with tarfile.open(args[3], "w") as archive:
+                    for name, data in [("manifest.json", json.dumps(manifest).encode()), ("config.json", config)]:
+                        entry = tarfile.TarInfo(name)
+                        entry.size = len(data)
+                        archive.addfile(entry, io.BytesIO(data))
             return ""
 
         with tempfile.TemporaryDirectory() as directory, \
@@ -94,6 +105,7 @@ class ReleaseTests(unittest.TestCase):
             self.assertNotIn("floatlab-control:local", compose)
             for image in images:
                 self.assertIn("image: " + image["image"], compose)
+                self.assertEqual(image["id"], config_id)
             for name in ["floatlab-root.tar.gz", "zfsbootmenu.EFI"]:
                 (directory / name).write_bytes(b"host")
             release.finish_bundle(directory, {"version": "0.1.0"}, "0.2.0", "0.3.0")
