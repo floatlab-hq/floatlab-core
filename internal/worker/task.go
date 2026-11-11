@@ -13,6 +13,7 @@ const (
 	TaskStackDelete     = "stack.delete"
 	TaskDatasetRollback = "dataset.rollback"
 	TaskStackRestore    = "stack.restore"
+	TaskStackMove       = "stack.move"
 )
 
 type BackupRestoreSnapshot struct {

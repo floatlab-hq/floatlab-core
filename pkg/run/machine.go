@@ -24,6 +24,7 @@ const (
 	StateRunningBackup  State = "RunningBackup"
 	StateRestoring      State = "Restoring"
 	StateStopping       State = "Stopping"
+	StateMoving         State = "Moving"
 	StateUpdating       State = "Updating"
 	StateRollingBack    State = "RollingBack"
 	StateFailed         State = "Failed"
@@ -36,6 +37,7 @@ var transitionalStates = map[State]bool{
 	StateFailingOver:  true,
 	StateRestoring:    true,
 	StateStopping:     true,
+	StateMoving:       true,
 	StateUpdating:     true,
 	StateRollingBack:  true,
 }
@@ -57,6 +59,8 @@ const (
 	EventRestoreFailed         Event = "RestoreFailed"
 	EventStopStack             Event = "StopStack"
 	EventStopDone              Event = "StopDone"
+	EventMoveStarted           Event = "MoveStarted"
+	EventMoveCompleted         Event = "MoveCompleted"
 	EventUpdateStack           Event = "UpdateStack"
 	EventUpdateDone            Event = "UpdateDone"
 	EventUpdateFailed          Event = "UpdateFailed"

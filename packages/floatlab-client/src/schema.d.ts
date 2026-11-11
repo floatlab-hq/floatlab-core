@@ -391,6 +391,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/stacks/{id}/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Move a running stack to another lab node
+         * @description Seeds the destination from ZFS snapshots and reserves its resources while the
+         *     source is running. Then stops the source, sends a final update, and starts the
+         *     same stack on the destination.
+         *     The former primary becomes a backup target. Published services receive an
+         *     address from the destination's network pool.
+         *     Poll GET /operations/{operationId} to follow the move through seeding,
+         *     reserving-destination, stopping-source, final-sync, transferring-ownership,
+         *     and starting-destination. After completion, GET /stacks/{id}/status returns
+         *     the new stack_ip for published services.
+         */
+        post: operations["moveStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/stacks/{id}/upgrade": {
         parameters: {
             query?: never;
@@ -1980,7 +2010,7 @@ export interface components {
          * @description Current lifecycle state of the stack.
          * @enum {string}
          */
-        StackState: "Provisioning" | "Idle" | "Starting" | "RunningPrimary" | "FailingOver" | "RunningBackup" | "Restoring" | "Stopping" | "Updating" | "RollingBack" | "Failed";
+        StackState: "Provisioning" | "Idle" | "Starting" | "RunningPrimary" | "Moving" | "FailingOver" | "RunningBackup" | "Restoring" | "Stopping" | "Updating" | "RollingBack" | "Failed";
         /** @enum {string} */
         FailoverMode: "manual" | "auto";
         Stack: {
@@ -3903,6 +3933,76 @@ export interface operations {
             };
             /** @description Stack is not running. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    moveStack: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Unique key used to safely retry this mutation. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description ID of another active node in the lab. */
+                    destination_node_id: string;
+                    /** @description Name of a network pool eligible for the destination, for stacks with published ports. */
+                    network_pool?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Move operation accepted. */
+            202: {
+                headers: {
+                    /** @description URL of the operation's progress. */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        operation_id: string;
+                        /** Format: uuid */
+                        stack_id?: string;
+                        status?: string;
+                    };
+                };
+            };
+            /** @description Invalid request or destination. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stack not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The stack or destination is ineligible */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Lab quorum or peer unavailable. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

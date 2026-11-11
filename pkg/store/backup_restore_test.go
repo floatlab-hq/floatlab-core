@@ -25,7 +25,11 @@ get)
   if test -f "$RESTORE_TEST_STATE/$last/$previous"; then cat "$RESTORE_TEST_STATE/$last/$previous"; else printf '%s\n' -; fi ;;
 list)
   test -d "$RESTORE_TEST_STATE/$last" || exit 1
-  case " $* " in *" -t snapshot "*) cat "$RESTORE_TEST_STATE/$last/snapshots" ;; *) printf '%s\n' "$last" ;; esac ;;
+  case " $* " in
+  *" -t snapshot "*) cat "$RESTORE_TEST_STATE/$last/snapshots" ;;
+  *" -r "*) cd "$RESTORE_TEST_STATE" && find "$last" -type d ;;
+  *) printf '%s\n' "$last" ;;
+  esac ;;
 create|clone)
   : > "$RESTORE_TEST_STATE/options"
   target=; origin=
@@ -41,18 +45,21 @@ create|clone)
   while IFS= read -r value; do name=${value%%=*}; printf '%s' "${value#*=}" > "$RESTORE_TEST_STATE/$target/$name"; done < "$RESTORE_TEST_STATE/options"
   if test "$action" = clone; then printf '%s' "$origin" > "$RESTORE_TEST_STATE/$target/origin"; fi ;;
 rename)
-  test "$1" != -p || shift
+  if test "$1" = -p; then shift; mkdir -p "$RESTORE_TEST_STATE/${2%/*}"; fi
   test ! -d "$RESTORE_TEST_STATE/$2" || exit 1
-  mv "$RESTORE_TEST_STATE/$1" "$RESTORE_TEST_STATE/$2" ;;
+  mv "$RESTORE_TEST_STATE/$1" "$RESTORE_TEST_STATE/$2" &&
+    find "$RESTORE_TEST_STATE/$2" -type f -name snapshots -exec sed -i "s|^$1|$2|" {} + ;;
 destroy)
   test "$1" != -r || shift
   rm -r "$RESTORE_TEST_STATE/$1" ;;
 mount)
   printf yes > "$RESTORE_TEST_STATE/$last/mounted" ;;
 set)
+  if test "${RESTORE_TEST_FAIL_MOUNT:-}" = "$last" && test "$1" = readonly=off; then exit 1; fi
   for value in "$@"; do
     test "$value" != "$last" || break
     name=${value%%=*}; printf '%s' "${value#*=}" > "$RESTORE_TEST_STATE/$last/$name"
+    if test "$value" = mountpoint=none; then printf no > "$RESTORE_TEST_STATE/$last/mounted"; fi
   done ;;
 *) echo "unexpected zfs action: $action" >&2; exit 1 ;;
 esac

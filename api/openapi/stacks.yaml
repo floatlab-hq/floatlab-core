@@ -21,6 +21,7 @@ components:
         - Idle
         - Starting
         - RunningPrimary
+        - Moving
         - FailingOver
         - RunningBackup
         - Restoring
@@ -701,6 +702,59 @@ paths:
       responses:
         '202': {description: Restart operation accepted.}
         '409': {description: Stack is not running.}
+
+  /stacks/{id}/move:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+    post:
+      summary: Move a running stack to another lab node
+      operationId: moveStack
+      tags: [stacks]
+      description: |
+        Seeds the destination from ZFS snapshots and reserves its resources while the
+        source is running. Then stops the source, sends a final update, and starts the
+        same stack on the destination.
+        The former primary becomes a backup target. Published services receive an
+        address from the destination's network pool.
+        Poll GET /operations/{operationId} to follow the move through seeding,
+        reserving-destination, stopping-source, final-sync, transferring-ownership,
+        and starting-destination. After completion, GET /stacks/{id}/status returns
+        the new stack_ip for published services.
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [destination_node_id]
+              properties:
+                destination_node_id:
+                  type: string
+                  description: ID of another active node in the lab.
+                network_pool:
+                  type: string
+                  description: Name of a network pool eligible for the destination, for stacks with published ports.
+      responses:
+        '202':
+          description: Move operation accepted.
+          headers:
+            Location:
+              schema: {type: string}
+              description: URL of the operation's progress.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [operation_id]
+                properties:
+                  operation_id: {type: string, format: uuid}
+                  stack_id: {type: string, format: uuid}
+                  status: {type: string}
+        '400': {description: Invalid request or destination.}
+        '404': {description: Stack not found.}
+        '409': {description: The stack or destination is ineligible, or a conflicting operation is active.}
+        '503': {description: Lab quorum or peer unavailable.}
 
   /stacks/{id}/status:
     parameters:

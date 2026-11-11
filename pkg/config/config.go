@@ -156,7 +156,18 @@ func (s *Store) CreateStack(ctx context.Context, stack *Stack) error {
 	}
 	stack.CreatedAt = time.Now().UTC()
 	stack.UpdatedAt = stack.CreatedAt
-	err := s.db.Execute(ctx, []rqlite.Statement{{
+	if err := s.db.Execute(ctx, []rqlite.Statement{StackInsert(stack)}); err != nil {
+		return fmt.Errorf("config: create stack: %w", err)
+	}
+	if err := s.SyncBackupTargets(ctx, stack); err != nil {
+		return err
+	}
+	s.notify(ChangeEvent{Entity: "stack", Action: "create", ID: stack.ID})
+	return nil
+}
+
+func StackInsert(stack *Stack) rqlite.Statement {
+	return rqlite.Statement{
 		SQL: `INSERT INTO stacks(id, name, icon, primary_node_id, backup_node_id, compose_yaml,
 		      zfs_dataset, snapshot_schedule, replication_schedule, backup_schedule, backup_target,
 		      failover_mode, auto_trigger_after, created_at, updated_at)
@@ -168,15 +179,7 @@ func (s *Store) CreateStack(ctx context.Context, stack *Stack) error {
 			stack.FailoverMode, stack.AutoTriggerAfter,
 			stack.CreatedAt, stack.UpdatedAt,
 		},
-	}})
-	if err != nil {
-		return fmt.Errorf("config: create stack: %w", err)
 	}
-	if err := s.SyncBackupTargets(ctx, stack); err != nil {
-		return err
-	}
-	s.notify(ChangeEvent{Entity: "stack", Action: "create", ID: stack.ID})
-	return nil
 }
 
 func (s *Store) GetStack(ctx context.Context, id string) (*Stack, error) {

@@ -1,6 +1,6 @@
 import { flushPromises, mount, enableAutoUnmount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError } from '@floatlab/client'
+import { ApiError, type Operation } from '@floatlab/client'
 import LiveDashboard from './LiveDashboard.vue'
 import { fixtureApi, interactiveFixtureApi, stack, node } from '../../dashboard/live-fixtures'
 import CreateApp from './CreateApp.vue'
@@ -113,6 +113,101 @@ describe('Live dashboard', () => {
     expect(wrapper.find('#palette-input').exists()).toBe(false)
     expect(wrapper.find('[aria-labelledby="palette-confirm-title"]').exists()).toBe(false)
     expect(wrapper.findComponent(WorkloadDetail).exists()).toBe(false)
+  })
+  it.each([true, false])('follows the move through cutover when the new IP is available (%s)', async addressAvailable => {
+    vi.useFakeTimers()
+    const destination = { ...node, id: 'node-2', name: 'lab-beta' }
+    const pool = { id: 'pool-2', name: 'beta-pool', cidr: '192.168.1.0/24', start_ip: '192.168.1.50', end_ip: '192.168.1.59', node_ids: [destination.id], membership_resolved: true }
+    const app = { ...stack, replica: true, compose_file: 'services: { web: { ports: ["8080:80"] } }' }
+    const operation: Operation = { operation_id: 'op-1', action: 'move', actor: 'admin', state: 'running', checkpoint: 'seeding', created_at: node.created_at, updated_at: node.updated_at }
+    const request = addressAvailable
+      ? vi.fn().mockResolvedValue({ stack_ip: '192.168.1.50' })
+      : vi.fn().mockRejectedValue(new ApiError('Status unavailable', 503))
+    const api = {
+      ...interactiveFixtureApi([app]),
+      listNodes: async () => [node, destination],
+      listNetworkPools: async () => [pool],
+      moveStack: vi.fn().mockResolvedValue({ operation_id: 'op-1' }),
+      request,
+      getOperation: vi.fn()
+        .mockResolvedValueOnce(operation)
+        .mockResolvedValueOnce({ ...operation, checkpoint: 'reserving-destination' })
+        .mockRejectedValueOnce(new ApiError('Peer temporarily unreachable', 503))
+        .mockResolvedValueOnce({ ...operation, checkpoint: 'final-sync', error: 'Retrying receive' })
+        .mockResolvedValueOnce({ ...operation, state: 'succeeded', checkpoint: 'succeeded' }),
+    }
+    const wrapper = mount(LiveDashboard, { props: { api }, global: { stubs: { Teleport: true } } })
+    await flushPromises()
+    await wrapper.get('[aria-label^="plex (cached) runtime:"]').trigger('click')
+    await wrapper.findAll('[role="menuitem"]').find(button => button.text() === 'Move app…')!.trigger('click')
+    await flushPromises()
+    const panel = () => wrapper.get('[aria-label="Move plex"]')
+    expect(panel().get('#move-destination').findAll('option').map(option => option.text())).toEqual(['Select…', 'lab-beta'])
+    expect(panel().get('button[type="submit"]').attributes('disabled')).toBeDefined()
+    await panel().get('#move-destination').setValue(destination.id)
+    await panel().get('#move-network-pool').setValue(pool.name)
+    await panel().get('form').trigger('submit')
+    await flushPromises()
+    expect(api.moveStack).toHaveBeenCalledWith(stack.id, { destination_node_id: destination.id, network_pool: pool.name }, expect.any(String))
+    expect(api.getOperation).toHaveBeenCalledWith('op-1')
+    expect(panel().text()).toContain('Replicating while the app runs')
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(panel().text()).toContain('Reserving resources on the destination host')
+    await panel().get('[aria-label="Close detail panel"]').trigger('click')
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(wrapper.text()).toContain('Peer temporarily unreachable')
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(wrapper.text()).toContain('Sending the final changes')
+    expect(wrapper.text()).toContain('Retrying receive')
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(wrapper.text()).toContain('plex moved to lab-beta')
+    expect(api.request).toHaveBeenCalledWith('/stacks/stack-1/status')
+    expect(wrapper.text().includes('New IP address 192.168.1.50')).toBe(addressAvailable)
+    expect(wrapper.text()).not.toContain('Status unavailable')
+  })
+  it('shows a terminal move error without continuing to poll', async () => {
+    vi.useFakeTimers()
+    const api = {
+      ...interactiveFixtureApi([stack]),
+      listNodes: async () => [node, { ...node, id: 'node-2' }],
+      moveStack: vi.fn().mockResolvedValue({ operation_id: 'op-1' }),
+      getOperation: vi.fn().mockResolvedValue({ state: 'failed', error: 'Destination disk full' }),
+    }
+    const wrapper = mount(LiveDashboard, { props: { api } })
+    await flushPromises()
+    wrapper.getComponent(LabDashboard).vm.$emit('action', 'app-move', stack.id)
+    await flushPromises()
+    const panel = wrapper.get('[aria-label="Move plex"]')
+    await panel.get('#move-destination').setValue('node-2')
+    await panel.get('form').trigger('submit')
+    await flushPromises()
+    expect(panel.get('[role="alert"]').text()).toContain('Destination disk full')
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(api.getOperation).toHaveBeenCalledOnce()
+  })
+  it('reuses the move key when the response is lost and the operator retries', async () => {
+    const moveStack = vi.fn().mockRejectedValueOnce(new ApiError('Connection lost', 0)).mockResolvedValueOnce({ operation_id: 'op-1' })
+    const api = {
+      ...interactiveFixtureApi([stack]),
+      listNodes: async () => [node, { ...node, id: 'node-2' }, { ...node, id: 'node-3', status: 'offline' as const }],
+      moveStack,
+      getOperation: vi.fn().mockResolvedValue({ state: 'running', checkpoint: 'stopping-source' }),
+    }
+    const wrapper = mount(LiveDashboard, { props: { api } })
+    await flushPromises()
+    wrapper.getComponent(LabDashboard).vm.$emit('action', 'app-move', stack.id)
+    await flushPromises()
+    const panel = wrapper.get('[aria-label="Move plex"]')
+    expect(panel.get('#move-destination').findAll('option').map(option => option.attributes('value'))).toEqual(['', 'node-2'])
+    await panel.get('#move-destination').setValue('node-2')
+    await panel.get('form').trigger('submit')
+    await flushPromises()
+    expect(panel.get('[role="alert"]').text()).toBe('Connection lost')
+    await panel.get('form').trigger('submit')
+    await flushPromises()
+    expect(moveStack).toHaveBeenCalledTimes(2)
+    expect(moveStack.mock.calls[1]).toEqual(moveStack.mock.calls[0])
+    expect(panel.get('[role="status"]').text()).toContain('Stopping the app on the source host')
   })
   it('opens and cancels creation, then passes creation options to the shared editor', async () => {
     const wrapper = mount(LiveDashboard, { props: { api: interactiveFixtureApi() } })

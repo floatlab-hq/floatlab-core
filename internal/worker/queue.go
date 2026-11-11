@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -31,6 +32,12 @@ const (
 
 // Handler processes a single task payload, returning an error to trigger retry.
 type Handler func(ctx context.Context, payload json.RawMessage) error
+
+var ErrMoveMustResume = errors.New("stack move will retry")
+
+func (w *Worker) SetStackMoveHandler(handler Handler) {
+	w.handlers[TaskStackMove] = handler
+}
 
 // Worker polls the rqlite tasks table and dispatches tasks via IPC to hostd.
 type Worker struct {
@@ -142,7 +149,7 @@ func (w *Worker) handleStackUpgrade(ctx context.Context, raw json.RawMessage) er
 			if _, err := w.pool.Execute(ctx, p.NodeID, "compose.up", ipc.ComposeUpPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: oldRuntime}); err != nil {
 				return err
 			}
-			return w.waitHealthy(ctx, p.NodeID, p.StackID, timeout(p.HealthTimeout))
+			return WaitHealthy(ctx, w.pool, p.NodeID, p.StackID, timeout(p.HealthTimeout), nil)
 		}
 		checkpoint, outcome, message := "rolled-back", "failed-rolled-back", cause.Error()
 		if rollbackErr := rollback(); rollbackErr != nil {
@@ -182,7 +189,7 @@ func (w *Worker) handleStackUpgrade(ctx context.Context, raw json.RawMessage) er
 	if _, err := w.pool.Execute(ctx, p.NodeID, "compose.up", ipc.ComposeUpPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: newRuntime}); err != nil {
 		return fail(err)
 	}
-	if err := w.waitHealthy(ctx, p.NodeID, p.StackID, timeout(p.HealthTimeout)); err != nil {
+	if err := WaitHealthy(ctx, w.pool, p.NodeID, p.StackID, timeout(p.HealthTimeout), nil); err != nil {
 		return fail(err)
 	}
 	if err := w.applyStackEvent(p.StackID, p.NodeID, run.EventUpdateDone); err != nil {
@@ -208,7 +215,7 @@ func (w *Worker) handleStackRestart(ctx context.Context, raw json.RawMessage) er
 	if _, err := w.pool.Execute(ctx, p.NodeID, "compose.up", ipc.ComposeUpPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: p.ComposeFile}); err != nil {
 		return err
 	}
-	if err := w.waitHealthy(ctx, p.NodeID, p.StackID, timeout(p.HealthTimeout)); err != nil {
+	if err := WaitHealthy(ctx, w.pool, p.NodeID, p.StackID, timeout(p.HealthTimeout), nil); err != nil {
 		return err
 	}
 	_ = operation.RecordEvent(ctx, w.db, operation.Event{StackID: p.StackID, Type: "Restart", Outcome: "succeeded", OperationID: p.OperationID, Actor: p.Actor})
@@ -340,7 +347,7 @@ func (w *Worker) handleStackRestore(ctx context.Context, raw json.RawMessage) er
 		if _, err := w.pool.Execute(ctx, p.NodeID, "compose.up", ipc.ComposeUpPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: p.ComposeFile}); err != nil {
 			return err
 		}
-		if err := w.waitHealthy(ctx, p.NodeID, p.StackID, timeout(p.HealthTimeout)); err != nil {
+		if err := WaitHealthy(ctx, w.pool, p.NodeID, p.StackID, timeout(p.HealthTimeout), nil); err != nil {
 			return err
 		}
 	}
@@ -476,18 +483,21 @@ func (w *Worker) promoteTree(ctx context.Context, nodeID, root string, datasets 
 	return nil
 }
 
-func (w *Worker) waitHealthy(ctx context.Context, nodeID, stackID string, duration time.Duration) error {
+func WaitHealthy(ctx context.Context, hosts *hostclient.Pool, nodeID, stackID string, duration time.Duration, completedServices map[string]bool) error {
 	deadline := time.NewTimer(duration)
 	defer deadline.Stop()
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
-		raw, err := w.pool.Execute(ctx, nodeID, "docker.list", ipc.DockerListPayload{StackID: stackID})
+		raw, err := hosts.Execute(ctx, nodeID, "docker.list", ipc.DockerListPayload{StackID: stackID})
 		if err == nil {
 			var result ipc.DockerListResult
 			if json.Unmarshal(raw, &result) == nil && len(result.Containers) > 0 {
 				ready := true
 				for _, container := range result.Containers {
+					if completedServices[container.Service] && container.State == "exited" && container.ExitCode == 0 {
+						continue
+					}
 					if container.State != "running" || (container.Health != "healthy" && container.Health != "none") {
 						ready = false
 					}
@@ -610,6 +620,9 @@ func (w *Worker) poll(ctx context.Context) error {
 			zap.String("type", taskType),
 			zap.Error(execErr),
 		)
+		if errors.Is(execErr, ErrMoveMustResume) {
+			return w.db.Execute(ctx, []rqlite.Statement{{SQL: `UPDATE tasks SET state='pending',attempts=1,error=?,updated_at=datetime('now'),locked_by=NULL WHERE id=?`, Params: []any{execErr.Error(), taskID}}})
+		}
 		if int(attempts)+1 >= maxAttempts {
 			_ = w.db.Execute(ctx, []rqlite.Statement{{SQL: `UPDATE tasks SET state='failed',attempts=attempts+1,error=?,updated_at=datetime('now'),locked_by=NULL WHERE id=?`, Params: []interface{}{execErr.Error(), taskID}}})
 			if taskType == TaskBackupRestore {

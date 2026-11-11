@@ -19,6 +19,7 @@ function items(kind: string) {
   if (kind === 'runtime') return [
     { id: running.value ? 'stop' : 'start', label: running.value ? 'Stop' : 'Start', disabled: locked || busy.value },
     { id: 'restartStack', label: 'Restart', disabled: locked || !running.value || busy.value },
+    ...(props.app.moveAvailable ? [{ id: 'move', label: 'Move app…', disabled: busy.value }] : []),
     { id: 'delete', label: 'Delete app…', disabled: locked || busy.value },
     { id: 'logs', label: 'View logs' },
     { id: 'open', label: 'App details' },

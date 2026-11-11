@@ -13,6 +13,10 @@ import (
 // Migrate creates the config tables if they don't exist.
 func Migrate(ctx context.Context, db *rqlite.Client) error {
 	if err := db.Execute(ctx, []rqlite.Statement{
+		{SQL: `CREATE TABLE IF NOT EXISTS stack_move_grants (operation_id TEXT PRIMARY KEY, stack_id TEXT NOT NULL, payload_hash TEXT NOT NULL)`},
+		{SQL: `CREATE TABLE IF NOT EXISTS workload_move_owners (stack_id TEXT PRIMARY KEY, node_id TEXT NOT NULL, generation INTEGER NOT NULL)`},
+		{SQL: `CREATE TABLE IF NOT EXISTS workload_move_receipts (operation_id TEXT PRIMARY KEY, stack_id TEXT NOT NULL, phase TEXT NOT NULL)`},
+		{SQL: `CREATE TABLE IF NOT EXISTS workload_move_reservations (operation_id TEXT PRIMARY KEY, stack_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL UNIQUE)`},
 		{SQL: `CREATE TABLE IF NOT EXISTS failover_steps (stack_id TEXT NOT NULL, sequence_id TEXT NOT NULL, step INTEGER NOT NULL, name TEXT NOT NULL, state TEXT NOT NULL, started_at TEXT, completed_at TEXT, detail TEXT, PRIMARY KEY(stack_id, sequence_id, step))`},
 		{SQL: `CREATE TABLE IF NOT EXISTS prefix_pools (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, prefix TEXT NOT NULL UNIQUE, stack_id TEXT, created_at TEXT NOT NULL)`},
 		{SQL: `CREATE TABLE IF NOT EXISTS node_pool_ranges (pool_id TEXT PRIMARY KEY, start INTEGER NOT NULL, end INTEGER NOT NULL, owner TEXT NOT NULL, CHECK(start<=end))`},
@@ -45,6 +49,9 @@ func Migrate(ctx context.Context, db *rqlite.Client) error {
 			created_at           DATETIME NOT NULL,
 			updated_at           DATETIME NOT NULL
 		)`},
+		{SQL: `CREATE TRIGGER IF NOT EXISTS workload_move_reserved_name BEFORE INSERT ON stacks
+			WHEN EXISTS(SELECT 1 FROM workload_move_reservations WHERE name=NEW.name AND stack_id<>NEW.id)
+			BEGIN SELECT RAISE(ABORT,'stack name is reserved by a move'); END`},
 		{SQL: `CREATE TABLE IF NOT EXISTS networks (
 			id           TEXT PRIMARY KEY,
 			name         TEXT NOT NULL UNIQUE,

@@ -26,6 +26,7 @@ func (c *apiClient) assertUnconfiguredLab() {
 		path := strings.NewReplacer("{id}", "unconfigured-node", "{node_id}", "unconfigured-node").Replace(operation.Path)
 		c.expect(operation.Method, path, map[string]any{}, http.StatusServiceUnavailable)
 	}
+	c.expect(http.MethodPost, "/api/v1/stacks/00000000-0000-4000-8000-000000000001/move", map[string]string{"destination_node_id": "unconfigured-node"}, http.StatusConflict)
 }
 
 func (c *apiClient) expect(method, path string, body interface{}, status int) interface{} {

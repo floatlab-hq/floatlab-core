@@ -5762,6 +5762,134 @@
                 ]
               },
               {
+                "name": "moveStack",
+                "description": "Move a running stack to another lab node",
+                "options": [
+                  {
+                    "name": "--path-id",
+                    "required": true,
+                    "arguments": [
+                      {
+                        "name": "id",
+                        "required": true
+                      }
+                    ]
+                  },
+                  {
+                    "name": "--header-idempotency-key",
+                    "arguments": [
+                      {
+                        "name": "Idempotency-Key",
+                        "required": true
+                      }
+                    ]
+                  },
+                  {
+                    "name": "--body",
+                    "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                    "arguments": [
+                      {
+                        "name": "body",
+                        "required": true
+                      }
+                    ]
+                  },
+                  {
+                    "name": "--body-file",
+                    "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                    "arguments": [
+                      {
+                        "name": "path",
+                        "required": true,
+                        "metadata": [
+                          {
+                            "name": "floatlab",
+                            "value": {
+                              "provider": "files"
+                            }
+                          }
+                        ]
+                      }
+                    ],
+                    "metadata": [
+                      {
+                        "name": "floatlab",
+                        "value": {
+                          "capability": "files"
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "metadata": [
+                  {
+                    "name": "floatlab",
+                    "value": {
+                      "http": {
+                        "method": "POST",
+                        "path": "/stacks/{id}/move",
+                        "parameters": [
+                          {
+                            "name": "id",
+                            "in": "path",
+                            "option": "--path-id",
+                            "required": true,
+                            "schema": {
+                              "type": "string",
+                              "format": "uuid"
+                            }
+                          },
+                          {
+                            "name": "Idempotency-Key",
+                            "in": "header",
+                            "option": "--header-idempotency-key",
+                            "required": true,
+                            "schema": {
+                              "type": "string",
+                              "maxLength": 255
+                            }
+                          }
+                        ],
+                        "requestBody": {
+                          "required": true,
+                          "content": {
+                            "application/json": {
+                              "schema": {
+                                "type": "object",
+                                "required": [
+                                  "destination_node_id"
+                                ],
+                                "properties": {
+                                  "destination_node_id": {
+                                    "type": "string",
+                                    "description": "ID of another active node in the lab."
+                                  },
+                                  "network_pool": {
+                                    "type": "string",
+                                    "description": "Name of a network pool eligible for the destination, for stacks with published ports."
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "accept": "application/json"
+                      },
+                      "api": [
+                        {
+                          "operationId": "moveStack",
+                          "inputs": {
+                            "path/id": "option:--path-id",
+                            "header/Idempotency-Key": "option:--header-idempotency-key",
+                            "body": "option:--body"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
                 "name": "openStackTerminal",
                 "description": "Open an interactive container terminal",
                 "options": [

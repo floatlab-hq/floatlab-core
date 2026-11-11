@@ -50,7 +50,7 @@ func newCoverage(t testT) *coverageRun {
 	return run
 }
 func multiNodeOperation(op openapi.Operation) bool {
-	return strings.HasPrefix(op.Path, "/api/v1/lab/") || op.Path == "/api/v1/storage/backups" || op.Path == "/api/v1/storage/backups/restore" || op.Method == "POST" && (strings.Contains(op.Path, "/failover") || op.Path == "/api/v1/stacks/{id}/restore" || strings.Contains(op.Path, "/storage/replication/"))
+	return strings.HasPrefix(op.Path, "/api/v1/lab/") || op.Path == "/api/v1/storage/backups" || op.Path == "/api/v1/storage/backups/restore" || op.Method == "POST" && (strings.Contains(op.Path, "/failover") || op.Path == "/api/v1/stacks/{id}/restore" || op.Path == "/api/v1/stacks/{id}/move" || strings.Contains(op.Path, "/storage/replication/"))
 }
 
 func TestLabCoverageSeparatesRejectionFromSuccess(t *testing.T) {

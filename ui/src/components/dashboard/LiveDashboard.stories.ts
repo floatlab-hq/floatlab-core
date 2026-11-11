@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from '@storybook/vue3-vite'
 import LiveDashboard from './LiveDashboard.vue'
 import { fixtureApi, interactiveFixtureApi, stack, node } from '../../dashboard/live-fixtures'
 import { userEvent, within } from 'storybook/test'
+import type { Operation } from '@floatlab/client'
 const args = { api: interactiveFixtureApi() }
 const meta: Meta<typeof LiveDashboard> = { title: '2. Pattern/Live Dashboard', component: LiveDashboard, args, parameters: { layout: 'fullscreen', docs: { description: { component: 'Routine lifecycle, sync, snapshot, and backup actions execute directly from their controls. Requests disable duplicate actions while pending, errors appear inline, and the command palette draft is preserved.' } } }, render: args => ({ components: { LiveDashboard }, setup: () => ({ args }), template: '<LiveDashboard v-bind="args" />' }) }
 export default meta
@@ -30,6 +31,38 @@ export const WorkloadActions: StoryObj<typeof meta> = {
   args: { api: interactiveFixtureApi([stack]) },
   play: async ({ canvasElement }) => {
     await userEvent.click(await within(canvasElement).findByRole('button', { name: 'Open plex' }))
+  },
+}
+const moveHost = { ...node, id: 'node-2', name: 'lab-beta' }
+function moveFixtureApi() {
+  const published = { ...stack, compose_file: 'services: { web: { ports: ["8080:80"] } }' }
+  const api = interactiveFixtureApi([published])
+  let moved = false
+  let polls = 0
+  return {
+    ...api,
+    listNodes: async () => [node, moveHost],
+    listStacks: async () => [moved ? { ...published, primary_node: moveHost.id, secondary_node: node.id } : published],
+    listNetworkPools: async () => [],
+    getNodeStats: async (id: string) => ({ node_id: id, range: '1h' as const, series: {} }),
+    getStorageStats: async (id: string) => ({ node_id: id, range: '1h' as const, series: {} }),
+    request: async (...args: Parameters<typeof api.request>) => args[0] === '/stacks/stack-1/status' ? { stack_ip: '192.168.1.50' } : api.request(...args),
+    moveStack: async () => { polls = 0; return { operation_id: 'move-example' } },
+    getOperation: async (): Promise<Operation> => {
+      polls++
+      moved = polls >= 4
+      const checkpoint = ['seeding', 'reserving-destination', 'final-sync'][polls - 1] ?? 'succeeded'
+      return { operation_id: 'move-example', action: 'move', actor: 'admin', state: moved ? 'succeeded' : 'running', checkpoint, created_at: node.created_at, updated_at: node.updated_at }
+    },
+  }
+}
+export const MoveApp: StoryObj<typeof meta> = {
+  args: { api: moveFixtureApi() },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await userEvent.click(await canvas.findByRole('button', { name: /^plex runtime:/ }))
+    await userEvent.click(await within(canvasElement.ownerDocument.body).findByRole('menuitem', { name: 'Move app…' }))
+    await userEvent.selectOptions(await canvas.findByLabelText('Destination host'), moveHost.id)
   },
 }
 export const NodeKey: StoryObj<typeof meta> = {

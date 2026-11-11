@@ -1,4 +1,4 @@
-import type { components } from "./schema";
+import type { components, operations } from "./schema";
 
 export type Stack = components["schemas"]["Stack"];
 export type Container = components["schemas"]["Container"] & { service?: string };
@@ -29,6 +29,13 @@ export interface DashboardApi {
   getNodeStats(id: string): Promise<NodeStats>;
   getStorageStats(id: string): Promise<StorageStats>;
   getNodeLogs(id: string): Promise<LogLine[]>;
+}
+export type Operation = components["schemas"]["Operation"];
+export type StackMoveRequest = operations["moveStack"]["requestBody"]["content"]["application/json"];
+export type StackMoveAccepted = operations["moveStack"]["responses"][202]["content"]["application/json"];
+export interface StackMoveApi {
+  moveStack(id: string, request: StackMoveRequest, idempotencyKey: string): Promise<StackMoveAccepted>;
+  getOperation(id: string): Promise<Operation>;
 }
 export type LogLine = components["schemas"]["LogLine"];
 export type AuditEntry = components["schemas"]["AuditEntry"] & { outcome?: string; details?: string | null };

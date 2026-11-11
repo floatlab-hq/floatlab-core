@@ -303,6 +303,7 @@ func run(cmd *cobra.Command, args []string) error {
 		// Task worker: polls rqlite tasks table and dispatches IPC to hostd.
 		w := worker.New(db, store, hosts, raftNode, log)
 		w.SetBackupRestorePreparer(srv.PrepareBackupRestore)
+		w.SetStackMoveHandler(srv.RunStackMove)
 		launch(func() {
 			if err := w.Run(ctx); err != nil && err != context.Canceled {
 				log.Error("worker exited", zap.Error(err))

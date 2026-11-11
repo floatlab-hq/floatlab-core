@@ -156,17 +156,18 @@ var _ = DescribeTableSubtree("Multi-node", func(name string) {
 		fixture := &applianceFixture{}
 		BeforeAll(func(ctx SpecContext) { fixture.open(name) })
 		AfterAll(func(ctx SpecContext) { DeferCleanup(fixture.collect) })
-		if name == "Lab" {
+		switch name {
+		case "Lab":
 			defineLab(fixture)
-			return
-		}
-		if name == "Replication" {
+		case "Replication":
 			defineReplication(fixture)
-		} else {
+		case "BackupRestore":
 			defineBackupRestore(fixture)
+		case "StackMove":
+			defineStackMove(fixture)
 		}
 	})
-}, Entry("Lab", "Lab"), Entry("Replication", "Replication"), Entry("BackupRestore", "BackupRestore"))
+}, Entry("Lab", "Lab"), Entry("Replication", "Replication"), Entry("BackupRestore", "BackupRestore"), Entry("StackMove", "StackMove"))
 
 var _ = Describe("Single-node workflows", Ordered, Serial, Label("single-node"), func() {
 	fixture := &applianceFixture{}

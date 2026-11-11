@@ -89,6 +89,7 @@ func registerStackRoutes(r chi.Router, s *Server) {
 		r.Put("/stacks/{id}/compose", s.handleUpdateStackCompose)
 		r.Post("/stacks/{id}/start", s.handleStartStack)
 		r.Post("/stacks/{id}/stop", s.handleStopStack)
+		r.Post("/stacks/{id}/move", s.handleStackMove)
 		r.Post("/stacks/{id}/upgrade", s.handleUpgradeStack)
 		r.Post("/stacks/{id}/restart", s.handleRestartStack)
 		r.Post("/stacks/{id}/failover", s.handleStackFailover)
@@ -470,6 +471,19 @@ func (s *Server) handleCreateAndStartStack(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if s.peerWorkloads != nil {
+		s.moveNames.Lock()
+		defer s.moveNames.Unlock()
+		rows, err := s.db.Query(r.Context(), rqlite.Statement{SQL: `SELECT 1 FROM workload_move_reservations WHERE name=?`, Params: []any{name}})
+		if err != nil {
+			writeError(w, 503, err.Error())
+			return
+		}
+		if len(rows.Values) != 0 {
+			writeError(w, 409, "stack name is reserved by a move")
+			return
+		}
 	}
 	var source string
 	var staging string

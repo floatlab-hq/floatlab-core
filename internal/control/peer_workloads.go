@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"net/http/httputil"
@@ -99,20 +100,76 @@ func (s *Server) workloadOwner(ctx context.Context, stackID, operationID string)
 		return s.cfg.LocalNodeID, nil
 	}
 	owner := ""
+	var generation int64
+	moveOwner := ""
+	if stackID != "" && operationID == "" {
+		generation, moveOwner, err = stackMoveOwner(ctx, s.db, stackID)
+		if err != nil {
+			return "", err
+		}
+	}
+	conflict := false
 	err = s.eachReplica(ctx, func(db *rqlite.Client, identity rqlite.LocalIdentity, _ time.Time) error {
+		if stackID != "" && operationID == "" {
+			remoteGeneration, remoteOwner, err := stackMoveOwner(ctx, db, stackID)
+			if err != nil {
+				return err
+			}
+			if remoteGeneration > generation {
+				generation, moveOwner = remoteGeneration, remoteOwner
+			}
+		}
 		rows, err := db.Query(ctx, rqlite.Statement{SQL: `SELECT ` + column + ` FROM ` + table + ` WHERE ` + column + `=?`, Params: []any{id}})
 		if err != nil {
 			return err
 		}
 		if len(rows.Values) > 0 {
 			if owner != "" && owner != identity.NodeID {
-				return errors.New("conflicting workload ownership requires reconciliation")
+				conflict = true
 			}
 			owner = identity.NodeID
 		}
 		return nil
 	})
+	if err == nil && moveOwner != "" {
+		return moveOwner, nil
+	}
+	if err == nil && conflict {
+		return "", errors.New("conflicting workload ownership requires reconciliation")
+	}
 	return owner, err
+}
+
+type moveOwnerRecord struct {
+	node       string
+	generation int64
+}
+
+func stackMoveOwners(ctx context.Context, db *rqlite.Client, id string) (map[string]moveOwnerRecord, error) {
+	// Replicas published by an older appliance can predate this table.
+	table, err := db.Query(ctx, rqlite.Statement{SQL: `SELECT 1 FROM sqlite_master WHERE name='workload_move_owners' AND type='table'`})
+	if err != nil || len(table.Values) == 0 {
+		return nil, err
+	}
+	query := rqlite.Statement{SQL: `SELECT stack_id,node_id,generation FROM workload_move_owners`}
+	if id != "" {
+		query.SQL += " WHERE stack_id=?"
+		query.Params = []any{id}
+	}
+	rows, err := db.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	owners := make(map[string]moveOwnerRecord, len(rows.Values))
+	for _, row := range rows.Values {
+		owners[fmt.Sprint(row[0])] = moveOwnerRecord{node: fmt.Sprint(row[1]), generation: int64(number(row[2]))}
+	}
+	return owners, nil
+}
+
+func stackMoveOwner(ctx context.Context, db *rqlite.Client, id string) (int64, string, error) {
+	owners, err := stackMoveOwners(ctx, db, id)
+	return owners[id].generation, owners[id].node, err
 }
 
 func (s *Server) routeWorkloadOwner(next http.Handler) http.Handler {
@@ -154,6 +211,22 @@ func (s *Server) routeWorkloadOwner(next http.Handler) http.Handler {
 		}
 		owner := ""
 		var err error
+		if stackID != "" && r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/move") {
+			// Keep the accepted operation replayable on its original owner after cutover.
+			key := r.Header.Get("Idempotency-Key")
+			rows, lookupErr := s.db.Query(r.Context(), rqlite.Statement{
+				SQL:    `SELECT 1 FROM idempotency_keys WHERE actor=? AND key=? AND path=?`,
+				Params: []any{actor(r), key, r.URL.Path},
+			})
+			if lookupErr != nil {
+				writeError(w, 503, lookupErr.Error())
+				return
+			}
+			if len(rows.Values) != 0 {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
 		if stackID != "" || operationID != "" {
 			owner, err = s.workloadOwner(r.Context(), stackID, operationID)
 		} else {
@@ -194,7 +267,7 @@ func (s *Server) routeWorkloadOwner(next http.Handler) http.Handler {
 			return
 		}
 		if owner == "" || owner == s.cfg.LocalNodeID {
-			next.ServeHTTP(w, r)
+			s.serveLocalWorkloadMutation(next, w, r, stackID, validation)
 			return
 		}
 		if r.Header.Get("X-FloatLab-Workload-Hop") != "" {
@@ -203,6 +276,34 @@ func (s *Server) routeWorkloadOwner(next http.Handler) http.Handler {
 		}
 		s.forwardWorkloadOwner(w, r, owner)
 	})
+}
+
+func (s *Server) serveLocalWorkloadMutation(next http.Handler, w http.ResponseWriter, r *http.Request, id string, validation bool) {
+	if validation || r.Method == http.MethodGet || r.Method == http.MethodHead {
+		next.ServeHTTP(w, r)
+		return
+	}
+	if id != "" {
+		hash := fnv.New32a()
+		_, _ = hash.Write([]byte(id))
+		lock := &s.stackLocks[hash.Sum32()%uint32(len(s.stackLocks))]
+		lock.Lock()
+		defer lock.Unlock()
+		rows, err := s.db.Query(r.Context(), rqlite.Statement{
+			SQL: `SELECT 1 FROM operations WHERE stack_id=? AND action='move' AND state IN ('pending','running')
+				UNION ALL SELECT 1 FROM workload_move_receipts WHERE stack_id=? AND phase<>'complete' LIMIT 1`,
+			Params: []any{id, id},
+		})
+		if err != nil {
+			writeError(w, 503, err.Error())
+			return
+		}
+		if len(rows.Values) != 0 {
+			writeError(w, 409, "a stack move is in progress")
+			return
+		}
+	}
+	next.ServeHTTP(w, r)
 }
 
 // routeNodeHealth forwards only the read-only health endpoint to its own node.
@@ -278,11 +379,23 @@ func (s *Server) rememberPeerOperation(response *http.Response, owner string) er
 }
 
 func (s *Server) appendReplicaStacks(ctx context.Context, result []stackResponse) ([]stackResponse, error) {
-	seen := map[string]bool{}
-	for _, stack := range result {
-		seen[stack.ID] = true
+	if s.peerWorkloads == nil {
+		return result, nil
 	}
-	err := s.eachReplica(ctx, func(db *rqlite.Client, id rqlite.LocalIdentity, observed time.Time) error {
+	owners, err := stackMoveOwners(ctx, s.db, "")
+	if err != nil {
+		return nil, err
+	}
+	err = s.eachReplica(ctx, func(db *rqlite.Client, id rqlite.LocalIdentity, observed time.Time) error {
+		moves, err := stackMoveOwners(ctx, db, "")
+		if err != nil {
+			return err
+		}
+		for id, move := range moves {
+			if move.generation > owners[id].generation {
+				owners[id] = move
+			}
+		}
 		stacks, err := config.NewStore(db).ListStacks(ctx)
 		if err != nil {
 			return err
@@ -299,10 +412,6 @@ func (s *Server) appendReplicaStacks(ctx context.Context, result []stackResponse
 			}
 		}
 		for _, stack := range stacks {
-			if seen[stack.ID] {
-				return errors.New("conflicting workload ownership requires reconciliation")
-			}
-			seen[stack.ID] = true
 			entry := toStackResponse(stack, stateByID[stack.ID])
 			entry.OwnerNode = id.NodeID
 			entry.Replica = true
@@ -314,5 +423,20 @@ func (s *Server) appendReplicaStacks(ctx context.Context, result []stackResponse
 		}
 		return nil
 	})
-	return result, err
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	visible := result[:0]
+	for _, stack := range result {
+		if move := owners[stack.ID]; move.node != "" && move.node != stack.OwnerNode {
+			continue
+		}
+		if seen[stack.ID] {
+			return nil, errors.New("conflicting workload ownership requires reconciliation")
+		}
+		seen[stack.ID] = true
+		visible = append(visible, stack)
+	}
+	return visible, nil
 }

@@ -105,6 +105,8 @@ paths:
     $ref: './stacks.yaml#/paths/~1stacks~1{id}~1stop'
   /stacks/{id}/restart:
     $ref: './stacks.yaml#/paths/~1stacks~1{id}~1restart'
+  /stacks/{id}/move:
+    $ref: './stacks.yaml#/paths/~1stacks~1{id}~1move'
   /stacks/{id}/upgrade:
     $ref: './stacks.yaml#/paths/~1stacks~1{id}~1upgrade'
   /stacks/{id}/failover:

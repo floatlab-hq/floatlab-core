@@ -273,7 +273,7 @@ func (o *Orchestrator) doProvision(ctx context.Context, stackID string) {
 		}
 	}
 	if lifecycleErr == nil {
-		if err := o.syncAlerts(ctx, stack.ID, spec.Alerts); err != nil {
+		if err := SyncStackAlerts(ctx, o.db, stack.ID, spec.Alerts); err != nil {
 			log.Warn("orchestrator: provision: sync alerts", zap.Error(err))
 		}
 	}
@@ -387,7 +387,7 @@ func (o *Orchestrator) provisionNetwork(ctx context.Context, stack *config.Stack
 	return nil
 }
 
-func (o *Orchestrator) syncAlerts(ctx context.Context, stackID string, alerts []compose.LifecycleAlert) error {
+func SyncStackAlerts(ctx context.Context, db *rqlite.Client, stackID string, alerts []compose.LifecycleAlert) error {
 	statements := []rqlite.Statement{{SQL: `UPDATE stack_alert_rules SET active=0 WHERE stack_id=?`, Params: []interface{}{stackID}}}
 	for _, alert := range alerts {
 		selector := alert.Service
@@ -396,7 +396,7 @@ func (o *Orchestrator) syncAlerts(ctx context.Context, stackID string, alerts []
 		}
 		statements = append(statements, rqlite.Statement{SQL: `INSERT INTO stack_alert_rules(id,stack_id,name,metric,selector,comparator,threshold,duration,severity,message,active) VALUES(?,?,?,?,?,?,?,?,?,?,1) ON CONFLICT(stack_id,name) DO UPDATE SET metric=excluded.metric,selector=excluded.selector,comparator=excluded.comparator,threshold=excluded.threshold,duration=excluded.duration,severity=excluded.severity,message=excluded.message,active=1`, Params: []interface{}{uuid.NewString(), stackID, alert.Name, alert.Metric, selector, alert.Comparator, alert.Threshold, alert.Duration, alert.Severity, alert.Message}})
 	}
-	return o.db.Execute(ctx, statements)
+	return db.Execute(ctx, statements)
 }
 
 func lifecycleVeth(prefix, stackID string) string {

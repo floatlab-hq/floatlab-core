@@ -73,6 +73,8 @@ func (d *Dispatcher) register() {
 	d.handle("fs.backup.restore.prepare", d.backupRestorePrepare)
 	d.handle("fs.backup.restore.reserve", d.backupRestoreReserve)
 	d.handle("fs.backup.restore.activate", d.backupRestoreActivate)
+	d.handle("fs.move.activate", d.stackMoveActivate)
+	d.handle("fs.move.archive", d.stackMoveArchive)
 	d.handle("fs.snapshot.prune", d.snapshotPrune)
 	d.handle("net.addr.add", d.netAddrAdd)
 	d.handle("net.addr.del", d.netAddrDel)
@@ -286,7 +288,7 @@ func (d *Dispatcher) datasetCreate(ctx context.Context, raw json.RawMessage) (an
 	if !validDataset(p.Dataset) {
 		return nil, fmt.Errorf("invalid dataset")
 	}
-	if (p.BlockSize != "" && !zfsRecordSize.MatchString(strings.ToUpper(p.BlockSize))) || (p.Compression != "" && !zfsCompression.MatchString(strings.ToLower(p.Compression))) || (p.Quota != "" && p.Quota != "none" && !zfsSize.MatchString(p.Quota)) {
+	if !validDatasetProperties(p) {
 		return nil, fmt.Errorf("invalid ZFS properties")
 	}
 	if _, err := runShell(ctx, "zfs", "list", "-H", "-o", "name", p.Dataset); err == nil {
@@ -920,6 +922,12 @@ func validDataset(value string) bool {
 func validSnapshot(value string) bool {
 	parts := strings.Split(value, "@")
 	return len(parts) == 2 && validDataset(parts[0]) && datasetPart.MatchString(parts[1])
+}
+
+func validDatasetProperties(p ipc.DatasetCreatePayload) bool {
+	return (p.BlockSize == "" || zfsRecordSize.MatchString(strings.ToUpper(p.BlockSize))) &&
+		(p.Compression == "" || zfsCompression.MatchString(strings.ToLower(p.Compression))) &&
+		(p.Quota == "" || p.Quota == "none" || zfsSize.MatchString(p.Quota))
 }
 
 func composeArgs(stackID, dataset string, action ...string) ([]string, string, error) {

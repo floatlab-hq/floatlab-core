@@ -182,6 +182,22 @@ type BackupRestoreActivatePayload struct {
 	ExpectedGUID  string `json:"expected_guid"`
 }
 
+type StackMoveActivatePayload struct {
+	OperationID  string                 `json:"operation_id"`
+	StackID      string                 `json:"stack_id"`
+	SourceNodeID string                 `json:"source_node_id"`
+	DatasetPath  string                 `json:"dataset_path"`
+	Snapshot     string                 `json:"snapshot"`
+	Datasets     []DatasetCreatePayload `json:"datasets"`
+}
+
+type StackMoveArchivePayload struct {
+	OperationID string                 `json:"operation_id"`
+	DatasetPath string                 `json:"dataset_path"`
+	Snapshot    string                 `json:"snapshot"`
+	Datasets    []DatasetCreatePayload `json:"datasets"`
+}
+
 type NetAddrPayload struct {
 	Interface string `json:"interface"`
 	Address   string `json:"address"`

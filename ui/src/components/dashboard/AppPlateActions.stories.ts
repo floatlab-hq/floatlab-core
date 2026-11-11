@@ -6,6 +6,7 @@ export default meta
 export const Default: StoryObj<typeof meta> = {}
 export const Cached: StoryObj<typeof meta> = { args: { app: { ...meta.args!.app!, replica: true } } }
 export const ReadOnly: StoryObj<typeof meta> = { args: { readonly: true } }
+export const Movable: StoryObj<typeof meta> = { args: { kind: 'runtime', app: { ...meta.args!.app!, moveAvailable: true } } }
 
 export const Restarting: StoryObj<typeof meta> = { args: { app: { ...meta.args!.app!, runtimeMotion: 'restart' } } }
 

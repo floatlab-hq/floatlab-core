@@ -22,6 +22,12 @@ describe('App plate actions', () => {
     await wrapper.findAll('[role="menuitem"]').find(button => button.text() === 'View logs')!.trigger('click')
     expect(wrapper.emitted('action')).toEqual([['logs']])
   })
+  it('offers moving a running app through its runtime menu', async () => {
+    const wrapper = render({ state: 'Running', replica: true, moveAvailable: true })
+    await wrapper.get('.plate-card').trigger('click')
+    await wrapper.findAll('[role="menuitem"]').find(button => button.text() === 'Move app…')!.trigger('click')
+    expect(wrapper.emitted('action')).toEqual([['move']])
+  })
   it('routes configured standby switches and replication commands', async () => {
     const wrapper = render({ hostSwitch: 'triggerFailover' }, 'replication')
     await wrapper.get('.plate-card').trigger('click')

@@ -48,6 +48,9 @@ type Server struct {
 	peerWorkloads *workloadPeers
 	joinPending   func() bool
 	membershipMu  sync.RWMutex
+	stackLocks    [64]sync.Mutex
+	moveNames     sync.Mutex
+	moveReceives  sync.Mutex
 }
 
 type Config struct {

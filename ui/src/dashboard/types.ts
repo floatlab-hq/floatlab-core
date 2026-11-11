@@ -35,6 +35,7 @@ export interface DirectoryApp {
   backup: string
   group: string
   actionPending?: boolean
+  moveAvailable?: boolean
   runtimeMotion?: 'restart'
   hostId?: string
   hostHealth?: string
