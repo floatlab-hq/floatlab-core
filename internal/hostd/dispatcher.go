@@ -115,23 +115,28 @@ func (d *Dispatcher) terminalOpen(ctx context.Context, raw json.RawMessage) (any
 	d.mu.Lock()
 	d.terminals[terminal.ID] = terminal
 	d.mu.Unlock()
-	go d.streamTerminal(terminal)
+	connection := ipc.ConnectionContext(ctx)
+	stop := context.AfterFunc(connection, func() { _ = terminal.Close() })
+	go func() {
+		defer stop()
+		d.streamTerminal(connection, terminal)
+	}()
 	return ipc.TerminalSessionPayload{SessionID: terminal.ID}, nil
 }
 
-func (d *Dispatcher) streamTerminal(terminal *docker.Terminal) {
+func (d *Dispatcher) streamTerminal(ctx context.Context, terminal *docker.Terminal) {
 	buffer := make([]byte, 32*1024)
 	for {
 		n, err := terminal.Read(buffer)
 		if n > 0 {
-			d.srv.Emit("docker.exec.output", ipc.TerminalOutputEvent{SessionID: terminal.ID, Data: append([]byte(nil), buffer[:n]...)})
+			d.srv.EmitContext(ctx, "docker.exec.output", ipc.TerminalOutputEvent{SessionID: terminal.ID, Data: append([]byte(nil), buffer[:n]...)})
 		}
 		if err != nil {
 			event := ipc.TerminalOutputEvent{SessionID: terminal.ID, Closed: true}
 			if !errors.Is(err, io.EOF) {
 				event.Error = err.Error()
 			}
-			d.srv.Emit("docker.exec.output", event)
+			d.srv.EmitContext(ctx, "docker.exec.output", event)
 			d.mu.Lock()
 			delete(d.terminals, terminal.ID)
 			d.mu.Unlock()
@@ -778,10 +783,14 @@ func (d *Dispatcher) dockerEvents(ctx context.Context, raw json.RawMessage) (any
 		return nil, fmt.Errorf("docker client not available")
 	}
 	evCh := make(chan ipc.Event, 128)
-	go d.docker.StreamEvents(ctx, evCh, d.log)
+	connection := ipc.ConnectionContext(ctx)
+	go func() {
+		defer close(evCh)
+		d.docker.StreamEvents(connection, evCh, d.log)
+	}()
 	go func() {
 		for ev := range evCh {
-			d.srv.Emit(ev.Name, json.RawMessage(ev.Payload))
+			d.srv.EmitContext(connection, ev.Name, json.RawMessage(ev.Payload))
 		}
 	}()
 	d.log.Info("docker event stream started")

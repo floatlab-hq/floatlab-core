@@ -144,6 +144,22 @@ func TestBackupRestoreResumesDurableActivatedMountsBeforeProvisioning(t *testing
 	if state.State != run.StateProvisioning || prepared["floatlab/original/data"] != 1 || prepared["floatlab/original/cache"] != 2 || activations["data"] != 1 || activations["cache"] != 1 {
 		t.Fatalf("retry repeated completed mount or provisioned early: state=%+v prepares=%v activations=%v", state, prepared, activations)
 	}
+	// A process can stop after committing the handoff but before the task is done.
+	// Its retry must accept descendants already dispatched by the orchestrator.
+	rows, err = db.Query(ctx, rqlite.Statement{SQL: `SELECT payload FROM tasks WHERE id='backup-restore-restore-op'`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completedRaw := json.RawMessage(rows.Values[0][0].(string))
+	if err := lifecycle.Apply(run.StackStateChanged{StackID: payload.StackID, From: run.StateProvisioning, ExpectedUpdatedAt: state.UpdatedAt, To: run.StateIdle, Event: run.EventProvisionDone, Timestamp: time.Now().UTC(), NodeID: "destination"}, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.handleBackupRestore(ctx, completedRaw); err != nil {
+		t.Fatalf("handoff retry rejected descendant lifecycle: %v", err)
+	}
+	if activations["data"] != 1 || activations["cache"] != 1 {
+		t.Fatal("handoff retry repeated data activation")
+	}
 	op, err := ops.Get(ctx, payload.OperationID)
 	if err != nil || op.Checkpoint != "provisioning" {
 		t.Fatalf("operation did not hand off to start: %+v %v", op, err)

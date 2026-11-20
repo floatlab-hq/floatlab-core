@@ -144,8 +144,8 @@ func TestBackupRestoreQueuesNewStackWhileOriginalSourceIsOffline(t *testing.T) {
 		t.Fatalf("wrong restored stack %+v %v", stack, err)
 	}
 	state, ok := s.raft.FSM().State(stack.ID)
-	if !ok || state.State != run.StateRestoring {
-		t.Fatalf("workload started before data restore: %+v", state)
+	if ok {
+		t.Fatalf("lifecycle changed before the durable restore task ran: %+v", state)
 	}
 	op, err := s.ops.Get(context.Background(), result.OperationID)
 	if err != nil || op.Action != "start" || op.StackID != stack.ID {
@@ -161,6 +161,9 @@ func TestBackupRestoreQueuesNewStackWhileOriginalSourceIsOffline(t *testing.T) {
 	}
 	if payload.SourceNodeID != "offline-source" || payload.DestinationNodeID != "backup" || len(payload.Snapshots) != 2 {
 		t.Fatalf("lost backup identity: %+v", payload)
+	}
+	if err := s.raft.Apply(payload.Lifecycle, time.Second); err != nil {
+		t.Fatal(err)
 	}
 	for _, taskState := range []string{"pending", "failed"} {
 		if err := db.Execute(context.Background(), []rqlite.Statement{

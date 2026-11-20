@@ -386,6 +386,36 @@ The suite preserves workload networking, persistence, snapshot and Compose recov
 
 Snapshot recovery is now `POST /api/v1/stacks/{id}/snapshots/{snapshotId}/restore`. `POST /api/v1/stacks/{id}/restore` performs failback to the primary. Clients of the old snapshot recovery path must migrate. Management requests require an administrator token, except login, public health routes, and the internal metrics webhook; deployments must restrict webhook ingress to trusted alert producers.
 
+## Adding nodes to a lab
+
+Enrollment is part of the main `lab` CLI and [management API specification](api/openapi/openapi.yaml), with its endpoints defined in [lab.yaml](api/openapi/lab.yaml). The first appliance initializes a single-node lab. Add another empty appliance through an invitation:
+
+1. Against an existing member, run `lab lab invite` (`POST /api/v1/lab/invitations`). The returned invitation is single-use and expires after 15 minutes.
+2. Against the joining appliance, run `lab lab join '<request-json>'` (`POST /api/v1/lab/join`). Supply the complete invitation object plus the joining appliance's reachable addresses:
+
+   ```json
+   {
+     "invitation": {
+       "lab_id": "<from invitation>",
+       "bootstrap_url": "<from invitation>",
+       "token": "<from invitation>",
+       "fingerprint": "<from invitation>",
+       "expires_at": "<from invitation>"
+     },
+     "peer_url": "https://192.0.2.20:9443",
+     "raft_address": "192.0.2.20:4002",
+     "rqlite_address": "192.0.2.20:4001"
+   }
+   ```
+
+3. Check `lab lab members` and `lab lab status` (`GET /api/v1/lab/members` and `GET /api/v1/lab/status`).
+
+Select the target appliance with `FLOATLAB_URL` and authenticate with that appliance's administrator session or `FLOATLAB_TOKEN`. The first `lab` in these shell commands is the executable; in its interactive prompt or the web command palette, enter `lab invite`, `lab join …`, `lab members`, or `lab status`. The dashboard's Add host action opens `lab invite` in the same palette.
+
+The joining appliance must have no workloads or retained recovery material; existing labs cannot be merged. Enrollment installs lab credentials, joins the configuration database as a non-voter, waits for local catch-up, then promotes the node to a voter and marks it active. Joining adopts the destination lab's administrator accounts. `POST /nodes` creates an inventory record only; use the enrollment endpoints to add a lab member.
+
+The same operations are available through the CLI's generated API commands, including `lab api lab createLabInvitation` and `lab api lab joinLab --body-file join.json`. No separate enrollment utility is required.
+
 ## CLI shell completion
 
 The CLI and live command palette share modular definitions in [`api/opencli/`](api/opencli/README.md). Autocomplete scripts are bundled in the `lab` binary; no separate download is needed.

@@ -11,6 +11,7 @@ info:
       auth.yaml      — Password login and JWT issuance
       stacks.yaml    — Stack lifecycle, compose, state
       nodes.yaml     — Node registration, health, IPC ping
+      lab.yaml       — Lab invitations, node enrollment, membership and identity
       health.yaml    — Liveness, readiness, Raft state
       failover.yaml  — Manual/auto failover trigger, abort, step log
       network.yaml   — IPv6 prefix pools, address allocation
@@ -42,6 +43,8 @@ tags:
     description: Container stack lifecycle management
   - name: nodes
     description: Node registration and health
+  - name: lab
+    description: Lab invitations, node enrollment, membership and identity
   - name: health
     description: Liveness, readiness, Raft consensus
   - name: failover

@@ -258,5 +258,10 @@ func reverseComposeTargets(value any, destination, original string) {
 }
 
 func (s *Server) applyMoveState(id string, from, to run.State, event run.Event) error {
-	return s.raft.Apply(run.StackStateChanged{StackID: id, From: from, To: to, Event: event, NodeID: s.cfg.LocalNodeID, Timestamp: time.Now().UTC()}, 10*time.Second)
+	instance, ok := s.raft.FSM().State(id)
+	expected := time.Time{}
+	if ok {
+		expected = instance.UpdatedAt
+	}
+	return s.raft.Apply(run.StackStateChanged{StackID: id, From: from, To: to, Event: event, ExpectedUpdatedAt: expected, NodeID: s.cfg.LocalNodeID, Timestamp: time.Now().UTC()}, 10*time.Second)
 }

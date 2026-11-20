@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	hraft "github.com/hashicorp/raft"
 	"go.uber.org/zap"
 
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
@@ -55,9 +54,8 @@ func NewLocalNode(ctx context.Context, db *rqlite.Client, nodeID string, log *za
 		if persisted.NodeID != "" && persisted.NodeID != nodeID {
 			return nil, fmt.Errorf("persisted lifecycle belongs to another node")
 		}
-		if err, ok := n.fsm.Apply(&hraft.Log{Data: []byte(entry)}).(error); ok {
-			return nil, err
-		}
+		// Each row is the latest committed snapshot, not the complete event log.
+		n.fsm.applyLocked(persisted)
 	}
 	return n, nil
 }
@@ -68,6 +66,18 @@ func (n *Node) applyLocal(entry run.StackStateChanged, timeout time.Duration) er
 	if entry.NodeID != "" && entry.NodeID != n.local.nodeID {
 		return fmt.Errorf("workload lifecycle belongs to another node")
 	}
+	n.fsm.mu.Lock()
+	defer n.fsm.mu.Unlock()
+	if err := n.fsm.validateLocked(entry); err != nil {
+		return err
+	}
+	// A local row stores only the latest entry, including after a failure event
+	// that omits the host. Carry its committed routing into the restart snapshot.
+	if entry.NodeID == "" {
+		if instance := n.fsm.stacks[entry.StackID]; instance != nil {
+			entry.NodeID = instance.NodeID
+		}
+	}
 	b, err := json.Marshal(entry)
 	if err != nil {
 		return err
@@ -77,8 +87,6 @@ func (n *Node) applyLocal(entry run.StackStateChanged, timeout time.Duration) er
 	if err := n.local.db.Execute(ctx, []rqlite.Statement{{SQL: `INSERT INTO workload_lifecycle(stack_id,entry) VALUES(?,?) ON CONFLICT(stack_id) DO UPDATE SET entry=excluded.entry`, Params: []any{entry.StackID, string(b)}}}); err != nil {
 		return err
 	}
-	if err, ok := n.fsm.Apply(&hraft.Log{Data: b}).(error); ok {
-		return err
-	}
+	n.fsm.applyLocked(entry)
 	return nil
 }

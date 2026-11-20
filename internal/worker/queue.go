@@ -112,6 +112,27 @@ func (w *Worker) handleStackUpgrade(ctx context.Context, raw json.RawMessage) er
 	if op.State == "succeeded" || op.State == "failed" {
 		return nil
 	}
+	if p.Lifecycle.Timestamp.IsZero() {
+		// Older queued jobs already committed their initial transition.
+		instance, ok := w.raft.FSM().State(p.StackID)
+		if !ok || (instance.State != run.StateUpdating && instance.State != run.StateRollingBack) {
+			return fmt.Errorf("legacy upgrade has no active lifecycle")
+		}
+		event := run.EventUpdateStack
+		if instance.State == run.StateRollingBack {
+			event = run.EventUpdateFailed
+		}
+		p.Lifecycle = run.StackStateChanged{StackID: p.StackID, To: instance.State, Event: event, Timestamp: instance.UpdatedAt, NodeID: p.NodeID}
+		if err := w.saveUpgrade(ctx, p); err != nil {
+			return err
+		}
+	}
+	if p.Lifecycle.Event == run.EventUpdateDone || p.Lifecycle.Event == run.EventRollbackDone || p.Lifecycle.Event == run.EventRollbackFailed {
+		if err := w.applyTaskLifecycle(p.Lifecycle); err != nil {
+			return err
+		}
+		return w.finishUpgrade(ctx, p)
+	}
 	stack, err := w.store.GetStack(ctx, p.StackID)
 	if err != nil {
 		return err
@@ -128,42 +149,51 @@ func (w *Worker) handleStackUpgrade(ctx context.Context, raw json.RawMessage) er
 	if err != nil {
 		return err
 	}
-	snapshotCreated := false
-	fail := func(cause error) error {
-		_ = w.applyStackEvent(p.StackID, p.NodeID, run.EventUpdateFailed)
-		rollback := func() error {
-			if snapshotCreated {
-				if _, err := w.pool.Execute(ctx, p.NodeID, "compose.down", ipc.ComposeDownPayload{StackID: p.StackID, DatasetPath: p.DatasetPath}); err != nil {
-					return err
-				}
-				if err := w.restoreDatasets(ctx, p.NodeID, p.DatasetPath, snapshot, p.OperationID); err != nil {
-					return err
-				}
-			}
-			if err := w.store.UpdateStackCompose(ctx, p.StackID, p.OldCompose); err != nil {
+	rollback := func() error {
+		if p.SnapshotCreated {
+			if _, err := w.pool.Execute(ctx, p.NodeID, "compose.down", ipc.ComposeDownPayload{StackID: p.StackID, DatasetPath: p.DatasetPath}); err != nil {
 				return err
 			}
-			if _, err := w.pool.Execute(ctx, p.NodeID, "compose.source.write", ipc.ComposeSourcePayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: p.OldCompose}); err != nil {
+			if err := w.restoreDatasets(ctx, p.NodeID, p.DatasetPath, snapshot, p.OperationID); err != nil {
 				return err
 			}
-			if _, err := w.pool.Execute(ctx, p.NodeID, "compose.up", ipc.ComposeUpPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: oldRuntime}); err != nil {
-				return err
-			}
-			return WaitHealthy(ctx, w.pool, p.NodeID, p.StackID, timeout(p.HealthTimeout), nil)
 		}
-		checkpoint, outcome, message := "rolled-back", "failed-rolled-back", cause.Error()
-		if rollbackErr := rollback(); rollbackErr != nil {
-			checkpoint = "rollback-failed"
-			outcome = "failed-rollback-failed"
-			message += "; rollback: " + rollbackErr.Error()
-			_ = w.applyStackEvent(p.StackID, p.NodeID, run.EventRollbackFailed)
-		} else {
-			_ = w.applyStackEvent(p.StackID, p.NodeID, run.EventRollbackDone)
+		if err := w.store.UpdateStackCompose(ctx, p.StackID, p.OldCompose); err != nil {
+			return err
 		}
-		_ = w.ops.Update(context.Background(), p.OperationID, "failed", checkpoint, message)
-		_ = operation.RecordEvent(context.Background(), w.db, operation.Event{StackID: p.StackID, Type: "Upgrade", Outcome: outcome, OperationID: p.OperationID, Actor: p.Actor, Error: message})
-		return nil
+		if _, err := w.pool.Execute(ctx, p.NodeID, "compose.source.write", ipc.ComposeSourcePayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: p.OldCompose}); err != nil {
+			return err
+		}
+		if _, err := w.pool.Execute(ctx, p.NodeID, "compose.up", ipc.ComposeUpPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: oldRuntime}); err != nil {
+			return err
+		}
+		return WaitHealthy(ctx, w.pool, p.NodeID, p.StackID, timeout(p.HealthTimeout), nil)
 	}
+	finishRollback := func() error {
+		event := run.EventRollbackDone
+		if err := rollback(); err != nil {
+			event = run.EventRollbackFailed
+			p.Failure += "; rollback: " + err.Error()
+		}
+		if err := w.advanceUpgrade(ctx, &p, event); err != nil {
+			return err
+		}
+		return w.finishUpgrade(ctx, p)
+	}
+	fail := func(cause error) error {
+		p.Failure = cause.Error()
+		if err := w.advanceUpgrade(ctx, &p, run.EventUpdateFailed); err != nil {
+			return err
+		}
+		return finishRollback()
+	}
+	if err := w.applyTaskLifecycle(p.Lifecycle); err != nil {
+		return err
+	}
+	if p.Lifecycle.To == run.StateRollingBack {
+		return finishRollback()
+	}
+
 	_ = w.ops.Update(ctx, p.OperationID, "running", "pulling-images", "")
 	if _, err := w.pool.Execute(ctx, p.NodeID, "compose.pull", ipc.ComposePullPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: p.NewCompose, Services: p.Services}); err != nil {
 		return fail(err)
@@ -172,7 +202,10 @@ func (w *Worker) handleStackUpgrade(ctx context.Context, raw json.RawMessage) er
 	if _, err := w.pool.Execute(ctx, p.NodeID, "fs.snapshot.create", ipc.SnapshotCreatePayload{Dataset: p.DatasetPath, Name: snapshot, Recursive: true, Properties: map[string]string{"floatlab:operation-id": p.OperationID, "floatlab:purpose": "upgrade"}}); err != nil {
 		return fail(err)
 	}
-	snapshotCreated = true
+	p.SnapshotCreated = true
+	if err := w.saveUpgrade(ctx, p); err != nil {
+		return err
+	}
 	now := time.Now().UTC()
 	_ = w.db.Execute(ctx, []rqlite.Statement{
 		{SQL: `INSERT OR IGNORE INTO stack_snapshots(id,stack_id,operation_id,zfs_name,kind,created_at) VALUES(?,?,?,?,?,?)`, Params: []interface{}{uuid.NewString(), p.StackID, p.OperationID, snapshot, "pre-upgrade", now}},
@@ -192,11 +225,10 @@ func (w *Worker) handleStackUpgrade(ctx context.Context, raw json.RawMessage) er
 	if err := WaitHealthy(ctx, w.pool, p.NodeID, p.StackID, timeout(p.HealthTimeout), nil); err != nil {
 		return fail(err)
 	}
-	if err := w.applyStackEvent(p.StackID, p.NodeID, run.EventUpdateDone); err != nil {
-		return fail(err)
+	if err := w.advanceUpgrade(ctx, &p, run.EventUpdateDone); err != nil {
+		return err
 	}
-	_ = operation.RecordEvent(ctx, w.db, operation.Event{StackID: p.StackID, Type: "Upgrade", Outcome: "succeeded", OperationID: p.OperationID, Actor: p.Actor})
-	return w.ops.Update(ctx, p.OperationID, "succeeded", "succeeded", "")
+	return w.finishUpgrade(ctx, p)
 }
 
 func (w *Worker) handleStackRestart(ctx context.Context, raw json.RawMessage) error {
@@ -550,16 +582,48 @@ func (w *Worker) runtimeCompose(ctx context.Context, stackID, name, source strin
 	return compose.RuntimeYAML(source, name, stackIP)
 }
 
-func (w *Worker) applyStackEvent(stackID, nodeID string, event run.Event) error {
-	instance, ok := w.raft.FSM().State(stackID)
-	if !ok {
-		return fmt.Errorf("stack %s has no state", stackID)
+// applyTaskLifecycle replays an exact durable intent, never a later generation
+// that merely happens to have returned to the same state.
+func (w *Worker) applyTaskLifecycle(entry run.StackStateChanged) error {
+	if instance, ok := w.raft.FSM().State(entry.StackID); ok && instance.State == entry.To && instance.UpdatedAt.Equal(entry.Timestamp) {
+		return nil
 	}
-	next, err := run.New().Apply(context.Background(), instance, event)
+	return w.raft.Apply(entry, 10*time.Second)
+}
+
+func (w *Worker) saveUpgrade(ctx context.Context, p StackUpgradePayload) error {
+	return w.db.Execute(ctx, []rqlite.Statement{{SQL: `UPDATE tasks SET payload=? WHERE id=?`, Params: []any{marshalPayload(p), "upgrade-" + p.OperationID}}})
+}
+
+func (w *Worker) advanceUpgrade(ctx context.Context, p *StackUpgradePayload, event run.Event) error {
+	instance, ok := w.raft.FSM().State(p.StackID)
+	if !ok || instance.State != p.Lifecycle.To || !instance.UpdatedAt.Equal(p.Lifecycle.Timestamp) {
+		return fmt.Errorf("upgrade lifecycle changed: %w", run.ErrInvalidTransition)
+	}
+	next, err := run.New().Apply(ctx, instance, event)
 	if err != nil {
 		return err
 	}
-	return w.raft.Apply(run.StackStateChanged{StackID: stackID, From: instance.State, To: next.State, Event: event, Timestamp: time.Now().UTC(), NodeID: nodeID}, 10*time.Second)
+	p.Lifecycle = run.StackStateChanged{StackID: p.StackID, From: instance.State, ExpectedUpdatedAt: instance.UpdatedAt, To: next.State, Event: event, Timestamp: time.Now().UTC(), NodeID: p.NodeID}
+	// Persist each transition before applying it so a crash can replay the same intent.
+	if err := w.saveUpgrade(ctx, *p); err != nil {
+		return err
+	}
+	return w.applyTaskLifecycle(p.Lifecycle)
+}
+
+func (w *Worker) finishUpgrade(ctx context.Context, p StackUpgradePayload) error {
+	state, checkpoint, outcome := "succeeded", "succeeded", "succeeded"
+	if p.Lifecycle.Event == run.EventRollbackDone {
+		state, checkpoint, outcome = "failed", "rolled-back", "failed-rolled-back"
+	}
+	if p.Lifecycle.Event == run.EventRollbackFailed {
+		state, checkpoint, outcome = "failed", "rollback-failed", "failed-rollback-failed"
+	}
+	if err := operation.RecordEvent(ctx, w.db, operation.Event{StackID: p.StackID, Type: "Upgrade", Outcome: outcome, OperationID: p.OperationID, Actor: p.Actor, Error: p.Failure}); err != nil {
+		return err
+	}
+	return w.ops.Update(ctx, p.OperationID, state, checkpoint, p.Failure)
 }
 
 func (w *Worker) poll(ctx context.Context) error {
@@ -626,9 +690,13 @@ func (w *Worker) poll(ctx context.Context) error {
 		if int(attempts)+1 >= maxAttempts {
 			_ = w.db.Execute(ctx, []rqlite.Statement{{SQL: `UPDATE tasks SET state='failed',attempts=attempts+1,error=?,updated_at=datetime('now'),locked_by=NULL WHERE id=?`, Params: []interface{}{execErr.Error(), taskID}}})
 			if taskType == TaskBackupRestore {
-				var restore BackupRestorePayload
-				if json.Unmarshal([]byte(payloadStr), &restore) == nil && w.raft != nil {
-					_ = w.raft.Apply(run.StackStateChanged{StackID: restore.StackID, From: run.StateRestoring, To: run.StateFailed, Event: run.EventRestoreFailed, Timestamp: time.Now().UTC(), NodeID: restore.DestinationNodeID}, 10*time.Second)
+				// The handler may have durably advanced its intent during this attempt.
+				rows, err := w.db.Query(ctx, rqlite.Statement{SQL: `SELECT payload FROM tasks WHERE id=?`, Params: []any{taskID}})
+				if err == nil && len(rows.Values) == 1 && w.raft != nil {
+					var restore BackupRestorePayload
+					if json.Unmarshal([]byte(rows.Values[0][0].(string)), &restore) == nil && restore.Lifecycle.To == run.StateRestoring && !restore.Lifecycle.Timestamp.IsZero() {
+						_ = w.raft.Apply(run.StackStateChanged{StackID: restore.StackID, From: run.StateRestoring, ExpectedUpdatedAt: restore.Lifecycle.Timestamp, To: run.StateFailed, Event: run.EventRestoreFailed, Timestamp: time.Now().UTC(), NodeID: restore.DestinationNodeID}, 10*time.Second)
+					}
 				}
 			}
 			var payload map[string]interface{}
@@ -831,12 +899,16 @@ func (w *Worker) applyRetentionViaIPC(ctx context.Context, nodeID, dataset, snap
 
 // EnqueueTask inserts a new pending task into the rqlite tasks table.
 func EnqueueTask(ctx context.Context, db *rqlite.Client, id, taskType, stackID string, payload interface{}) error {
-	p := marshalPayload(payload)
-	return db.Execute(ctx, []rqlite.Statement{{
+	return db.Execute(ctx, []rqlite.Statement{TaskInsert(id, taskType, stackID, payload)})
+}
+
+// TaskInsert allows admission to atomically create related local records.
+func TaskInsert(id, taskType, stackID string, payload interface{}) rqlite.Statement {
+	return rqlite.Statement{
 		SQL: `INSERT OR IGNORE INTO tasks (id, type, stack_id, payload, state, attempts, created_at, updated_at)
 		      VALUES (?, ?, ?, ?, 'pending', 0, datetime('now'), datetime('now'))`,
-		Params: []interface{}{id, taskType, stackID, p},
-	}})
+		Params: []interface{}{id, taskType, stackID, marshalPayload(payload)},
+	}
 }
 
 func (w *Worker) handleDatasetRollback(ctx context.Context, raw json.RawMessage) error {

@@ -59,6 +59,7 @@ const (
 	EventRestoreFailed         Event = "RestoreFailed"
 	EventStopStack             Event = "StopStack"
 	EventStopDone              Event = "StopDone"
+	EventStopFailed            Event = "StopFailed"
 	EventMoveStarted           Event = "MoveStarted"
 	EventMoveCompleted         Event = "MoveCompleted"
 	EventUpdateStack           Event = "UpdateStack"
@@ -94,8 +95,10 @@ var transitions = []Transition{
 	{StateRestoring, EventRestoreFailed, StateFailed},
 	{StateRunningPrimary, EventStopStack, StateStopping},
 	{StateRunningBackup, EventStopStack, StateStopping},
+	{StateFailed, EventStopStack, StateStopping},
 	{StateIdle, EventStopStack, StateIdle},
 	{StateStopping, EventStopDone, StateIdle},
+	{StateStopping, EventStopFailed, StateFailed},
 	{StateRunningPrimary, EventUpdateStack, StateUpdating},
 	{StateUpdating, EventUpdateDone, StateRunningPrimary},
 	{StateUpdating, EventUpdateFailed, StateRollingBack},
@@ -118,6 +121,7 @@ func init() {
 
 type StackInstance struct {
 	ID            string
+	NodeID        string // execution host retained across failure and stop retries
 	State         State
 	PreviousState State
 	LockedBy      string

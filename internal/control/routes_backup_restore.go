@@ -185,23 +185,17 @@ func (s *Server) handleRestoreBackup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sort.Slice(req.Snapshots, func(i, j int) bool { return req.Snapshots[i].Dataset < req.Snapshots[j].Dataset })
-	stack := &config.Stack{ID: uuid.NewString(), Name: name, PrimaryNodeID: req.DestinationNodeID, ComposeYAML: restored, ZFSDataset: root, FailoverMode: "manual"}
-	if err := s.store.CreateStack(r.Context(), stack); err != nil {
-		writeError(w, 409, err.Error())
-		return
-	}
+	now := time.Now().UTC()
+	stack := &config.Stack{ID: uuid.NewString(), Name: name, PrimaryNodeID: req.DestinationNodeID, ComposeYAML: restored, ZFSDataset: root, FailoverMode: "manual", CreatedAt: now, UpdatedAt: now}
 	opID := operationID(r.Context())
-	if err := s.db.Execute(r.Context(), []rqlite.Statement{{SQL: `UPDATE operations SET stack_id=?,action='start' WHERE id=?`, Params: []interface{}{stack.ID, opID}}}); err != nil {
-		writeError(w, 500, err.Error())
-		return
-	}
-	if err := s.raft.Apply(run.StackStateChanged{StackID: stack.ID, From: run.StateIdle, To: run.StateRestoring, Event: run.EventBackupRestoreStart, Timestamp: time.Now().UTC(), NodeID: stack.PrimaryNodeID}, 10*time.Second); err != nil {
-		writeError(w, 500, err.Error())
-		return
-	}
-	payload := worker.BackupRestorePayload{OperationID: opID, StackID: stack.ID, SourceNodeID: req.SourceNodeID, BackupNodeID: req.BackupNodeID, DestinationNodeID: req.DestinationNodeID, DatasetPath: root, Snapshots: req.Snapshots, Actor: actor(r)}
-	if err := worker.EnqueueTask(r.Context(), s.db, "backup-restore-"+opID, worker.TaskBackupRestore, stack.ID, payload); err != nil {
-		writeError(w, 500, err.Error())
+	intent := run.StackStateChanged{StackID: stack.ID, From: run.StateIdle, To: run.StateRestoring, Event: run.EventBackupRestoreStart, Timestamp: now, NodeID: stack.PrimaryNodeID}
+	payload := worker.BackupRestorePayload{Lifecycle: intent, OperationID: opID, StackID: stack.ID, SourceNodeID: req.SourceNodeID, BackupNodeID: req.BackupNodeID, DestinationNodeID: req.DestinationNodeID, DatasetPath: root, Snapshots: req.Snapshots, Actor: actor(r)}
+	if err := s.db.Execute(r.Context(), []rqlite.Statement{
+		config.StackInsert(stack),
+		{SQL: `UPDATE operations SET stack_id=?,action='start' WHERE id=?`, Params: []any{stack.ID, opID}},
+		worker.TaskInsert("backup-restore-"+opID, worker.TaskBackupRestore, stack.ID, payload),
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": opID, "stack_id": stack.ID, "status": "pending"})

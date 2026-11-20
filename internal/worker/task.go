@@ -1,6 +1,10 @@
 package worker
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/floatlab/floatlab-core/pkg/run"
+)
 
 // Task type constants match the tasks.type column in rqlite.
 const (
@@ -29,6 +33,7 @@ type BackupRestoreMount struct {
 }
 
 type BackupRestorePayload struct {
+	Lifecycle         run.StackStateChanged         `json:"lifecycle,omitempty"`
 	OperationID       string                        `json:"operation_id"`
 	StackID           string                        `json:"stack_id"`
 	SourceNodeID      string                        `json:"source_node_id"`
@@ -83,15 +88,18 @@ type ReplTriggerPayload struct {
 }
 
 type StackUpgradePayload struct {
-	OperationID   string   `json:"operation_id"`
-	StackID       string   `json:"stack_id"`
-	NodeID        string   `json:"node_id"`
-	DatasetPath   string   `json:"dataset_path"`
-	OldCompose    string   `json:"old_compose"`
-	NewCompose    string   `json:"new_compose"`
-	Services      []string `json:"services"`
-	HealthTimeout string   `json:"health_timeout"`
-	Actor         string   `json:"actor,omitempty"`
+	Lifecycle       run.StackStateChanged `json:"lifecycle,omitempty"`
+	SnapshotCreated bool                  `json:"snapshot_created,omitempty"`
+	Failure         string                `json:"failure,omitempty"`
+	OperationID     string                `json:"operation_id"`
+	StackID         string                `json:"stack_id"`
+	NodeID          string                `json:"node_id"`
+	DatasetPath     string                `json:"dataset_path"`
+	OldCompose      string                `json:"old_compose"`
+	NewCompose      string                `json:"new_compose"`
+	Services        []string              `json:"services"`
+	HealthTimeout   string                `json:"health_timeout"`
+	Actor           string                `json:"actor,omitempty"`
 }
 
 type StackRestartPayload struct {

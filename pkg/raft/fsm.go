@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
-	hraft "github.com/hashicorp/raft"
 	"github.com/floatlab/floatlab-core/pkg/run"
+	hraft "github.com/hashicorp/raft"
 )
 
 // FSM applies StackStateChanged log entries from the Raft log to the in-memory
@@ -65,6 +66,33 @@ func (f *FSM) Apply(l *hraft.Log) interface{} {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.validateLocked(entry); err != nil {
+		return err
+	}
+	f.applyLocked(entry)
+	return nil
+}
+
+func (f *FSM) validateLocked(entry run.StackStateChanged) error {
+	// Eventless entries without an origin are legacy snapshots used by imports.
+	if entry.Event == "" && entry.From == "" && entry.ExpectedUpdatedAt.IsZero() {
+		return nil
+	}
+	state, updatedAt := run.StateIdle, time.Time{}
+	if inst, ok := f.stacks[entry.StackID]; ok {
+		state, updatedAt = inst.State, inst.UpdatedAt
+	}
+	// Old restore tasks omitted From on their initial Restoring entry.
+	if _, exists := f.stacks[entry.StackID]; !exists && entry.From == "" && entry.Event == run.EventBackupRestoreStart {
+		return nil
+	}
+	if state != entry.From || (!entry.ExpectedUpdatedAt.IsZero() && !updatedAt.Equal(entry.ExpectedUpdatedAt)) {
+		return fmt.Errorf("%w: stack %s changed since %s was observed", run.ErrInvalidTransition, entry.StackID, entry.From)
+	}
+	return nil
+}
+
+func (f *FSM) applyLocked(entry run.StackStateChanged) {
 
 	inst, ok := f.stacks[entry.StackID]
 	if !ok {
@@ -72,12 +100,17 @@ func (f *FSM) Apply(l *hraft.Log) interface{} {
 	}
 	updated := *inst
 	updated.PreviousState = updated.State
+	if !ok {
+		updated.PreviousState = entry.From
+	}
 	updated.State = entry.To
+	if entry.NodeID != "" {
+		updated.NodeID = entry.NodeID
+	}
 	updated.UpdatedAt = entry.Timestamp
 	f.stacks[entry.StackID] = &updated
 
 	f.fanOut(entry)
-	return nil
 }
 
 func (f *FSM) Snapshot() (hraft.FSMSnapshot, error) {

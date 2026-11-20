@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/floatlab/floatlab-core/internal/ipam"
 	"github.com/floatlab/floatlab-core/internal/worker"
@@ -66,7 +67,7 @@ volumes:
 	if err := source.store.CreateStack(ctx, &config.Stack{ID: id, Name: "web", PrimaryNodeID: "node-a", ZFSDataset: root, ComposeYAML: project}); err != nil {
 		t.Fatal(err)
 	}
-	if err := source.applyMoveState(id, run.StateStarting, run.StateRunningPrimary, run.EventStartDone); err != nil {
+	if err := source.raft.Apply(run.StackStateChanged{StackID: id, NodeID: "node-a", To: run.StateRunningPrimary, Timestamp: time.Now().UTC()}, time.Second); err != nil {
 		t.Fatal(err)
 	}
 	pool := ipam.Pool{Name: "destination", CIDR: "192.0.2.0/24", StartIP: "192.0.2.200", EndIP: "192.0.2.200", NodeIDs: []string{"node-b"}}

@@ -245,9 +245,15 @@ func actionFromRequest(r *http.Request) string {
 	return strings.ToLower(r.Method)
 }
 func stackIDFromPath(path string) string {
-	parts := strings.Split(strings.TrimPrefix(path, "/api/v1/stacks/"), "/")
-	if len(parts) > 0 && parts[0] != path {
-		return parts[0]
+	// Abort must remain available while the failover owns the stack's lane.
+	if strings.HasPrefix(path, "/api/v1/failover/") && strings.HasSuffix(path, "/abort") {
+		return ""
+	}
+	for _, prefix := range []string{"/api/v1/stacks/", "/api/v1/storage/datasets/", "/api/v1/failover/"} {
+		if rest, ok := strings.CutPrefix(path, prefix); ok {
+			id, _, _ := strings.Cut(rest, "/")
+			return id
+		}
 	}
 	return ""
 }

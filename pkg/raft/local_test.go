@@ -2,6 +2,7 @@ package raft
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -62,6 +63,39 @@ func TestLocalLifecycleDurableBeforeNotificationAndRestart(t *testing.T) {
 	}
 	if !recovered.IsLeader() || recovered.Leader() != "node-a" {
 		t.Fatal("local lifecycle requires remote leader")
+	}
+}
+
+func TestRejectedLocalTransitionDoesNotReplaceDurableState(t *testing.T) {
+	ctx := context.Background()
+	db, err := rqlite.OpenLocal(filepath.Join(t.TempDir(), "local.sqlite"), "node-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	n, err := NewLocalNode(ctx, db, "node-a", zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := time.Unix(100, 0).UTC()
+	if err := n.Apply(run.StackStateChanged{StackID: "web", NodeID: "node-a", To: run.StateRunningBackup, Timestamp: initial}, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	stopped := initial.Add(time.Second)
+	if err := n.Apply(run.StackStateChanged{StackID: "web", NodeID: "node-a", From: run.StateRunningBackup, ExpectedUpdatedAt: initial, To: run.StateStopping, Event: run.EventStopStack, Timestamp: stopped}, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	err = n.Apply(run.StackStateChanged{StackID: "web", NodeID: "node-a", From: run.StateStarting, ExpectedUpdatedAt: initial, To: run.StateRunningPrimary, Event: run.EventStartDone, Timestamp: stopped.Add(time.Second)}, time.Second)
+	if !errors.Is(err, run.ErrInvalidTransition) {
+		t.Fatalf("stale completion accepted: %v", err)
+	}
+	restarted, err := NewLocalNode(ctx, db, "node-a", zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _ := restarted.FSM().State("web")
+	if state.State != run.StateStopping || state.PreviousState != run.StateRunningBackup || !state.UpdatedAt.Equal(stopped) {
+		t.Fatalf("rejected transition replaced committed snapshot: %+v", state)
 	}
 }
 

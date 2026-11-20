@@ -65,7 +65,9 @@ func (o *Orchestrator) handleContainerState(ctx context.Context, ev ipc.Containe
 				zap.String("stack", ev.StackID),
 				zap.String("container", ev.ContainerID),
 				zap.String("event", ev.Status))
-			o.applyEvent("", ev.StackID, run.EventFailStack)
+			if _, applied := o.applyEvent("", ev.StackID, run.EventFailStack, inst.UpdatedAt); !applied {
+				return
+			}
 			details, _ := json.Marshal(map[string]string{"container_id": ev.ContainerID, "service": ev.Service, "image": ev.Image, "exit_status": ev.ExitStatus})
 			containers, _ := json.Marshal([]string{ev.ContainerID})
 			_ = operation.RecordEvent(ctx, o.db, operation.Event{StackID: ev.StackID, Type: "Crashed", Outcome: "failed", Details: details, Containers: containers})

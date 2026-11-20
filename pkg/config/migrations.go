@@ -17,6 +17,7 @@ func Migrate(ctx context.Context, db *rqlite.Client) error {
 		{SQL: `CREATE TABLE IF NOT EXISTS workload_move_owners (stack_id TEXT PRIMARY KEY, node_id TEXT NOT NULL, generation INTEGER NOT NULL)`},
 		{SQL: `CREATE TABLE IF NOT EXISTS workload_move_receipts (operation_id TEXT PRIMARY KEY, stack_id TEXT NOT NULL, phase TEXT NOT NULL)`},
 		{SQL: `CREATE TABLE IF NOT EXISTS workload_move_reservations (operation_id TEXT PRIMARY KEY, stack_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL UNIQUE)`},
+		{SQL: `CREATE TABLE IF NOT EXISTS workload_move_cancellations (operation_id TEXT PRIMARY KEY, stack_id TEXT NOT NULL)`},
 		{SQL: `CREATE TABLE IF NOT EXISTS failover_steps (stack_id TEXT NOT NULL, sequence_id TEXT NOT NULL, step INTEGER NOT NULL, name TEXT NOT NULL, state TEXT NOT NULL, started_at TEXT, completed_at TEXT, detail TEXT, PRIMARY KEY(stack_id, sequence_id, step))`},
 		{SQL: `CREATE TABLE IF NOT EXISTS prefix_pools (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, prefix TEXT NOT NULL UNIQUE, stack_id TEXT, created_at TEXT NOT NULL)`},
 		{SQL: `CREATE TABLE IF NOT EXISTS node_pool_ranges (pool_id TEXT PRIMARY KEY, start INTEGER NOT NULL, end INTEGER NOT NULL, owner TEXT NOT NULL, CHECK(start<=end))`},

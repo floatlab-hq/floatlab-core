@@ -11,4 +11,7 @@ type StackStateChanged struct {
 	Event     Event     `json:"event"`
 	Timestamp time.Time `json:"timestamp"`
 	NodeID    string    `json:"node_id,omitempty"`
+	// ExpectedUpdatedAt fences the instance generation observed by the caller,
+	// including when a later operation returns to the same state.
+	ExpectedUpdatedAt time.Time `json:"expected_updated_at,omitempty"`
 }

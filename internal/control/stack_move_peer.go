@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,10 +22,12 @@ import (
 	"github.com/google/uuid"
 )
 
+var errMoveReservationCanceled = errors.New("stack move reservation was canceled")
+
 // ServeStackMovePeer is called only after the lab listener verifies current-member mTLS.
 func (s *Server) ServeStackMovePeer(w http.ResponseWriter, r *http.Request, peerID string) {
 	if r.Method != http.MethodPost || s.cfg.LabDB == nil ||
-		(r.URL.Path != "/internal/stack-moves/prepare" && r.URL.Path != "/internal/stack-moves/reserve" && r.URL.Path != "/internal/stack-moves/activate") {
+		(r.URL.Path != "/internal/stack-moves/prepare" && r.URL.Path != "/internal/stack-moves/reserve" && r.URL.Path != "/internal/stack-moves/activate" && r.URL.Path != "/internal/stack-moves/cancel") {
 		http.NotFound(w, r)
 		return
 	}
@@ -59,7 +62,8 @@ func (s *Server) ServeStackMovePeer(w http.ResponseWriter, r *http.Request, peer
 	}
 	grant := move.OperationID
 	reserving := r.URL.Path == "/internal/stack-moves/reserve"
-	if reserving {
+	canceling := r.URL.Path == "/internal/stack-moves/cancel"
+	if reserving || canceling {
 		grant = "reserve-" + grant
 	}
 	rows, err := s.cfg.LabDB.QueryStrong(ctx, rqlite.Statement{
@@ -72,6 +76,14 @@ func (s *Server) ServeStackMovePeer(w http.ResponseWriter, r *http.Request, peer
 	}
 	if len(rows.Values) != 1 {
 		writeError(w, 409, "source has not committed this ownership handoff")
+		return
+	}
+	if canceling {
+		if err := s.cancelStackMoveReservation(ctx, move); err != nil {
+			writeError(w, 409, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]string{"status": "canceled"})
 		return
 	}
 	if reserving {
@@ -92,6 +104,9 @@ func (s *Server) ServeStackMovePeer(w http.ResponseWriter, r *http.Request, peer
 func (s *Server) reserveStackMove(ctx context.Context, move stackMove) error {
 	s.moveNames.Lock()
 	defer s.moveNames.Unlock()
+	if err := s.checkMoveCancellation(ctx, move.OperationID); err != nil {
+		return err
+	}
 	if err := s.checkMoveDestination(ctx, move); err != nil {
 		return err
 	}
@@ -134,6 +149,53 @@ func (s *Server) reserveStackMove(ctx context.Context, move stackMove) error {
 	}
 	_, err = ipam.AllocateIPv4(ctx, s.db, *pool, move.StackID)
 	return err
+}
+
+func (s *Server) checkMoveCancellation(ctx context.Context, operationID string) error {
+	rows, err := s.db.Query(ctx, rqlite.Statement{SQL: `SELECT 1 FROM workload_move_cancellations WHERE operation_id=?`, Params: []any{operationID}})
+	if err != nil {
+		return err
+	}
+	if len(rows.Values) != 0 {
+		return errMoveReservationCanceled
+	}
+	return nil
+}
+
+func (s *Server) cancelStackMoveReservation(ctx context.Context, move stackMove) error {
+	// Serialize cancellation with activation and reservation. The tombstone and
+	// cleanup commit together so a lost reply cannot recreate released resources.
+	s.moveReceives.Lock()
+	defer s.moveReceives.Unlock()
+	s.moveNames.Lock()
+	defer s.moveNames.Unlock()
+	if err := s.checkMoveCancellation(ctx, move.OperationID); err != nil {
+		if errors.Is(err, errMoveReservationCanceled) {
+			return nil
+		}
+		return err
+	}
+	grants, err := s.cfg.LabDB.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT 1 FROM stack_move_grants WHERE operation_id=?`, Params: []any{move.OperationID}})
+	if err != nil {
+		return err
+	}
+	if len(grants.Values) != 0 {
+		return fmt.Errorf("cannot cancel a committed ownership handoff")
+	}
+	active, err := s.db.Query(ctx, rqlite.Statement{
+		SQL: `SELECT 1 FROM workload_move_receipts WHERE operation_id=?`, Params: []any{move.OperationID},
+	})
+	if err != nil {
+		return err
+	}
+	if len(active.Values) != 0 {
+		return fmt.Errorf("cannot cancel an adopted stack move")
+	}
+	return s.db.Execute(ctx, []rqlite.Statement{
+		{SQL: `INSERT INTO workload_move_cancellations(operation_id,stack_id) VALUES(?,?) ON CONFLICT(operation_id) DO NOTHING`, Params: []any{move.OperationID, move.StackID}},
+		{SQL: `DELETE FROM network_allocations WHERE stack_id=? AND state='pending' AND EXISTS(SELECT 1 FROM workload_move_reservations WHERE operation_id=? AND stack_id=?) AND NOT EXISTS(SELECT 1 FROM stacks WHERE id=?)`, Params: []any{move.StackID, move.OperationID, move.StackID, move.StackID}},
+		{SQL: `DELETE FROM workload_move_reservations WHERE operation_id=? AND stack_id=?`, Params: []any{move.OperationID, move.StackID}},
+	})
 }
 
 func (s *Server) prepareStackMove(ctx context.Context, move stackMove) (string, error) {
@@ -191,6 +253,9 @@ func (s *Server) acceptStackMove(ctx context.Context, move stackMove) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := s.checkMoveCancellation(ctx, move.OperationID); err != nil {
+		return err
+	}
 	rows, err := s.db.Query(ctx, rqlite.Statement{SQL: `SELECT phase FROM workload_move_receipts WHERE operation_id=?`, Params: []any{move.OperationID}})
 	if err != nil {
 		return err
@@ -226,8 +291,11 @@ func (s *Server) acceptStackMove(ctx context.Context, move stackMove) error {
 		}})
 	}
 	if phase == "pending" {
-		if err := s.applyMoveState(stack.ID, run.StateIdle, run.StateMoving, run.EventMoveStarted); err != nil {
-			return err
+		// A crash may leave the lifecycle committed before the receipt advances.
+		if instance, ok := s.raft.FSM().State(stack.ID); !ok || instance.State != run.StateMoving {
+			if err := s.applyMoveState(stack.ID, run.StateIdle, run.StateMoving, run.EventMoveStarted); err != nil {
+				return err
+			}
 		}
 		if _, err := s.hosts.Execute(ctx, move.Destination, "fs.move.activate", ipc.StackMoveActivatePayload{
 			OperationID: move.OperationID, StackID: move.StackID, SourceNodeID: move.Stack.PrimaryNodeID,
@@ -279,8 +347,10 @@ func (s *Server) acceptStackMove(ctx context.Context, move stackMove) error {
 	if err := s.reverseMoveBackups(ctx, move, &stack, spec); err != nil {
 		return err
 	}
-	if err := s.applyMoveState(stack.ID, run.StateMoving, run.StateRunningPrimary, run.EventMoveCompleted); err != nil {
-		return err
+	if instance, ok := s.raft.FSM().State(stack.ID); !ok || instance.State != run.StateRunningPrimary {
+		if err := s.applyMoveState(stack.ID, run.StateMoving, run.StateRunningPrimary, run.EventMoveCompleted); err != nil {
+			return err
+		}
 	}
 	return setPhase("complete")
 }
@@ -288,6 +358,9 @@ func (s *Server) acceptStackMove(ctx context.Context, move stackMove) error {
 func (s *Server) adoptStackMove(ctx context.Context, move stackMove, stack *config.Stack) error {
 	s.moveNames.Lock()
 	defer s.moveNames.Unlock()
+	if err := s.checkMoveCancellation(ctx, move.OperationID); err != nil {
+		return err
+	}
 	generation, _, err := stackMoveOwner(ctx, s.db, move.StackID)
 	if err != nil {
 		return err

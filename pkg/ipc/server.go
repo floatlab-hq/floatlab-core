@@ -15,6 +15,17 @@ import (
 // Handler processes a command and returns a response payload or an error.
 type Handler func(ctx context.Context, payload json.RawMessage) (any, error)
 
+type connectionContextKey struct{}
+
+// ConnectionContext is for subscriptions that outlive their opening command.
+// It is cancelled when the client disconnects or the daemon stops.
+func ConnectionContext(ctx context.Context) context.Context {
+	if connection, ok := ctx.Value(connectionContextKey{}).(context.Context); ok {
+		return connection
+	}
+	return ctx
+}
+
 // Server listens on a UNIX socket and dispatches commands to registered handlers.
 type Server struct {
 	socketPath string
@@ -41,8 +52,15 @@ func (s *Server) Handle(name string, h Handler) {
 
 // Emit broadcasts an event to all connected clients.
 func (s *Server) Emit(name string, payload any) {
+	s.EmitContext(context.Background(), name, payload)
+}
+
+func (s *Server) EmitContext(ctx context.Context, name string, payload any) {
 	b, _ := json.Marshal(payload)
-	s.events <- Event{Name: name, Payload: json.RawMessage(b)}
+	select {
+	case s.events <- Event{Name: name, Payload: json.RawMessage(b)}:
+	case <-ctx.Done():
+	}
 }
 
 func (s *Server) Run(ctx context.Context) error {
@@ -84,11 +102,18 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) serveClient(ctx context.Context, c *Conn) {
+	ctx, cancel := context.WithCancel(ctx)
+	ctx = context.WithValue(ctx, connectionContextKey{}, ctx)
+	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
+	defer stop()
+	var commandsMu sync.Mutex
+	commands := make(map[string]context.CancelFunc)
 	defer func() {
+		cancel()
+		c.Close()
 		s.mu.Lock()
 		delete(s.clients, c)
 		s.mu.Unlock()
-		c.Close()
 	}()
 	for {
 		msg, err := c.Recv()
@@ -99,6 +124,13 @@ func (s *Server) serveClient(ctx context.Context, c *Conn) {
 			return
 		}
 		if msg.Type != TypeCommand {
+			if msg.Type == TypeCancel {
+				commandsMu.Lock()
+				if cancel := commands[msg.ID]; cancel != nil {
+					cancel()
+				}
+				commandsMu.Unlock()
+			}
 			continue
 		}
 		var cmd Command
@@ -106,7 +138,28 @@ func (s *Server) serveClient(ctx context.Context, c *Conn) {
 			s.log.Warn("ipc: bad command payload", zap.Error(err))
 			continue
 		}
-		go s.dispatch(ctx, c, msg.ID, cmd)
+		commandCtx, stopCommand := context.WithCancel(ctx)
+		if cmd.Deadline != nil {
+			stopCommand()
+			commandCtx, stopCommand = context.WithDeadline(ctx, *cmd.Deadline)
+		}
+		commandsMu.Lock()
+		if commands[msg.ID] != nil {
+			commandsMu.Unlock()
+			stopCommand()
+			continue
+		}
+		commands[msg.ID] = stopCommand
+		commandsMu.Unlock()
+		go func() {
+			defer stopCommand()
+			defer func() {
+				commandsMu.Lock()
+				delete(commands, msg.ID)
+				commandsMu.Unlock()
+			}()
+			s.dispatch(commandCtx, c, msg.ID, cmd)
+		}()
 	}
 }
 

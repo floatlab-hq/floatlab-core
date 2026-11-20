@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/floatlab/floatlab-core/pkg/ipc"
 	"go.uber.org/zap"
@@ -61,14 +62,16 @@ func (p *Pool) Execute(ctx context.Context, nodeID, command string, payload any)
 	if err != nil {
 		// Remote errors and abandoned requests do not break the shared transport.
 		var remote *ipc.RPCError
-		if errors.As(err, &remote) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if !errors.Is(err, ipc.ErrOutcomeUnknown) && (errors.As(err, &remote) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 			return nil, fmt.Errorf("hostclient: execute %s on %s: %w", command, nodeID, err)
 		}
-		// Drop failed transports; next call will reconnect.
+		// A late failure from an old transport must not evict its replacement.
 		p.mu.Lock()
-		_ = c.Close()
-		delete(p.clients, nodeID)
+		if p.clients[nodeID] == c {
+			delete(p.clients, nodeID)
+		}
 		p.mu.Unlock()
+		_ = c.Close()
 		return nil, fmt.Errorf("hostclient: execute %s on %s: %w", command, nodeID, err)
 	}
 	return result, nil
@@ -92,6 +95,54 @@ func (p *Pool) SubscribeEvents(ctx context.Context, nodeID string) (<-chan ipc.E
 	}
 	events, cancel := c.SubscribeEvents()
 	return events, cancel, nil
+}
+
+// FollowEvents connects lazily and follows replacement connections until ctx
+// is cancelled. Each follower has an independent subscription to the node.
+func (p *Pool) FollowEvents(ctx context.Context, nodeID string, out chan<- ipc.Event) {
+	for ctx.Err() == nil {
+		c, err := p.getOrConnect(ctx, nodeID)
+		if err == nil {
+			events, unsubscribe := c.SubscribeEvents()
+			done := c.Done()
+		follow:
+			for {
+				select {
+				case <-ctx.Done():
+					unsubscribe()
+					return
+				case <-done:
+					break follow
+				case event, ok := <-events:
+					if !ok {
+						break follow
+					}
+					select {
+					case out <- event:
+					case <-ctx.Done():
+						unsubscribe()
+						return
+					case <-done:
+						break follow
+					}
+				}
+			}
+			unsubscribe()
+			p.mu.Lock()
+			if p.clients[nodeID] == c {
+				delete(p.clients, nodeID)
+			}
+			p.mu.Unlock()
+			_ = c.Close()
+		}
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
 }
 
 func (p *Pool) getOrConnect(ctx context.Context, nodeID string) (*ipc.Client, error) {

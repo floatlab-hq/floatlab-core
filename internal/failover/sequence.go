@@ -2,6 +2,7 @@ package failover
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -21,7 +22,10 @@ import (
 	"github.com/floatlab/floatlab-core/pkg/store"
 )
 
-// Sequence executes the 6-step failover and the reverse failback.
+// ErrCoordinatedHandoffRequired rejects legacy failback without an ownership grant.
+var ErrCoordinatedHandoffRequired = errors.New("failback requires a fenced ownership handoff; legacy restore cannot safely activate replicated data")
+
+// Sequence executes legacy failover. Failback requires a coordinated handoff.
 type Sequence struct {
 	mu     sync.Mutex
 	active map[string]context.CancelFunc
@@ -60,7 +64,12 @@ func (s *Sequence) Execute(ctx context.Context, stackID string) error {
 	if err := ipam.CheckStackDestination(ctx, s.db, s.hosts, stackID, stack.BackupNodeID); err != nil {
 		return err
 	}
-	sequenceID := fmt.Sprint(time.Now().UnixNano())
+	instance, ok := s.raft.FSM().State(stackID)
+	if !ok || instance.State != run.StateRunningPrimary {
+		return fmt.Errorf("failover requires RunningPrimary stack")
+	}
+	generation := time.Now().UTC()
+	sequenceID := fmt.Sprint(generation.UnixNano())
 	step := func(number int, name string, action func() error) error {
 		started := time.Now().UTC().Format(time.RFC3339Nano)
 		if err := s.db.Execute(ctx, []rqlite.Statement{{SQL: `INSERT INTO failover_steps(stack_id,sequence_id,step,name,state,started_at) VALUES(?,?,?,?,'running',?)`, Params: []interface{}{stackID, sequenceID, number, name, started}}}); err != nil {
@@ -81,12 +90,12 @@ func (s *Sequence) Execute(ctx context.Context, stackID string) error {
 		return recordErr
 	}
 	if err := step(1, "raft-quorum", func() error {
-		return s.raft.Apply(run.StackStateChanged{StackID: stackID, From: run.StateRunningPrimary, To: run.StateFailingOver, Event: run.EventFailoverStart, Timestamp: time.Now().UTC()}, 5*time.Second)
+		return s.raft.Apply(run.StackStateChanged{StackID: stackID, From: run.StateRunningPrimary, ExpectedUpdatedAt: instance.UpdatedAt, To: run.StateFailingOver, Event: run.EventFailoverStart, Timestamp: generation}, 5*time.Second)
 	}); err != nil {
 		return err
 	}
 	fail := func(err error) error {
-		_ = s.raft.Apply(run.StackStateChanged{StackID: stackID, From: run.StateFailingOver, To: run.StateFailed, Event: run.EventFailoverFailed, Timestamp: time.Now().UTC()}, 5*time.Second)
+		_ = s.raft.Apply(run.StackStateChanged{StackID: stackID, From: run.StateFailingOver, ExpectedUpdatedAt: generation, To: run.StateFailed, Event: run.EventFailoverFailed, Timestamp: time.Now().UTC()}, 5*time.Second)
 		return err
 	}
 	if err := step(2, "zfs-sync", func() error {
@@ -100,9 +109,6 @@ func (s *Sequence) Execute(ctx context.Context, stackID string) error {
 	if err := s.db.Execute(ctx, []rqlite.Statement{{SQL: `INSERT INTO failover_steps(stack_id,sequence_id,step,name,state,detail) VALUES(?,?,3,'snapshot-promote','skipped','received dataset requires no promotion')`, Params: []interface{}{stackID, sequenceID}}}); err != nil {
 		return fail(err)
 	}
-	s.mu.Lock()
-	delete(s.active, stackID)
-	s.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return fail(err)
 	}
@@ -113,7 +119,7 @@ func (s *Sequence) Execute(ctx context.Context, stackID string) error {
 		return fail(err)
 	}
 	if err := step(6, "raft-apply", func() error {
-		return s.raft.Apply(run.StackStateChanged{StackID: stackID, From: run.StateFailingOver, To: run.StateRunningBackup, Event: run.EventFailoverDone, Timestamp: time.Now().UTC()}, 5*time.Second)
+		return s.raft.Apply(run.StackStateChanged{StackID: stackID, From: run.StateFailingOver, ExpectedUpdatedAt: generation, To: run.StateRunningBackup, Event: run.EventFailoverDone, Timestamp: time.Now().UTC()}, 5*time.Second)
 	}); err != nil {
 		return fail(err)
 	}
@@ -122,87 +128,11 @@ func (s *Sequence) Execute(ctx context.Context, stackID string) error {
 	return nil
 }
 
-// Restore runs failback: secondary → Restoring → sync → primary start → RunningPrimary.
+// Restore refuses legacy failback before changing either host. Replication writes
+// read-only backup datasets; safely activating them on an existing primary needs
+// a fenced, durable ownership handoff that this legacy sequence cannot provide.
 func (s *Sequence) Restore(ctx context.Context, stackID string) error {
-	log := s.log.With(zap.String("stack", stackID))
-
-	stack, err := s.store.GetStack(ctx, stackID)
-	if err != nil {
-		return fmt.Errorf("failover: restore: get stack: %w", err)
-	}
-
-	if err := ipam.CheckStackDestination(ctx, s.db, s.hosts, stackID, stack.PrimaryNodeID); err != nil {
-		return err
-	}
-
-	if err := s.raft.Apply(run.StackStateChanged{
-		StackID:   stackID,
-		From:      run.StateRunningBackup,
-		To:        run.StateRestoring,
-		Event:     run.EventRestoreStart,
-		Timestamp: time.Now().UTC(),
-	}, 5*time.Second); err != nil {
-		return fmt.Errorf("failover: restore: raft Restoring: %w", err)
-	}
-	log.Info("failover: restore: step 1/4: raft Restoring applied")
-
-	// Stop secondary containers.
-	_, _ = s.hosts.Execute(ctx, stack.BackupNodeID, "compose.down", ipc.ComposeDownPayload{
-		StackID:     stackID,
-		DatasetPath: stack.ZFSDataset,
-	})
-	log.Info("failover: restore: step 2/4: secondary containers stopped")
-
-	// Sync back to primary.
-	syncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	_ = s.attemptFinalSync(syncCtx, stack)
-	cancel()
-	log.Info("failover: restore: step 3/4: final sync attempted")
-
-	if service, ok, err := ipam.StackService(ctx, s.db, stackID); err != nil {
-		return err
-	} else if ok {
-		if err = s.setActiveNode(ctx, stackID, stack.PrimaryNodeID); err != nil {
-			return err
-		}
-		if _, err = s.hosts.Execute(ctx, stack.BackupNodeID, "net.service.del", service); err != nil {
-			return err
-		}
-		if _, err = s.hosts.Execute(ctx, stack.PrimaryNodeID, "net.service.add", service); err != nil {
-			return err
-		}
-	}
-	// Start on primary.
-	if err := s.startOnPrimary(ctx, stack); err != nil {
-		_ = s.raft.Apply(run.StackStateChanged{
-			StackID:   stackID,
-			From:      run.StateRestoring,
-			To:        run.StateFailed,
-			Event:     run.EventRestoreFailed,
-			Timestamp: time.Now().UTC(),
-		}, 5*time.Second)
-		return fmt.Errorf("failover: restore: start on primary: %w", err)
-	}
-
-	if err := s.raft.Apply(run.StackStateChanged{
-		StackID:   stackID,
-		From:      run.StateRestoring,
-		To:        run.StateRunningPrimary,
-		Event:     run.EventRestoreDone,
-		Timestamp: time.Now().UTC(),
-	}, 5*time.Second); err != nil {
-		return fmt.Errorf("failover: restore: raft RunningPrimary: %w", err)
-	}
-	log.Info("failover: restore: step 4/4: raft RunningPrimary applied")
-
-	_ = notify.Create(ctx, s.db, s.broker, &notify.Notification{
-		StackID:  stackID,
-		Kind:     "failover",
-		Severity: "info",
-		Title:    fmt.Sprintf("Failback complete: %s", stack.Name),
-		Body:     fmt.Sprintf("Stack returned to primary node %s.", stack.PrimaryNodeID),
-	})
-	return nil
+	return ErrCoordinatedHandoffRequired
 }
 
 func (s *Sequence) attemptFinalSync(ctx context.Context, stack *config.Stack) error {
@@ -285,19 +215,6 @@ func (s *Sequence) startOnSecondary(ctx context.Context, stack *config.Stack) er
 		return err
 	}
 	_, err = s.hosts.Execute(ctx, stack.BackupNodeID, "compose.up", ipc.ComposeUpPayload{
-		StackID:     stack.ID,
-		DatasetPath: stack.ZFSDataset,
-		ComposeFile: runtime,
-	})
-	return err
-}
-
-func (s *Sequence) startOnPrimary(ctx context.Context, stack *config.Stack) error {
-	runtime, err := s.runtimeCompose(ctx, stack)
-	if err != nil {
-		return err
-	}
-	_, err = s.hosts.Execute(ctx, stack.PrimaryNodeID, "compose.up", ipc.ComposeUpPayload{
 		StackID:     stack.ID,
 		DatasetPath: stack.ZFSDataset,
 		ComposeFile: runtime,

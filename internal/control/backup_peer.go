@@ -12,6 +12,16 @@ import (
 	"github.com/floatlab/floatlab-core/pkg/ipc"
 )
 
+type peerResponseError struct {
+	StatusCode int
+	Status     string
+	Body       string
+}
+
+func (e *peerResponseError) Error() string {
+	return fmt.Sprintf("backup peer: %s: %s", e.Status, e.Body)
+}
+
 // ServeBackupPeer is exposed only by the lab listener after current-member mTLS validation.
 func (s *Server) ServeBackupPeer(w http.ResponseWriter, r *http.Request) {
 	switch {
@@ -70,7 +80,7 @@ func (s *Server) backupPeerRequest(ctx context.Context, node, method, path strin
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
 		message, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
-		return fmt.Errorf("backup peer: %s: %s", response.Status, message)
+		return &peerResponseError{StatusCode: response.StatusCode, Status: response.Status, Body: string(message)}
 	}
 	return json.NewDecoder(io.LimitReader(response.Body, 8<<20)).Decode(result)
 }

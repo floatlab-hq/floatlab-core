@@ -113,7 +113,7 @@ func (s *Server) handleStackRestore(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) submitFailover(w http.ResponseWriter, r *http.Request, id string, restore bool) {
-	if s.peerWorkloads != nil {
+	if restore || s.peerWorkloads != nil {
 		writeErrorCode(w, http.StatusConflict, "coordinated_takeover_required", "cross-node takeover requires the fenced ownership handoff in the protection workflow")
 		return
 	}

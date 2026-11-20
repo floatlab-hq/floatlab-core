@@ -451,12 +451,13 @@ func (s *Server) handleStartStack(w http.ResponseWriter, r *http.Request) {
 	}
 
 	entry := run.StackStateChanged{
-		StackID:   id,
-		From:      inst.State,
-		To:        updated.State,
-		Event:     run.EventStartStack,
-		Timestamp: time.Now().UTC(),
-		NodeID:    st.PrimaryNodeID,
+		StackID:           id,
+		From:              inst.State,
+		ExpectedUpdatedAt: inst.UpdatedAt,
+		To:                updated.State,
+		Event:             run.EventStartStack,
+		Timestamp:         time.Now().UTC(),
+		NodeID:            st.PrimaryNodeID,
 	}
 	if err := s.raft.Apply(entry, 10*time.Second); err != nil {
 		writeError(w, http.StatusInternalServerError, "raft apply failed: "+err.Error())
@@ -601,21 +602,35 @@ func (s *Server) handleStopStack(w http.ResponseWriter, r *http.Request) {
 	}
 
 	nodeID := st.PrimaryNodeID
-	if inst.State == run.StateRunningBackup && st.BackupNodeID != "" {
+	if inst.State == run.StateRunningBackup {
 		nodeID = st.BackupNodeID
+		if nodeID == "" {
+			writeError(w, http.StatusConflict, "backup host required to stop stack")
+			return
+		}
+	} else if (inst.State == run.StateFailed || inst.State == run.StateIdle) && inst.NodeID != "" {
+		nodeID = inst.NodeID
 	}
 
 	entry := run.StackStateChanged{
-		StackID:   id,
-		From:      inst.State,
-		To:        updated.State,
-		Event:     run.EventStopStack,
-		Timestamp: time.Now().UTC(),
-		NodeID:    nodeID,
+		StackID:           id,
+		From:              inst.State,
+		ExpectedUpdatedAt: inst.UpdatedAt,
+		To:                updated.State,
+		Event:             run.EventStopStack,
+		Timestamp:         time.Now().UTC(),
+		NodeID:            nodeID,
 	}
 	if err := s.raft.Apply(entry, 10*time.Second); err != nil {
 		writeError(w, http.StatusInternalServerError, "raft apply failed: "+err.Error())
 		return
+	}
+
+	if updated.State == run.StateIdle {
+		if err := s.ops.Update(r.Context(), operationID(r.Context()), "succeeded", "succeeded", ""); err != nil {
+			writeError(w, http.StatusInternalServerError, "complete stop: "+err.Error())
+			return
+		}
 	}
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"state": string(updated.State)})

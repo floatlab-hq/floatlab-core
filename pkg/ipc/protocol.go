@@ -1,6 +1,9 @@
 package ipc
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 type MessageType string
 
@@ -8,6 +11,7 @@ const (
 	TypeCommand  MessageType = "command"
 	TypeResponse MessageType = "response"
 	TypeEvent    MessageType = "event"
+	TypeCancel   MessageType = "cancel"
 )
 
 type Message struct {
@@ -17,8 +21,9 @@ type Message struct {
 }
 
 type Command struct {
-	Name    string          `json:"name"`
-	Payload json.RawMessage `json:"payload,omitempty"`
+	Name     string          `json:"name"`
+	Payload  json.RawMessage `json:"payload,omitempty"`
+	Deadline *time.Time      `json:"deadline,omitempty"`
 }
 
 type Response struct {

@@ -25,8 +25,37 @@ func (w *Worker) handleBackupRestore(ctx context.Context, raw json.RawMessage) e
 	if w.operationDone(ctx, p.OperationID) {
 		return nil
 	}
-	if state, ok := w.raft.FSM().State(p.StackID); ok && state.State != run.StateRestoring {
+	if p.Lifecycle.Timestamp.IsZero() {
+		// Adopt the committed generation once for jobs queued by older versions.
+		instance, ok := w.raft.FSM().State(p.StackID)
+		if !ok || instance.State != run.StateRestoring {
+			return nil
+		}
+		p.Lifecycle = run.StackStateChanged{StackID: p.StackID, To: instance.State, Timestamp: instance.UpdatedAt, NodeID: p.DestinationNodeID}
+		if err := w.saveBackupRestore(ctx, p); err != nil {
+			return err
+		}
+	}
+	if p.Lifecycle.Event == run.EventBackupRestorePrepared {
+		// Data activation is complete. The orchestrator may already have advanced
+		// beyond Provisioning before the worker checkpoints this task as done.
+		if current, ok := w.raft.FSM().State(p.StackID); ok && current.State != run.StateRestoring && !current.UpdatedAt.Before(p.Lifecycle.Timestamp) {
+			return nil
+		}
+	}
+	if err := w.applyTaskLifecycle(p.Lifecycle); err != nil {
+		return err
+	}
+	if p.Lifecycle.Event == run.EventBackupRestorePrepared {
 		return nil
+	}
+
+	stack, err := w.store.GetStack(ctx, p.StackID)
+	if err != nil {
+		return err
+	}
+	if err := w.store.SyncBackupTargets(ctx, stack); err != nil {
+		return err
 	}
 	if p.Prepared == nil {
 		p.Prepared = map[string]BackupRestoreMount{}
@@ -97,7 +126,11 @@ func (w *Worker) handleBackupRestore(ctx context.Context, raw json.RawMessage) e
 	if err := operation.RecordEvent(ctx, w.db, operation.Event{StackID: p.StackID, Type: "BackupDataRestored", Outcome: "succeeded", OperationID: p.OperationID, Actor: p.Actor}); err != nil {
 		return err
 	}
-	return w.raft.Apply(run.StackStateChanged{StackID: p.StackID, From: run.StateRestoring, To: run.StateProvisioning, Event: run.EventBackupRestorePrepared, Timestamp: time.Now().UTC(), NodeID: p.DestinationNodeID}, 10*time.Second)
+	p.Lifecycle = run.StackStateChanged{StackID: p.StackID, From: run.StateRestoring, ExpectedUpdatedAt: p.Lifecycle.Timestamp, To: run.StateProvisioning, Event: run.EventBackupRestorePrepared, Timestamp: time.Now().UTC(), NodeID: p.DestinationNodeID}
+	if err := w.saveBackupRestore(ctx, p); err != nil {
+		return err
+	}
+	return w.applyTaskLifecycle(p.Lifecycle)
 }
 
 func (w *Worker) saveBackupRestore(ctx context.Context, p BackupRestorePayload) error {

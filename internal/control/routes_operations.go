@@ -62,12 +62,10 @@ func (s *Server) handleUpgradeStack(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := s.raft.Apply(run.StackStateChanged{StackID: stackID, From: instance.State, To: updated.State, Event: run.EventUpdateStack, Timestamp: time.Now().UTC(), NodeID: stack.PrimaryNodeID}, 10*time.Second); err != nil {
-		writeError(w, http.StatusInternalServerError, "raft apply failed: "+err.Error())
-		return
-	}
 	opID := operationID(r.Context())
+	intent := run.StackStateChanged{StackID: stackID, From: instance.State, ExpectedUpdatedAt: instance.UpdatedAt, To: updated.State, Event: run.EventUpdateStack, Timestamp: time.Now().UTC(), NodeID: stack.PrimaryNodeID}
 	if err := worker.EnqueueTask(r.Context(), s.db, "upgrade-"+opID, worker.TaskStackUpgrade, stackID, worker.StackUpgradePayload{
+		Lifecycle:   intent,
 		OperationID: opID, StackID: stackID, NodeID: stack.PrimaryNodeID, DatasetPath: stack.ZFSDataset,
 		OldCompose: stack.ComposeYAML, NewCompose: updatedCompose, Services: mapKeys(request.Images),
 		HealthTimeout: spec.HealthTimeout.String(), Actor: actor(r),
@@ -75,7 +73,8 @@ func (s *Server) handleUpgradeStack(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "enqueue upgrade: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"stack_id": stackID, "state": string(updated.State)})
+	// The durable task owns the transition; no Updating state can exist without it.
+	writeJSON(w, http.StatusAccepted, map[string]string{"stack_id": stackID, "state": string(instance.State), "status": "pending"})
 }
 
 func (s *Server) handleRestartStack(w http.ResponseWriter, r *http.Request) {

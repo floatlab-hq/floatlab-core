@@ -19,7 +19,11 @@ func TestCancelledProbePreservesConcurrentHostOperation(t *testing.T) {
 	server := ipc.NewServer(socket, zap.NewNop())
 	probeEntered, operationEntered, finish := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	defer close(finish)
-	server.Handle("sys.version", func(context.Context, json.RawMessage) (any, error) { close(probeEntered); <-finish; return nil, nil })
+	server.Handle("sys.version", func(ctx context.Context, _ json.RawMessage) (any, error) {
+		close(probeEntered)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
 	server.Handle("operation", func(context.Context, json.RawMessage) (any, error) {
 		close(operationEntered)
 		<-finish
@@ -59,7 +63,6 @@ func TestCancelledProbePreservesConcurrentHostOperation(t *testing.T) {
 	if !connected {
 		t.Fatal("cancelled probe discarded shared connection")
 	}
-	finish <- struct{}{}
 	finish <- struct{}{}
 	if err := <-operationResult; err != nil {
 		t.Fatalf("advisory probe interrupted operation: %v", err)

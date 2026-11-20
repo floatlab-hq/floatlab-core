@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -38,12 +39,13 @@ type Orchestrator struct {
 	sm    run.StateMachine
 	log   *zap.Logger
 
-	mu         sync.Mutex
-	dispatched map[string]time.Time // last lifecycle transition dispatched for each stack
-	nodeEvents map[string]struct{}  // tracks which nodes we've subscribed to
-	merged     chan ipc.Event       // fanin from all node IPC event channels
-	ops        *operation.Store
-	db         *rqlite.Client
+	mu          sync.Mutex
+	dispatched  map[string]time.Time // last lifecycle transition dispatched for each stack
+	nodeEvents  map[string]struct{}  // tracks which nodes we've subscribed to
+	nodeWorkers sync.WaitGroup
+	merged      chan ipc.Event // fanin from all node IPC event channels
+	ops         *operation.Store
+	db          *rqlite.Client
 }
 
 func New(
@@ -69,6 +71,11 @@ func New(
 
 // Run starts the orchestrator event loop. It blocks until ctx is cancelled.
 func (o *Orchestrator) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer func() {
+		cancel()
+		o.nodeWorkers.Wait()
+	}()
 	// Raft replays historical entries during startup. Subscribe only after the
 	// leader's committed history is applied, then resume durable pending work.
 	ticker := time.NewTicker(200 * time.Millisecond)
@@ -83,7 +90,14 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	configChanges := o.store.Watch()
 	stateChanges, unsub := o.raft.FSM().Subscribe()
 	defer unsub()
+	// Notifications can overflow while IPC work occupies the event loop. Durable
+	// pending operations remain authoritative, so periodically recover missed work.
+	reconcile := time.NewTicker(5 * time.Second)
+	defer reconcile.Stop()
 	o.resume(ctx)
+	for _, nodeID := range o.pool.NodeIDs() {
+		o.AddNode(ctx, nodeID)
+	}
 
 	for {
 		select {
@@ -93,6 +107,8 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			if leader && o.raft.Barrier(5*time.Second) == nil {
 				o.resume(ctx)
 			}
+		case <-reconcile.C:
+			o.resume(ctx)
 		case ev := <-configChanges:
 			o.handleConfigChange(ctx, ev)
 		case entry, ok := <-stateChanges:
@@ -107,6 +123,9 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 }
 
 func (o *Orchestrator) resume(ctx context.Context) {
+	if !o.raft.IsLeader() {
+		return
+	}
 	operations, err := o.ops.Active(ctx)
 	if err != nil {
 		o.log.Error("orchestrator: load active operations", zap.Error(err))
@@ -123,30 +142,31 @@ func (o *Orchestrator) resume(ctx context.Context) {
 
 // AddNode begins multiplexing IPC events from the given node into the orchestrator loop.
 // Safe to call multiple times for the same node.
-func (o *Orchestrator) AddNode(nodeID string) {
+func (o *Orchestrator) AddNode(ctx context.Context, nodeID string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if ctx.Err() != nil {
+		return
+	}
 	if _, already := o.nodeEvents[nodeID]; already {
 		return
 	}
-	ch := o.pool.Events(nodeID)
-	if ch == nil {
-		return
-	}
 	o.nodeEvents[nodeID] = struct{}{}
+	o.nodeWorkers.Add(1)
 	go func() {
-		for ev := range ch {
-			select {
-			case o.merged <- ev:
-			default:
-			}
-		}
+		defer o.nodeWorkers.Done()
+		defer func() {
+			o.mu.Lock()
+			delete(o.nodeEvents, nodeID)
+			o.mu.Unlock()
+		}()
+		o.pool.FollowEvents(ctx, nodeID, o.merged)
 	}()
 }
 
 func (o *Orchestrator) handleConfigChange(ctx context.Context, ev config.ChangeEvent) {
 	if ev.Entity == "node" && ev.Action == "create" {
-		o.AddNode(ev.ID)
+		o.AddNode(ctx, ev.ID)
 	}
 }
 
@@ -164,11 +184,11 @@ func (o *Orchestrator) handleStateChange(ctx context.Context, entry run.StackSta
 	o.dispatched[entry.StackID] = entry.Timestamp
 	switch entry.To {
 	case run.StateProvisioning:
-		go o.doProvision(ctx, entry.StackID)
+		go o.doProvision(ctx, entry.StackID, entry.Timestamp)
 	case run.StateStarting:
-		go o.doStart(ctx, entry.StackID)
+		go o.doStart(ctx, entry.StackID, entry.Timestamp)
 	case run.StateStopping:
-		go o.doStop(ctx, entry.StackID)
+		go o.doStop(ctx, entry.StackID, entry.Timestamp)
 		// StateFailingOver, StateRestoring, StateUpdating → Sprint 3
 	}
 }
@@ -197,7 +217,7 @@ func (o *Orchestrator) handleIPCEvent(ctx context.Context, ev ipc.Event) {
 }
 
 // doProvision creates ZFS datasets for a stack entering Provisioning state.
-func (o *Orchestrator) doProvision(ctx context.Context, stackID string) {
+func (o *Orchestrator) doProvision(ctx context.Context, stackID string, generation time.Time) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
@@ -221,7 +241,9 @@ func (o *Orchestrator) doProvision(ctx context.Context, stackID string) {
 		parsed, err := compose.Parse(ctx, stack.ComposeYAML, stack.Name)
 		if err != nil {
 			log.Error("orchestrator: provision: parse compose", zap.Error(err))
-			o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack)
+			if _, applied := o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack, generation); !applied {
+				return
+			}
 			_ = o.ops.FinishForStack(context.Background(), stackID, "create", "failed", err.Error())
 			return
 		}
@@ -230,14 +252,18 @@ func (o *Orchestrator) doProvision(ctx context.Context, stackID string) {
 	restoreTasks, restoreErr := o.db.Query(ctx, rqlite.Statement{SQL: `SELECT id FROM tasks WHERE stack_id=? AND type=? LIMIT 1`, Params: []interface{}{stackID, worker.TaskBackupRestore}})
 	if restoreErr != nil {
 		log.Error("orchestrator: provision: query restore tasks", zap.Error(restoreErr))
-		o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack)
+		if _, applied := o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack, generation); !applied {
+			return
+		}
 		return
 	}
 	importProjectData := len(restoreTasks.Values) == 0
 	if lifecycleErr == nil && importProjectData {
 		if err := stageBindData(stack.Name, spec.Mounts); err != nil {
 			log.Error("orchestrator: provision: stage bind data", zap.Error(err))
-			o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack)
+			if _, applied := o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack, generation); !applied {
+				return
+			}
 			_ = o.ops.FinishForStack(context.Background(), stackID, "start", "failed", err.Error())
 			return
 		}
@@ -245,7 +271,9 @@ func (o *Orchestrator) doProvision(ctx context.Context, stackID string) {
 	for _, payload := range datasets {
 		if _, err := o.pool.Execute(ctx, stack.PrimaryNodeID, "fs.dataset.create", payload); err != nil {
 			log.Error("orchestrator: provision: create dataset on primary", zap.String("dataset", payload.Dataset), zap.Error(err))
-			o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack)
+			if _, applied := o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack, generation); !applied {
+				return
+			}
 			_ = o.ops.FinishForStack(context.Background(), stackID, "create", "failed", err.Error())
 			return
 		}
@@ -253,21 +281,27 @@ func (o *Orchestrator) doProvision(ctx context.Context, stackID string) {
 	if lifecycleErr == nil && importProjectData {
 		if err := restoreBindData(stack.Name, spec.Mounts); err != nil {
 			log.Error("orchestrator: provision: restore bind data", zap.Error(err))
-			o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack)
+			if _, applied := o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack, generation); !applied {
+				return
+			}
 			_ = o.ops.FinishForStack(context.Background(), stackID, "start", "failed", err.Error())
 			return
 		}
 	}
 	if _, err := o.pool.Execute(ctx, stack.PrimaryNodeID, "compose.source.write", ipc.ComposeSourcePayload{StackID: stack.ID, DatasetPath: stack.ZFSDataset, ComposeFile: stack.ComposeYAML}); err != nil {
 		log.Error("orchestrator: provision: write compose source", zap.Error(err))
-		o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack)
+		if _, applied := o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack, generation); !applied {
+			return
+		}
 		_ = o.ops.FinishForStack(context.Background(), stackID, "start", "failed", err.Error())
 		return
 	}
 	if lifecycleErr == nil && spec.HasPorts {
 		if err := o.provisionNetwork(ctx, stack, spec); err != nil {
 			log.Error("orchestrator: provision: configure network", zap.Error(err))
-			o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack)
+			if _, applied := o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack, generation); !applied {
+				return
+			}
 			_ = o.ops.FinishForStack(context.Background(), stackID, "create", "failed", err.Error())
 			return
 		}
@@ -287,14 +321,17 @@ func (o *Orchestrator) doProvision(ctx context.Context, stackID string) {
 	}
 
 	log.Info("orchestrator: provisioned")
-	o.applyEvent(stack.PrimaryNodeID, stackID, run.EventProvisionDone)
+	nextGeneration, applied := o.applyEvent(stack.PrimaryNodeID, stackID, run.EventProvisionDone, generation)
+	if !applied {
+		return
+	}
 	actor, operationID := o.activeOperationIdentity(ctx, stackID)
 	_ = operation.RecordEvent(context.Background(), o.db, operation.Event{StackID: stackID, Type: "Created", Outcome: "succeeded", Actor: actor, OperationID: operationID})
 	// Only the start-new operation should start immediately after provisioning.
 	// Plain creation leaves the stack idle until the caller requests a start.
 	op, _ := o.ops.ActiveForStack(ctx, stackID)
 	if lifecycleErr == nil && op != nil && op.Action == "start" {
-		o.applyEvent(stack.PrimaryNodeID, stackID, run.EventStartStack)
+		o.applyEvent(stack.PrimaryNodeID, stackID, run.EventStartStack, nextGeneration)
 	} else {
 		_ = o.ops.FinishForStack(context.Background(), stackID, "create", "succeeded", "")
 	}
@@ -408,7 +445,7 @@ func lifecycleVeth(prefix, stackID string) string {
 }
 
 // doStart runs compose.up on the primary node for a stack entering Starting state.
-func (o *Orchestrator) doStart(ctx context.Context, stackID string) {
+func (o *Orchestrator) doStart(ctx context.Context, stackID string, generation time.Time) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 
@@ -424,7 +461,9 @@ func (o *Orchestrator) doStart(ctx context.Context, stackID string) {
 		if spec.HasPorts {
 			result, queryErr := o.db.Query(ctx, rqlite.Statement{SQL: `SELECT stack_ip FROM stack_runtime WHERE stack_id=?`, Params: []interface{}{stackID}})
 			if queryErr != nil || len(result.Values) == 0 {
-				o.applyEvent(stack.PrimaryNodeID, stackID, run.EventStartFailed)
+				if _, applied := o.applyEvent(stack.PrimaryNodeID, stackID, run.EventStartFailed, generation); !applied {
+					return
+				}
 				return
 			}
 			stackIP, _ = result.Values[0][0].(string)
@@ -432,20 +471,26 @@ func (o *Orchestrator) doStart(ctx context.Context, stackID string) {
 		if runtime, runtimeErr := compose.RuntimeYAML(stack.ComposeYAML, stack.Name, stackIP); runtimeErr == nil {
 			composeFile = runtime
 		} else {
-			o.applyEvent(stack.PrimaryNodeID, stackID, run.EventStartFailed)
+			if _, applied := o.applyEvent(stack.PrimaryNodeID, stackID, run.EventStartFailed, generation); !applied {
+				return
+			}
 			return
 		}
 	}
 	// Compose up pulls missing images and respects explicit service pull policies.
 	if _, err := o.pool.Execute(ctx, stack.PrimaryNodeID, "compose.up", ipc.ComposeUpPayload{StackID: stack.ID, DatasetPath: stack.ZFSDataset, ComposeFile: composeFile}); err != nil {
 		o.log.Error("orchestrator: start: compose.up", zap.String("id", stackID), zap.Error(err))
-		o.applyEvent(stack.PrimaryNodeID, stackID, run.EventStartFailed)
+		if _, applied := o.applyEvent(stack.PrimaryNodeID, stackID, run.EventStartFailed, generation); !applied {
+			return
+		}
 		_ = o.ops.FinishForStack(context.Background(), stackID, "start", "failed", err.Error())
 		return
 	}
 
 	o.log.Info("orchestrator: started", zap.String("stack", stack.Name))
-	o.applyEvent(stack.PrimaryNodeID, stackID, run.EventStartDone)
+	if _, applied := o.applyEvent(stack.PrimaryNodeID, stackID, run.EventStartDone, generation); !applied {
+		return
+	}
 	actor, operationID := o.activeOperationIdentity(ctx, stackID)
 	_ = o.ops.FinishForStack(context.Background(), stackID, "start", "succeeded", "")
 	_ = operation.RecordEvent(context.Background(), o.db, operation.Event{StackID: stackID, Type: "Start", Outcome: "succeeded", Actor: actor, OperationID: operationID})
@@ -460,39 +505,102 @@ func (o *Orchestrator) activeOperationIdentity(ctx context.Context, stackID stri
 }
 
 // doStop runs compose.down on the active node for a stack entering Stopping state.
-func (o *Orchestrator) doStop(ctx context.Context, stackID string) {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
+func (o *Orchestrator) doStop(ctx context.Context, stackID string, generation time.Time) {
+	current, ok := o.raft.FSM().State(stackID)
+	if ctx.Err() != nil || !ok || current.State != run.StateStopping || !current.UpdatedAt.Equal(generation) {
+		return
+	}
+	nodeID := current.NodeID
+	fail := func(cause error) {
+		if ctx.Err() != nil {
+			// Controller shutdown leaves durable work for its replacement.
+			return
+		}
+		if _, applied := o.applyEvent(nodeID, stackID, run.EventStopFailed, generation); applied {
+			_ = o.ops.FinishForStack(context.Background(), stackID, "stop", "failed", cause.Error())
+		}
+	}
 
 	stack, err := o.store.GetStack(ctx, stackID)
 	if err != nil {
 		o.log.Error("orchestrator: stop: get stack", zap.String("id", stackID), zap.Error(err))
+		fail(err)
 		return
 	}
 
-	nodeID := stack.PrimaryNodeID
-	if inst, ok := o.raft.FSM().State(stackID); ok && inst.State == run.StateRunningBackup {
+	if current.PreviousState == run.StateRunningBackup {
 		nodeID = stack.BackupNodeID
+		if nodeID == "" {
+			fail(fmt.Errorf("backup host required to stop stack %s", stackID))
+			return
+		}
+	}
+	if nodeID == "" {
+		nodeID = stack.PrimaryNodeID
 	}
 
-	if _, err := o.pool.Execute(ctx, nodeID, "compose.down", buildComposeDown(stack)); err != nil {
-		o.log.Error("orchestrator: stop: compose.down", zap.String("id", stackID), zap.Error(err))
-		_ = o.ops.FinishForStack(context.Background(), stackID, "stop", "failed", err.Error())
+	stopOperation, err := o.ops.ActiveForStack(ctx, stackID)
+	if err != nil {
+		fail(err)
 		return
+	}
+	uncertain := stopOperation != nil && stopOperation.Action == "stop" && stopOperation.Checkpoint == "stopping"
+	if stopOperation != nil && stopOperation.Action == "stop" {
+		// A restart after dispatch cannot distinguish a stopped client from a
+		// remote command still unwinding. Keep its reservation until confirmed.
+		if err := o.ops.Update(ctx, stopOperation.ID, "running", "stopping", ""); err != nil {
+			fail(err)
+			return
+		}
+	}
+	for {
+		current, ok := o.raft.FSM().State(stackID)
+		if !ok || current.State != run.StateStopping || !current.UpdatedAt.Equal(generation) {
+			return
+		}
+		attempt, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		_, err := o.pool.Execute(attempt, nodeID, "compose.down", buildComposeDown(stack))
+		cancel()
+		if ctx.Err() != nil {
+			return
+		}
+		if err == nil {
+			break
+		}
+		o.log.Error("orchestrator: stop: compose.down", zap.String("id", stackID), zap.Error(err))
+		uncertain = uncertain || errors.Is(err, ipc.ErrOutcomeUnknown)
+		if !uncertain {
+			fail(err)
+			return
+		}
+		// Keep the stack reserved until a retry confirms the uncertain stop exited.
+		timer := time.NewTimer(5 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
 	}
 
 	o.log.Info("orchestrator: stopped", zap.String("stack", stack.Name))
-	o.applyEvent(nodeID, stackID, run.EventStopDone)
+	if _, applied := o.applyEvent(nodeID, stackID, run.EventStopDone, generation); !applied {
+		return
+	}
 	actor, operationID := o.activeOperationIdentity(ctx, stackID)
 	_ = o.ops.FinishForStack(context.Background(), stackID, "stop", "succeeded", "")
 	_ = operation.RecordEvent(context.Background(), o.db, operation.Event{StackID: stackID, Type: "Stop", Outcome: "succeeded", Actor: actor, OperationID: operationID})
 }
 
 // applyEvent runs a state machine event against the FSM's current state and Raft-applies it.
-func (o *Orchestrator) applyEvent(nodeID, stackID string, ev run.Event) {
+func (o *Orchestrator) applyEvent(nodeID, stackID string, ev run.Event, generation time.Time) (time.Time, bool) {
 	inst, ok := o.raft.FSM().State(stackID)
 	if !ok {
 		inst = &run.StackInstance{ID: stackID}
+	}
+
+	if !inst.UpdatedAt.Equal(generation) {
+		return time.Time{}, false
 	}
 
 	updated, err := o.sm.Apply(context.Background(), inst, ev)
@@ -502,20 +610,23 @@ func (o *Orchestrator) applyEvent(nodeID, stackID string, ev run.Event) {
 			zap.String("state", string(inst.State)),
 			zap.String("event", string(ev)),
 			zap.Error(err))
-		return
+		return time.Time{}, false
 	}
 
 	entry := run.StackStateChanged{
-		StackID:   stackID,
-		From:      inst.State,
-		To:        updated.State,
-		Event:     ev,
-		Timestamp: time.Now().UTC(),
-		NodeID:    nodeID,
+		StackID:           stackID,
+		From:              inst.State,
+		ExpectedUpdatedAt: generation,
+		To:                updated.State,
+		Event:             ev,
+		Timestamp:         time.Now().UTC(),
+		NodeID:            nodeID,
 	}
 	if err := o.raft.Apply(entry, 10*time.Second); err != nil {
 		o.log.Error("orchestrator: Raft apply failed",
 			zap.String("stack", stackID),
 			zap.Error(err))
+		return time.Time{}, false
 	}
+	return entry.Timestamp, true
 }

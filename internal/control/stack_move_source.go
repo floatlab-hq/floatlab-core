@@ -25,12 +25,16 @@ func (s *Server) RunStackMove(ctx context.Context, raw json.RawMessage) error {
 		return err
 	}
 	op, err := s.ops.Get(ctx, move.OperationID)
-	if err != nil || op.State == "succeeded" {
+	if err != nil || op.State == "succeeded" || op.State == "failed" {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 	phase := op.Checkpoint
+	cancellationReason := ""
+	if phase == "canceling-reservation" {
+		cancellationReason = op.Error
+	}
 	save := func(next string) error {
 		raw, err := json.Marshal(move)
 		if err != nil {
@@ -38,14 +42,27 @@ func (s *Server) RunStackMove(ctx context.Context, raw json.RawMessage) error {
 		}
 		err = s.db.Execute(ctx, []rqlite.Statement{
 			{SQL: `UPDATE tasks SET payload=? WHERE id=?`, Params: []any{string(raw), "move-" + move.OperationID}},
-			{SQL: `UPDATE operations SET state='running', checkpoint=?, error=NULL, updated_at=? WHERE id=?`, Params: []any{next, time.Now().UTC(), move.OperationID}},
+			{SQL: `UPDATE operations SET state='running', checkpoint=?, error=NULLIF(?,''), updated_at=? WHERE id=?`, Params: []any{next, cancellationReason, time.Now().UTC(), move.OperationID}},
 		})
 		if err == nil {
 			phase = next
 		}
 		return err
 	}
+	if phase == "canceling-reservation" {
+		return s.cancelMoveReservation(ctx, move, cancellationReason)
+	}
 	err = s.advanceStackMove(ctx, &move, &phase, save)
+	var rejection *peerResponseError
+	if phase == "reserving-destination" && errors.As(err, &rejection) && (rejection.StatusCode == http.StatusBadRequest || rejection.StatusCode == http.StatusConflict) {
+		// The source has not stopped. Release the rejected reservation, but only
+		// after its durable cancellation fences late/replayed destination requests.
+		cancellationReason = err.Error()
+		if err := save("canceling-reservation"); err != nil {
+			return errors.Join(worker.ErrMoveMustResume, err)
+		}
+		return s.cancelMoveReservation(ctx, move, cancellationReason)
+	}
 	if err != nil {
 		status, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
@@ -56,6 +73,20 @@ func (s *Server) RunStackMove(ctx context.Context, raw json.RawMessage) error {
 		}
 	}
 	return err
+}
+
+func (s *Server) cancelMoveReservation(ctx context.Context, move stackMove, reason string) error {
+	var result struct{ Status string }
+	if err := s.backupPeerRequest(ctx, move.Destination, http.MethodPost, "/internal/stack-moves/cancel", move, &result); err != nil {
+		return errors.Join(worker.ErrMoveMustResume, err)
+	}
+	if result.Status != "canceled" {
+		return errors.Join(worker.ErrMoveMustResume, errors.New("destination has not confirmed reservation cancellation"))
+	}
+	if err := s.ops.Update(ctx, move.OperationID, "failed", "reservation-canceled", reason); err != nil {
+		return errors.Join(worker.ErrMoveMustResume, err)
+	}
+	return nil
 }
 
 func (s *Server) advanceStackMove(ctx context.Context, move *stackMove, phase *string, save func(string) error) error {
