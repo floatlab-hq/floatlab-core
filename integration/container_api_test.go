@@ -364,9 +364,25 @@ func (c *apiClient) assertStorageAPIs(stackID string) {
 	if len(pools) == 0 {
 		c.t.Fatal("expected at least one storage pool")
 	}
-	if err := c.doJSON(http.MethodGet, "/api/v1/storage/pools/"+pools[0].NodeID+"/"+pools[0].Name, c.token, "", nil, &map[string]any{}); err != nil {
-		c.t.Fatal(err)
+	if out, err := guestCommand(c.vm, "systemctl is-active floatlab-zfs-scrub.timer && systemctl start floatlab-zfs-scrub.service"); err != nil {
+		c.t.Fatalf("start scheduled scrub service: %v: %s", err, out)
 	}
+	waitFor(c.t, 3*time.Minute, func() error {
+		var pool struct {
+			Scrub *struct {
+				State       string     `json:"state"`
+				CompletedAt *time.Time `json:"completed_at"`
+				Errors      *uint64    `json:"errors"`
+			} `json:"scrub"`
+		}
+		if err := c.doJSON(http.MethodGet, "/api/v1/storage/pools/"+pools[0].NodeID+"/floatlab", c.token, "", nil, &pool); err != nil {
+			return err
+		}
+		if pool.Scrub == nil || pool.Scrub.State != "completed" || pool.Scrub.CompletedAt == nil || pool.Scrub.Errors == nil || *pool.Scrub.Errors != 0 {
+			return fmt.Errorf("expected a completed, error-free scrub, got %+v", pool.Scrub)
+		}
+		return nil
+	})
 
 	var dataset struct {
 		StackID    string `json:"stack_id"`

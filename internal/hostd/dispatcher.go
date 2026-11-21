@@ -838,6 +838,7 @@ func (d *Dispatcher) poolHealth(ctx context.Context, raw json.RawMessage) (any, 
 		Name:   status.Name,
 		Health: status.Health,
 		Errors: status.Errors,
+		Scrub:  status.Scrub,
 		VDevs:  make([]ipc.PoolVDevInfo, 0, len(status.VDevs)),
 	}
 	for _, v := range status.VDevs {

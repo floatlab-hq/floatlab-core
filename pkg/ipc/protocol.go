@@ -3,6 +3,8 @@ package ipc
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/floatlab/floatlab-core/pkg/store"
 )
 
 type MessageType string
@@ -353,10 +355,11 @@ type PoolVDevInfo struct {
 }
 
 type PoolHealthResult struct {
-	Name   string         `json:"name"`
-	Health string         `json:"health"`
-	VDevs  []PoolVDevInfo `json:"vdevs"`
-	Errors string         `json:"errors"`
+	Name   string             `json:"name"`
+	Health string             `json:"health"`
+	VDevs  []PoolVDevInfo     `json:"vdevs"`
+	Errors string             `json:"errors"`
+	Scrub  *store.ScrubStatus `json:"scrub,omitempty"`
 }
 
 type SnapshotListPayload struct {

@@ -2862,6 +2862,23 @@ export interface components {
             checksum_errors?: number;
             children?: components["schemas"]["ZfsVdev"][];
         };
+        ZfsScrub: {
+            /** @enum {string} */
+            state: "running" | "paused" | "completed" | "canceled";
+            /** Format: date-time */
+            started_at?: string;
+            /** Format: date-time */
+            completed_at?: string;
+            /** @description Estimated scan progress while running or paused, when available. */
+            progress_pct?: number;
+            /** Format: int64 */
+            repaired_bytes: number;
+            /**
+             * Format: int64
+             * @description Errors reported by ZFS for this scrub. A completed scrub can have errors.
+             */
+            errors: number;
+        };
         ZfsPool: {
             /** @example floatlab */
             name: string;
@@ -2880,6 +2897,8 @@ export interface components {
             /** Format: float */
             dedup_ratio?: number;
             vdevs: components["schemas"]["ZfsVdev"][];
+            /** @description Current or most recent full scrub as reported by ZFS. Present on pool detail when scan data is available. */
+            scrub?: components["schemas"]["ZfsScrub"];
             /** Format: date-time */
             created_at: string;
         };

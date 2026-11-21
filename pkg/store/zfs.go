@@ -77,6 +77,16 @@ type PoolStatus struct {
 	Health string // "ONLINE", "DEGRADED", "FAULTED", etc.
 	VDevs  []VDevInfo
 	Errors string
+	Scrub  *ScrubStatus
+}
+
+type ScrubStatus struct {
+	State         string     `json:"state"`
+	StartedAt     *time.Time `json:"started_at,omitempty"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+	ProgressPct   *float64   `json:"progress_pct,omitempty"`
+	RepairedBytes uint64     `json:"repaired_bytes"`
+	Errors        uint64     `json:"errors"`
 }
 
 type VDevInfo struct {
@@ -242,7 +252,12 @@ func (s *zfsStore) SendIncremental(ctx context.Context, p SendParams) (*SendJob,
 }
 
 func (s *zfsStore) PoolHealth(ctx context.Context, pool string) (*PoolStatus, error) {
-	out, err := run(ctx, "zpool", "status", "-P", pool)
+	out, err := run(ctx, "zpool", "status", "-jP", "--json-int", "--", pool)
+	if err == nil {
+		return parsePoolStatusJSON(out, pool)
+	}
+	// OpenZFS releases before 2.3 only support text status.
+	out, err = run(ctx, "zpool", "status", "-P", "--", pool)
 	if err != nil {
 		return nil, err
 	}
@@ -256,6 +271,73 @@ func (s *zfsStore) PoolHealth(ctx context.Context, pool string) (*PoolStatus, er
 			status.Errors = strings.TrimSpace(strings.TrimPrefix(line, "errors:"))
 		}
 	}
+	return status, nil
+}
+
+func parsePoolStatusJSON(out, pool string) (*PoolStatus, error) {
+	var response struct {
+		Pools map[string]struct {
+			Health     string  `json:"state"`
+			ErrorCount *uint64 `json:"error_count"`
+			Scan       struct {
+				Function string `json:"function"`
+				State    string `json:"state"`
+				Start    int64  `json:"start_time"`
+				End      int64  `json:"end_time"`
+				Pause    int64  `json:"scrub_pause"`
+				Issued   uint64 `json:"issued"`
+				Total    uint64 `json:"to_examine"`
+				Repaired uint64 `json:"processed"`
+				Errors   uint64 `json:"errors"`
+			} `json:"scan_stats"`
+		} `json:"pools"`
+	}
+	if err := json.Unmarshal([]byte(out), &response); err != nil {
+		return nil, fmt.Errorf("decode zpool status: %w", err)
+	}
+	data, ok := response.Pools[pool]
+	if !ok || data.Health == "" {
+		return nil, fmt.Errorf("zpool status missing pool health for %q", pool)
+	}
+	status := &PoolStatus{Name: pool, Health: data.Health}
+	if data.ErrorCount != nil {
+		if *data.ErrorCount == 0 {
+			status.Errors = "No known data errors"
+		} else {
+			status.Errors = fmt.Sprintf("%d data errors, use '-v' for a list", *data.ErrorCount)
+		}
+	}
+	scan := data.Scan
+	if scan.Function != "SCRUB" {
+		return status, nil
+	}
+	scrub := &ScrubStatus{RepairedBytes: scan.Repaired, Errors: scan.Errors}
+	switch scan.State {
+	case "SCANNING":
+		scrub.State = "running"
+		if scan.Pause != 0 {
+			scrub.State = "paused"
+		}
+		if scan.Total > 0 {
+			progress := min(100, 100*float64(scan.Issued)/float64(scan.Total))
+			scrub.ProgressPct = &progress
+		}
+	case "FINISHED":
+		scrub.State = "completed"
+		if scan.End > 0 {
+			completed := time.Unix(scan.End, 0).UTC()
+			scrub.CompletedAt = &completed
+		}
+	case "CANCELED":
+		scrub.State = "canceled"
+	default:
+		return status, nil
+	}
+	if scan.Start > 0 {
+		started := time.Unix(scan.Start, 0).UTC()
+		scrub.StartedAt = &started
+	}
+	status.Scrub = scrub
 	return status, nil
 }
 
