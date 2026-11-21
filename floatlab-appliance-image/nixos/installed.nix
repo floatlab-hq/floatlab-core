@@ -57,6 +57,36 @@
     requires = [ "sshd-keygen.service" ];
     after = [ "sshd-keygen.service" ];
   };
+  systemd.timers.floatlab-zfs-scrub = {
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnCalendar = "*-*-* 03:00:00";
+      OnBootSec = "30min";
+      RandomizedDelaySec = "30min";
+    };
+  };
+  systemd.services.floatlab-zfs-scrub = {
+    description = "Scrub the FloatLab pool when its last scrub is due";
+    requires = [ "floatlab-zfs-import.service" ];
+    after = [ "floatlab-zfs-import.service" ];
+    path = [ pkgs.zfs pkgs.jq ];
+    serviceConfig.Type = "oneshot";
+    # Pool scan state survives reboot even though the live OS filesystem is recreated.
+    # shortcut: ZFS only reports its current or latest scan, add history when needed.
+    script = ''
+      set -eo pipefail
+      due=$(zpool status -j --json-int floatlab | jq -r '
+        (.pools.floatlab // error("FloatLab pool status missing")).scan_stats
+        | (.state != "SCANNING" and .err_scrub_state != "ERRORSCRUBBING")
+          and (if .function == "SCRUB" and .state == "FINISHED"
+               then now - .end_time >= 30 * 24 * 60 * 60
+               else true end)
+      ')
+      if [ "$due" = true ]; then
+        exec zpool scrub floatlab
+      fi
+    '';
+  };
   services.timesyncd.enable = true;
   environment.systemPackages = [ pkgs.zfs pkgs.gitMinimal ];
   system.stateVersion = "26.05";

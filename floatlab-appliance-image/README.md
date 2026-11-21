@@ -416,6 +416,18 @@ The installer UI/mirror tests still drive the actual interactive installer inten
 `just run-qemu` uses UEFI and the same optional `FLOATLAB_ANSWERS` media. Its disk and UEFI
 variables persist beside `FLOATLAB_TEST_DISK`; `nix develop` provides `FLOATLAB_OVMF`.
 
+## ZFS scrubs
+
+Installed appliances check the `floatlab` pool daily between 03:00 and 03:30
+host time and again 30–60 minutes after boot. A scrub is due when ZFS reports
+no completed full scrub in the last 30 days. The service leaves active and
+paused scans alone.
+
+`GET /api/v1/storage/pools/{node_id}/floatlab` includes a `scrub` object when
+OpenZFS reports a full scrub. It shows the state, progress when available, and
+the repaired bytes and error count. Check the service journal with
+`journalctl -u floatlab-zfs-scrub.service`.
+
 ## Host network settings
 
 Hostd reads `/floatlab/system/etc/network.toml` at startup. A fresh installation bridges physical Ethernet adapters and obtains an IPv4 DHCP lease. DNS defaults to `1.1.1.1` and `8.8.8.8`; an empty DNS list enables DHCP-provided DNS.

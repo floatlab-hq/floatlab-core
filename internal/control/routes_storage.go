@@ -47,16 +47,17 @@ func registerStorageRoutes(r chi.Router, s *Server) {
 
 // poolResponse maps to the frontend ZfsPool type.
 type poolResponse struct {
-	CreatedAt  string         `json:"created_at"`
-	NodeID     string         `json:"node_id"`
-	Name       string         `json:"name"`
-	State      string         `json:"state"`
-	SizeBytes  int64          `json:"size_bytes"`
-	AllocBytes int64          `json:"alloc_bytes"`
-	FreeBytes  int64          `json:"free_bytes"`
-	CapPct     float64        `json:"cap_pct"`
-	Health     string         `json:"health"`
-	VDevs      []vdevResponse `json:"vdevs"`
+	CreatedAt  string             `json:"created_at"`
+	NodeID     string             `json:"node_id"`
+	Name       string             `json:"name"`
+	State      string             `json:"state"`
+	SizeBytes  int64              `json:"size_bytes"`
+	AllocBytes int64              `json:"alloc_bytes"`
+	FreeBytes  int64              `json:"free_bytes"`
+	CapPct     float64            `json:"cap_pct"`
+	Health     string             `json:"health"`
+	VDevs      []vdevResponse     `json:"vdevs"`
+	Scrub      *store.ScrubStatus `json:"scrub,omitempty"`
 }
 
 type vdevResponse struct {
@@ -162,6 +163,7 @@ func (s *Server) handleGetPool(w http.ResponseWriter, r *http.Request) {
 		State:  result.Health,
 		Health: result.Health,
 		VDevs:  vdevs,
+		Scrub:  result.Scrub,
 	})
 }
 

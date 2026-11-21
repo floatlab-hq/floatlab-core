@@ -75,6 +75,31 @@ components:
           items:
             $ref: '#/components/schemas/ZfsVdev'
 
+    ZfsScrub:
+      type: object
+      required: [state, repaired_bytes, errors]
+      properties:
+        state:
+          type: string
+          enum: [running, paused, completed, canceled]
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        progress_pct:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: Estimated scan progress while running or paused, when available.
+        repaired_bytes: {type: integer, format: int64, minimum: 0}
+        errors:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Errors reported by ZFS for this scrub. A completed scrub can have errors.
+
     ZfsPool:
       type: object
       required: [name, node_id, state, size_bytes, alloc_bytes, free_bytes, vdevs, created_at]
@@ -107,6 +132,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ZfsVdev'
+        scrub:
+          description: Current or most recent full scrub as reported by ZFS. Present on pool detail when scan data is available.
+          allOf:
+            - $ref: '#/components/schemas/ZfsScrub'
         created_at:
           type: string
           format: date-time
