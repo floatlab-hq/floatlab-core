@@ -46,6 +46,11 @@ type Orchestrator struct {
 	merged      chan ipc.Event // fanin from all node IPC event channels
 	ops         *operation.Store
 	db          *rqlite.Client
+	isOwner     func(context.Context, string) (bool, error)
+}
+
+func (o *Orchestrator) SetWorkloadOwnerCheck(check func(context.Context, string) (bool, error)) {
+	o.isOwner = check
 }
 
 func New(
@@ -180,6 +185,12 @@ func (o *Orchestrator) handleStateChange(ctx context.Context, entry run.StackSta
 	}
 	if previous, ok := o.dispatched[entry.StackID]; ok && previous.Equal(entry.Timestamp) {
 		return
+	}
+	if o.isOwner != nil {
+		local, err := o.isOwner(ctx, entry.StackID)
+		if err != nil || !local {
+			return
+		}
 	}
 	o.dispatched[entry.StackID] = entry.Timestamp
 	switch entry.To {

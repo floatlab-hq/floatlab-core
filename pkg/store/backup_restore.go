@@ -21,6 +21,7 @@ const restoreMountProperty = "floatlab:restore-mount"
 
 type BackupRestorePrepareRequest struct {
 	SourceNodeID, BackupNodeID, Dataset, Snapshot, OperationID, MountID string
+	ExpectedGUID                                                        string
 	DestNodeID, DestHost                                                string
 	DestPort                                                            int
 	IdentityFile, KnownHostsFile                                        string
@@ -71,7 +72,7 @@ func PrepareBackupRestore(ctx context.Context, r BackupRestorePrepareRequest) (*
 		}
 	}
 	backup := BackupDataset(r.SourceNodeID, r.Dataset)
-	unlock, err := lockBackupDataset(backup)
+	unlock, err := lockBackupDatasetContext(ctx, backup)
 	if err != nil {
 		return nil, err
 	}
@@ -83,6 +84,9 @@ func PrepareBackupRestore(ctx context.Context, r BackupRestorePrepareRequest) (*
 	guid, err := run(ctx, "zfs", "get", "-H", "-o", "value", "guid", backup+"@"+r.Snapshot)
 	if err != nil {
 		return nil, err
+	}
+	if r.ExpectedGUID != "" && guid != r.ExpectedGUID {
+		return nil, fmt.Errorf("backup snapshot changed after confirmation: %s", r.Dataset)
 	}
 	m := restoreMetadata{r.OperationID, r.MountID, r.Snapshot, guid}
 	if !validRestoreMetadata(m) {

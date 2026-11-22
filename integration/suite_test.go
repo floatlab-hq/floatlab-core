@@ -165,9 +165,14 @@ var _ = DescribeTableSubtree("Multi-node", func(name string) {
 			defineBackupRestore(fixture)
 		case "StackMove":
 			defineStackMove(fixture)
+		case "FailoverTwoNodes":
+			defineManualFailover(fixture, 2)
+		case "FailoverThreeNodes":
+			defineManualFailover(fixture, 3)
 		}
 	})
-}, Entry("Lab", "Lab"), Entry("Replication", "Replication"), Entry("BackupRestore", "BackupRestore"), Entry("StackMove", "StackMove"))
+}, Entry("Lab", "Lab"), Entry("Replication", "Replication"), Entry("BackupRestore", "BackupRestore"), Entry("StackMove", "StackMove"),
+	Entry("FailoverTwoNodes", "FailoverTwoNodes"), Entry("FailoverThreeNodes", "FailoverThreeNodes"))
 
 var _ = Describe("Single-node workflows", Ordered, Serial, Label("single-node"), func() {
 	fixture := &applianceFixture{}

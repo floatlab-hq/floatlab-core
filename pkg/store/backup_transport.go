@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 type commandBackup struct{ r ReplicationRequest }
@@ -89,6 +90,10 @@ func Replicate(ctx context.Context, r ReplicationRequest) (*SendResult, error) {
 }
 
 func lockBackupDataset(dataset string) (func(), error) {
+	return lockBackupDatasetContext(context.Background(), dataset)
+}
+
+func lockBackupDatasetContext(ctx context.Context, dataset string) (func(), error) {
 	if err := os.MkdirAll("/run/floatlab/backup-locks", 0700); err != nil {
 		return nil, err
 	}
@@ -97,11 +102,30 @@ func lockBackupDataset(dataset string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+	if err := acquireBackupFileLock(ctx, file); err != nil {
 		file.Close()
 		return nil, err
 	}
 	return func() { _ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN); _ = file.Close() }, nil
+}
+
+func acquireBackupFileLock(ctx context.Context, file *os.File) error {
+	if ctx.Done() == nil {
+		return syscall.Flock(int(file.Fd()), syscall.LOCK_EX)
+	}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for ctx.Err() == nil {
+		err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+		case <-ticker.C:
+		}
+	}
+	return ctx.Err()
 }
 func (b *commandBackup) remoteArgs(action string) []string {
 	policy := base64.RawURLEncoding.EncodeToString([]byte(b.r.Policy))
@@ -303,19 +327,11 @@ func ServeBackupReceiver(ctx context.Context, source, command string, in io.Read
 	}
 	switch action {
 	case "state":
-		token, err := run(ctx, "zfs", "get", "-H", "-o", "value", "receive_resume_token", dataset)
+		state, err := readBackupState(ctx, dataset)
 		if err != nil {
 			return err
 		}
-		if token == "-" {
-			token = ""
-		}
-		listing, err := run(ctx, "zfs", "list", "-H", "-p", "-t", "snapshot", "-o", "name,guid", "-s", "createtxg", "-d", "1", dataset)
-		if err != nil {
-			return err
-		}
-		snaps := parseBackupSnapshots(listing, dataset)
-		return json.NewEncoder(out).Encode(BackupState{Snapshots: snaps, ResumeToken: token})
+		return json.NewEncoder(out).Encode(state)
 	case "abort":
 		_, err = run(ctx, "zfs", "receive", "-A", dataset)
 		return err
@@ -335,4 +351,44 @@ func ServeBackupReceiver(ctx context.Context, source, command string, in io.Read
 		return cmd.Run()
 	}
 	return errors.New("unreachable backup action")
+}
+
+func readBackupState(ctx context.Context, dataset string) (BackupState, error) {
+	token, err := run(ctx, "zfs", "get", "-H", "-o", "value", "receive_resume_token", dataset)
+	if err != nil {
+		return BackupState{}, err
+	}
+	if token == "-" {
+		token = ""
+	}
+	snapshots, err := readBackupSnapshots(ctx, dataset)
+	return BackupState{Snapshots: snapshots, ResumeToken: token}, err
+}
+
+func readBackupSnapshots(ctx context.Context, dataset string) ([]BackupSnapshot, error) {
+	listing, err := run(ctx, "zfs", "list", "-H", "-p", "-t", "snapshot", "-o", "name,guid", "-s", "createtxg", "-d", "1", dataset)
+	return parseBackupSnapshots(listing, dataset), err
+}
+
+// BackupRecoveryPoints reads completed snapshots in the authenticated source's backup dataset.
+func BackupRecoveryPoints(ctx context.Context, source, dataset string) ([]BackupSnapshot, error) {
+	if !backupID.MatchString(source) || !validBackupDataset(dataset) || !strings.HasPrefix(dataset, "floatlab/") || len(strings.Split(dataset, "/")) != 3 {
+		return nil, errors.New("invalid backup replica identity")
+	}
+	backup := BackupDataset(source, dataset)
+	unlock, err := lockBackupDatasetContext(ctx, backup)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	return backupRecoveryPointsLocked(ctx, source, backup)
+}
+
+func backupRecoveryPointsLocked(ctx context.Context, source, backup string) ([]BackupSnapshot, error) {
+	owner, err := run(ctx, "zfs", "get", "-H", "-s", "local", "-o", "value", "floatlab:backup-source", backup)
+	if err != nil || owner != source {
+		return nil, errors.Join(errors.New("recovery requires an owned backup dataset"), err)
+	}
+	// OpenZFS publishes a named snapshot only after its receive commits.
+	return readBackupSnapshots(ctx, backup)
 }

@@ -37,6 +37,13 @@ export interface StackMoveApi {
   moveStack(id: string, request: StackMoveRequest, idempotencyKey: string): Promise<StackMoveAccepted>;
   getOperation(id: string): Promise<Operation>;
 }
+export type FailoverPreview = components["schemas"]["FailoverPreview"];
+export type FailoverRequest = components["schemas"]["FailoverRequest"];
+export type FailoverAccepted = components["schemas"]["FailoverAccepted"];
+export interface FailoverApi {
+  previewFailover(id: string, destination: string): Promise<FailoverPreview>;
+  triggerFailover(id: string, request: FailoverRequest, idempotencyKey: string): Promise<FailoverAccepted>;
+}
 export type LogLine = components["schemas"]["LogLine"];
 export type AuditEntry = components["schemas"]["AuditEntry"] & { outcome?: string; details?: string | null };
 

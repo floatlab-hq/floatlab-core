@@ -50,6 +50,12 @@ type Worker struct {
 	raft                 *raftpkg.Node
 	ops                  *operation.Store
 	prepareBackupRestore func(context.Context, ipc.BackupRestorePreparePayload) (ipc.BackupRestorePrepareResult, error)
+	commitBackupOwner    func(context.Context, BackupRestorePayload) error
+	isLocalWorkloadOwner func(context.Context, string) (bool, error)
+}
+
+func (w *Worker) SetWorkloadOwnerCheck(check func(context.Context, string) (bool, error)) {
+	w.isLocalWorkloadOwner = check
 }
 
 func New(db *rqlite.Client, cfgStore *config.Store, pool *hostclient.Pool, raft *raftpkg.Node, log *zap.Logger) *Worker {
@@ -652,7 +658,7 @@ func (w *Worker) poll(ctx context.Context) error {
 	if claim.RowsAffected == 0 {
 		return nil
 	}
-	result, err := w.db.Query(ctx, rqlite.Statement{SQL: `SELECT id,type,payload,attempts FROM tasks WHERE state='running' AND locked_by=? ORDER BY updated_at DESC LIMIT 1`, Params: []interface{}{w.workerID}})
+	result, err := w.db.Query(ctx, rqlite.Statement{SQL: `SELECT id,type,payload,attempts,stack_id FROM tasks WHERE state='running' AND locked_by=? ORDER BY updated_at DESC LIMIT 1`, Params: []interface{}{w.workerID}})
 	if err != nil {
 		return fmt.Errorf("worker: read claimed task: %w", err)
 	}
@@ -665,6 +671,7 @@ func (w *Worker) poll(ctx context.Context) error {
 	taskType, _ := row[1].(string)
 	payloadStr, _ := row[2].(string)
 	attempts, _ := row[3].(float64)
+	stackID, _ := row[4].(string)
 
 	w.log.Info("worker: executing task",
 		zap.String("id", taskID),
@@ -678,7 +685,28 @@ func (w *Worker) poll(ctx context.Context) error {
 		return nil
 	}
 
-	if execErr := handler(ctx, json.RawMessage(payloadStr)); execErr != nil {
+	var execErr error
+	fenced := false
+	checkOwner := taskType != TaskStackMove
+	if taskType == TaskBackupRestore {
+		var restore BackupRestorePayload
+		if json.Unmarshal([]byte(payloadStr), &restore) == nil {
+			// A takeover prepares its replica before it claims ownership.
+			checkOwner = restore.OwnerGeneration == 0 || restore.Lifecycle.Event == run.EventBackupRestorePrepared
+		}
+	}
+	if w.isLocalWorkloadOwner != nil && stackID != "" && checkOwner {
+		local, err := w.isLocalWorkloadOwner(ctx, stackID)
+		execErr = err
+		if err == nil && !local {
+			fenced = true
+			execErr = errors.New("workload is owned by another node")
+		}
+	}
+	if execErr == nil {
+		execErr = handler(ctx, json.RawMessage(payloadStr))
+	}
+	if execErr != nil {
 		w.log.Error("worker: task failed",
 			zap.String("id", taskID),
 			zap.String("type", taskType),
@@ -687,8 +715,20 @@ func (w *Worker) poll(ctx context.Context) error {
 		if errors.Is(execErr, ErrMoveMustResume) {
 			return w.db.Execute(ctx, []rqlite.Statement{{SQL: `UPDATE tasks SET state='pending',attempts=1,error=?,updated_at=datetime('now'),locked_by=NULL WHERE id=?`, Params: []any{execErr.Error(), taskID}}})
 		}
-		if int(attempts)+1 >= maxAttempts {
-			_ = w.db.Execute(ctx, []rqlite.Statement{{SQL: `UPDATE tasks SET state='failed',attempts=attempts+1,error=?,updated_at=datetime('now'),locked_by=NULL WHERE id=?`, Params: []interface{}{execErr.Error(), taskID}}})
+		if fenced || int(attempts)+1 >= maxAttempts {
+			terminal := []rqlite.Statement{{SQL: `UPDATE tasks SET state='failed',attempts=attempts+1,error=?,updated_at=datetime('now'),locked_by=NULL WHERE id=?`, Params: []interface{}{execErr.Error(), taskID}}}
+			if taskType == TaskBackupRestore {
+				var restore BackupRestorePayload
+				if json.Unmarshal([]byte(payloadStr), &restore) == nil && restore.OwnerGeneration != 0 {
+					terminal = append(terminal,
+						rqlite.Statement{SQL: `UPDATE operations SET state='failed',checkpoint='failed',error=?,updated_at=? WHERE id=? AND state IN ('pending','running')`, Params: []any{execErr.Error(), time.Now().UTC(), restore.OperationID}},
+						rqlite.Statement{SQL: `DELETE FROM workload_move_reservations WHERE operation_id=?`, Params: []any{restore.OperationID}},
+					)
+				}
+			}
+			if err := w.db.Execute(ctx, terminal); err != nil {
+				return err
+			}
 			if taskType == TaskBackupRestore {
 				// The handler may have durably advanced its intent during this attempt.
 				rows, err := w.db.Query(ctx, rqlite.Statement{SQL: `SELECT payload FROM tasks WHERE id=?`, Params: []any{taskID}})

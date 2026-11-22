@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/floatlab/floatlab-core/internal/hostnetwork"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
 	"go.uber.org/zap"
 )
@@ -15,10 +16,11 @@ import (
 // Pool manages one IPC client connection per registered node.
 // The control plane uses this to issue commands to any host daemon.
 type Pool struct {
-	mu      sync.RWMutex
-	clients map[string]*ipc.Client // key: node ID
-	sockets map[string]string      // key: node ID, value: socket path
-	log     *zap.Logger
+	mu                 sync.RWMutex
+	clients            map[string]*ipc.Client // key: node ID
+	sockets            map[string]string      // key: node ID, value: socket path
+	log                *zap.Logger
+	checkWorkloadStart func(context.Context, string) error
 }
 
 func NewPool(log *zap.Logger) *Pool {
@@ -52,8 +54,39 @@ func (p *Pool) Register(nodeID, socketPath string) {
 	p.sockets[nodeID] = socketPath
 }
 
+// SetWorkloadStartCheck installs the startup guard before controller workers run.
+func (p *Pool) SetWorkloadStartCheck(check func(context.Context, string) error) {
+	p.checkWorkloadStart = check
+}
+
 // Execute sends a command to the specified node and returns the raw response payload.
 func (p *Pool) Execute(ctx context.Context, nodeID, command string, payload any) (json.RawMessage, error) {
+	if p.checkWorkloadStart != nil {
+		var stackID string
+		switch command {
+		case "compose.up":
+			if request, ok := payload.(ipc.ComposeUpPayload); ok {
+				stackID = request.StackID
+			}
+		case "docker.start":
+			if request, ok := payload.(ipc.DockerContainerPayload); ok {
+				stackID = request.StackID
+			}
+		case "docker.startup.restore":
+			if request, ok := payload.(ipc.DockerListPayload); ok {
+				stackID = request.StackID
+			}
+		case "net.service.add":
+			if request, ok := payload.(hostnetwork.Service); ok {
+				stackID = request.StackID
+			}
+		}
+		if stackID != "" {
+			if err := p.checkWorkloadStart(ctx, stackID); err != nil {
+				return nil, err
+			}
+		}
+	}
 	c, err := p.getOrConnect(ctx, nodeID)
 	if err != nil {
 		return nil, err

@@ -144,6 +144,7 @@ func (c *apiClient) assertRecoveryWorkload() {
 	assertData("persistent-marker")
 	c.expect("POST", stackPath+"/failover", nil, 409)
 	c.expect("POST", stackPath+"/restore", nil, 409)
+	c.expect("GET", "/api/v1/failover/"+id+"/preview?destination_node_id="+c.nodeID, nil, 409)
 	c.expect("POST", "/api/v1/failover/"+id+"/trigger", nil, 409)
 	c.expect("POST", "/api/v1/failover/"+id+"/abort", nil, 409)
 	c.expect("GET", "/api/v1/failover/"+id+"/log", nil, 404)

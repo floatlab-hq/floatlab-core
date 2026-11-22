@@ -50,7 +50,7 @@ func newCoverage(t testT) *coverageRun {
 	return run
 }
 func multiNodeOperation(op openapi.Operation) bool {
-	return strings.HasPrefix(op.Path, "/api/v1/lab/") || op.Path == "/api/v1/storage/backups" || op.Path == "/api/v1/storage/backups/restore" || op.Method == "POST" && (strings.Contains(op.Path, "/failover") || op.Path == "/api/v1/stacks/{id}/restore" || op.Path == "/api/v1/stacks/{id}/move" || strings.Contains(op.Path, "/storage/replication/"))
+	return strings.HasPrefix(op.Path, "/api/v1/lab/") || op.Path == "/api/v1/storage/backups" || op.Path == "/api/v1/storage/backups/restore" || op.Path == "/api/v1/failover/{stack_id}/preview" || op.Method == "POST" && (strings.Contains(op.Path, "/failover") || op.Path == "/api/v1/stacks/{id}/restore" || op.Path == "/api/v1/stacks/{id}/move" || strings.Contains(op.Path, "/storage/replication/"))
 }
 
 func TestLabCoverageSeparatesRejectionFromSuccess(t *testing.T) {
@@ -68,13 +68,14 @@ func TestLabCoverageSeparatesRejectionFromSuccess(t *testing.T) {
 	}
 }
 
-func TestBackupCoverageRequiresSeparateMultiNodeSuccess(t *testing.T) {
+func TestReplicaCoverageRequiresSeparateMultiNodeSuccess(t *testing.T) {
 	for _, op := range []openapi.Operation{
 		{Method: "GET", Path: "/api/v1/storage/backups"},
 		{Method: "POST", Path: "/api/v1/storage/backups/restore"},
+		{Method: "GET", Path: "/api/v1/failover/{stack_id}/preview"},
 	} {
 		if !multiNodeOperation(op) {
-			t.Fatalf("received backup operation must defer success to the multi-node suite: %+v", op)
+			t.Fatalf("replica recovery operation must defer success to the multi-node suite: %+v", op)
 		}
 	}
 	if multiNodeOperation(openapi.Operation{Method: "GET", Path: "/api/v1/storage/backups/config"}) {

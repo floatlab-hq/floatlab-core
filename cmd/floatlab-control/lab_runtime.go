@@ -271,6 +271,15 @@ func startLab(ctx context.Context, srv *control.Server, labDB, local *rqlite.Cli
 	}); err != nil {
 		return err
 	}
+	srv.SetWorkloadStartupPeers(func() []string {
+		var peers []string
+		for _, member := range service.Snapshot().Members {
+			if member.NodeID != hostNodeID && member.Status == "active" {
+				peers = append(peers, member.NodeID)
+			}
+		}
+		return peers
+	})
 	peerHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/lab/enroll" {
 			service.EnrollmentHandler().ServeHTTP(w, r)
@@ -288,7 +297,11 @@ func startLab(ctx context.Context, srv *control.Server, labDB, local *rqlite.Cli
 			srv.ServeStackMovePeer(w, r, r.TLS.PeerCertificates[0].Subject.CommonName)
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/api/v1/storage/backups") || strings.HasPrefix(r.URL.Path, "/api/v1/storage/replication") || strings.HasPrefix(r.URL.Path, "/api/v1/stacks") || strings.HasPrefix(r.URL.Path, "/api/v1/operations/") || (r.Method == http.MethodGet && r.URL.Path == "/api/v1/nodes/"+hostNodeID+"/health") {
+		if strings.HasPrefix(r.URL.Path, "/internal/workload-startup/") {
+			srv.ServeWorkloadStartupPeer(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/v1/storage/backups") || strings.HasPrefix(r.URL.Path, "/api/v1/storage/replication") || strings.HasPrefix(r.URL.Path, "/api/v1/stacks") || strings.HasPrefix(r.URL.Path, "/api/v1/operations/") || strings.HasPrefix(r.URL.Path, "/api/v1/failover/") || (r.Method == http.MethodGet && r.URL.Path == "/api/v1/nodes/"+hostNodeID+"/health") {
 			srv.Handler().ServeHTTP(w, r)
 			return
 		}

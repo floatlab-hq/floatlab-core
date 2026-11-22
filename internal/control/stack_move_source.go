@@ -28,6 +28,11 @@ func (s *Server) RunStackMove(ctx context.Context, raw json.RawMessage) error {
 	if err != nil || op.State == "succeeded" || op.State == "failed" {
 		return err
 	}
+	if owner := s.cachedSharedMoveOwners(ctx, move.StackID)[move.StackID]; owner.node != "" && owner.node != move.Stack.PrimaryNodeID {
+		if err := verifyStackOwnerClaim(ctx, s.cfg.LabDB, move.StackID, move.Destination, move.OperationID, move.Generation); err != nil {
+			return err
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 	phase := op.Checkpoint
@@ -233,10 +238,21 @@ func (s *Server) grantStackMove(ctx context.Context, id string, move stackMove) 
 	if err != nil {
 		return err
 	}
-	return s.cfg.LabDB.Execute(ctx, []rqlite.Statement{{
+	grant := rqlite.Statement{
 		SQL:    `INSERT INTO stack_move_grants(operation_id,stack_id,payload_hash) VALUES(?,?,?) ON CONFLICT(operation_id) DO NOTHING`,
 		Params: []any{id, move.StackID, hash},
-	}})
+	}
+	if id != move.OperationID {
+		return s.cfg.LabDB.Execute(ctx, []rqlite.Statement{grant})
+	}
+	claim := claimStackOwner(move.StackID, move.Stack.PrimaryNodeID, move.Destination, id, move.Generation)
+	grant.SQL = `INSERT INTO stack_move_grants(operation_id,stack_id,payload_hash) SELECT ?,?,?
+		WHERE EXISTS(SELECT 1 FROM workload_move_owners WHERE stack_id=? AND operation_id=?) ON CONFLICT(operation_id) DO NOTHING`
+	grant.Params = append(grant.Params, move.StackID, id)
+	if err := s.cfg.LabDB.Execute(ctx, []rqlite.Statement{claim, grant}); err != nil {
+		return err
+	}
+	return verifyStackOwnerClaim(ctx, s.cfg.LabDB, move.StackID, move.Destination, id, move.Generation)
 }
 
 func (s *Server) replicateStackMove(ctx context.Context, move stackMove, snapshot string) error {
@@ -304,9 +320,9 @@ func (move stackMove) payloadHash() (string, error) {
 
 func (move stackMove) ownerStatement() rqlite.Statement {
 	return rqlite.Statement{
-		SQL: `INSERT INTO workload_move_owners(stack_id,node_id,generation) VALUES(?,?,?)
-			ON CONFLICT(stack_id) DO UPDATE SET node_id=excluded.node_id,generation=excluded.generation
+		SQL: `INSERT INTO workload_move_owners(stack_id,node_id,generation,operation_id) VALUES(?,?,?,?)
+			ON CONFLICT(stack_id) DO UPDATE SET node_id=excluded.node_id,generation=excluded.generation,operation_id=excluded.operation_id
 			WHERE workload_move_owners.generation < excluded.generation`,
-		Params: []any{move.StackID, move.Destination, move.Generation},
+		Params: []any{move.StackID, move.Destination, move.Generation, move.OperationID},
 	}
 }

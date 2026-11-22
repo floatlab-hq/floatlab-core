@@ -161,6 +161,7 @@ type BackupRestorePreparePayload struct {
 	BackupNodeID string `json:"backup_node_id"`
 	Dataset      string `json:"dataset"`
 	Snapshot     string `json:"snapshot"`
+	ExpectedGUID string `json:"expected_guid,omitempty"`
 	OperationID  string `json:"operation_id"`
 	MountID      string `json:"mount_id"`
 	DestNodeID   string `json:"dest_node_id,omitempty"`
@@ -364,6 +365,11 @@ type PoolHealthResult struct {
 
 type SnapshotListPayload struct {
 	Dataset string `json:"dataset"`
+}
+
+type BackupRecoveryPointsPayload struct {
+	SourceNodeID string `json:"source_node_id"`
+	Dataset      string `json:"dataset"`
 }
 
 type SnapshotInfoResult struct {

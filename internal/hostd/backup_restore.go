@@ -8,12 +8,20 @@ import (
 	"github.com/floatlab/floatlab-core/pkg/store"
 )
 
+func (d *Dispatcher) backupRecoveryPoints(ctx context.Context, raw json.RawMessage) (any, error) {
+	var p ipc.BackupRecoveryPointsPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, err
+	}
+	return store.BackupRecoveryPoints(ctx, p.SourceNodeID, p.Dataset)
+}
+
 func (d *Dispatcher) backupRestorePrepare(ctx context.Context, raw json.RawMessage) (any, error) {
 	var p ipc.BackupRestorePreparePayload
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, err
 	}
-	return store.PrepareBackupRestore(ctx, store.BackupRestorePrepareRequest{SourceNodeID: p.SourceNodeID, BackupNodeID: p.BackupNodeID, Dataset: p.Dataset, Snapshot: p.Snapshot, OperationID: p.OperationID, MountID: p.MountID, DestNodeID: p.DestNodeID, DestHost: p.DestHost, DestPort: p.DestPort})
+	return store.PrepareBackupRestore(ctx, store.BackupRestorePrepareRequest{SourceNodeID: p.SourceNodeID, BackupNodeID: p.BackupNodeID, Dataset: p.Dataset, Snapshot: p.Snapshot, ExpectedGUID: p.ExpectedGUID, OperationID: p.OperationID, MountID: p.MountID, DestNodeID: p.DestNodeID, DestHost: p.DestHost, DestPort: p.DestPort})
 }
 
 func (d *Dispatcher) backupRestoreActivate(ctx context.Context, raw json.RawMessage) (any, error) {

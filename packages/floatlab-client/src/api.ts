@@ -1,5 +1,5 @@
 import type { Container, ExecResult, FloatLabApi, HostNetworkApi, HostNetworkStatus, HostNetworkChange, NetworkPool, LogLine, Node, Stack, StackMetricSeries, UpdateApi, UpdateRelease, UpdateStatus } from "./types";
-import type { AuditEntry, DashboardApi, StackMoveApi, TokenResponse, RaftHealth, Notification, NodeStats, StorageStats } from "./types";
+import type { AuditEntry, DashboardApi, StackMoveApi, FailoverApi, TokenResponse, RaftHealth, Notification, NodeStats, StorageStats } from "./types";
 import type { LabApi, BackupApi, BackupRestoreApi } from "./types";
 import type { AlertsApi } from "./types";
 import type { HttpApi, HttpRequest } from "./types";
@@ -19,7 +19,7 @@ export function normalizeApiUrl(url: string): string {
   return parsed.toString().replace(/\/$/, "");
 }
 
-export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNetworkApi & DashboardApi & StackMoveApi & UpdateApi & LabApi & BackupApi & BackupRestoreApi & AlertsApi & HttpApi {
+export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNetworkApi & DashboardApi & StackMoveApi & FailoverApi & UpdateApi & LabApi & BackupApi & BackupRestoreApi & AlertsApi & HttpApi {
   const baseUrl = normalizeApiUrl(options.baseUrl);
   const send = async <T>(path: string, init: HttpRequest = {}, negotiated = false): Promise<T> => {
     const headers = new Headers(init.headers);
@@ -135,6 +135,8 @@ export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNe
     startStack: (id, key) => mutation(`/stacks/${encodeURIComponent(id)}/start`, "POST", key),
     stopStack: (id, key) => mutation(`/stacks/${encodeURIComponent(id)}/stop`, "POST", key),
     moveStack: (id, request, key) => mutation(`/stacks/${encodeURIComponent(id)}/move`, "POST", key, request),
+    previewFailover: (id, destination) => send(`/failover/${encodeURIComponent(id)}/preview${query({destination_node_id: destination})}`),
+    triggerFailover: (id, request, key) => mutation(`/failover/${encodeURIComponent(id)}/trigger`, "POST", key, request),
     getOperation: id => send(`/operations/${encodeURIComponent(id)}`),
     startContainer: (stack, container, key) => mutation<Container>(`/stacks/${encodeURIComponent(stack)}/containers/${encodeURIComponent(container)}/start`, "POST", key),
     stopContainer: (stack, container, key) => mutation<Container>(`/stacks/${encodeURIComponent(stack)}/containers/${encodeURIComponent(container)}/stop`, "POST", key),

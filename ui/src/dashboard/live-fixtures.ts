@@ -1,5 +1,5 @@
 // Fixtures are consumed only by stories and tests, never the application entrypoint.
-import { createApiClient, type Container, type LogLine, type Node, type Stack } from '@floatlab/client'
+import { createApiClient, type Container, type FailoverPreview, type LogLine, type Node, type Stack } from '@floatlab/client'
 export const node: Node = {
   id: 'node-1', name: 'lab-alpha', hostname: 'alpha.local', role: 'primary', status: 'online',
   addresses: [{ type: 'LAN-6', address: '2001:db8::1/64', interface: 'eth0' }],
@@ -9,6 +9,12 @@ export const stack: Stack = {
   id: 'stack-1', name: 'plex', state: 'RunningPrimary', primary_node: node.id,
   compose_file: 'services: {}', dataset_path: 'floatlab/plex', failover_mode: 'manual',
   created_at: node.created_at, updated_at: node.updated_at,
+}
+export const failoverTarget = { ...node, id: 'node-2', name: 'lab-beta' }
+export const failoverPoint: FailoverPreview = {
+  stack_id: stack.id, source_node_id: node.id, destination_node_id: failoverTarget.id, mode: 'takeover',
+  recovery_point: 'verified-point', snapshot: 'fl-verified', snapshot_at: node.created_at, potential_data_loss_seconds: 60,
+  requires_network: false, datasets: [{ dataset: 'floatlab/plex/data', snapshot: 'fl-verified' }],
 }
 export const fixtureData: Record<string, unknown> = {
   '/api/v1/nodes': [node], '/api/v1/stacks': [stack],

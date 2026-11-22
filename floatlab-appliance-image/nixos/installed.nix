@@ -42,6 +42,9 @@
   services.openssh.extraConfig = ''
     Match User root
       AuthorizedKeysFile ${lib.concatStringsSep " " config.services.openssh.authorizedKeysFiles} /floatlab/system/etc/root-authorized-keys
+    Match User floatlab-replica
+      ClientAliveInterval 15
+      ClientAliveCountMax 2
     Match all
   '';
   services.openssh.hostKeys = [

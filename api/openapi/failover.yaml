@@ -4,7 +4,75 @@ info:
   version: 0.1.0
 
 components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, maxLength: 255}
+      description: Unique key used to safely retry this mutation.
   schemas:
+    FailoverPreview:
+      type: object
+      required: [stack_id, source_node_id, destination_node_id, mode, recovery_point, snapshot, snapshot_at, potential_data_loss_seconds, requires_network, datasets]
+      properties:
+        stack_id: {type: string}
+        source_node_id: {type: string}
+        destination_node_id: {type: string}
+        mode:
+          type: string
+          enum: [takeover, clone]
+          description: In a two-node lab, recover as a separate stack. With quorum, transfer ownership of the existing stack.
+        recovery_point:
+          type: string
+          description: Opaque identity of the verified recovery point. Submit it unchanged to confirm this point.
+        snapshot: {type: string}
+        snapshot_at: {type: string, format: date-time}
+        potential_data_loss_seconds:
+          type: integer
+          minimum: 0
+          description: Elapsed time from the verified recovery point to this preview. Writes in that interval may be lost.
+        requires_network:
+          type: boolean
+          description: The recovered stack needs a newly allocated IP address and MAC address on a physical network.
+        datasets:
+          type: array
+          items:
+            type: object
+            required: [dataset, snapshot]
+            properties:
+              dataset: {type: string}
+              snapshot: {type: string}
+
+    FailoverRequest:
+      type: object
+      required: [destination_node_id, primary_fenced, recovery_point]
+      properties:
+        destination_node_id:
+          type: string
+          description: The stack's nominated secondary.
+        primary_fenced:
+          type: boolean
+          enum: [true]
+          description: Explicit confirmation that the old primary cannot run the workload.
+        recovery_point: {type: string}
+        name:
+          type: string
+          description: Required for a clone in a two-node lab. Choose a new stack name.
+        network_pool:
+          type: string
+          description: Optional destination-owned pool for the recovered stack's new physical-network identity.
+
+    FailoverAccepted:
+      type: object
+      required: [operation_id, stack_id, status]
+      properties:
+        operation_id: {type: string}
+        stack_id:
+          type: string
+          description: ID of the new stack for a clone, or the existing stack for a takeover.
+        status: {type: string}
+
     FailoverStatus:
       type: object
       required: [stack_id, state, triggered_by, started_at]
@@ -83,6 +151,7 @@ paths:
       summary: Get failover status across all stacks
       operationId: listFailoverStatus
       tags: [failover]
+      description: Reports legacy failover lifecycle state. Follow lab takeover and clone jobs with GET /operations/{operationId}.
       responses:
         '200':
           description: Current failover status for each stack that has one active or recent.
@@ -92,6 +161,41 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/FailoverStatus'
+
+  /failover/{stack_id}/preview:
+    parameters:
+      - name: stack_id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    get:
+      summary: Preview a verified manual failover recovery point
+      operationId: previewStackFailover
+      tags: [failover]
+      parameters:
+        - name: destination_node_id
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Latest usable replica recovery point and possible data loss.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FailoverPreview'
+        '409':
+          description: No usable recovery point or the destination is ineligible.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Failover destination unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /failover/{stack_id}/trigger:
     parameters:
@@ -106,17 +210,38 @@ paths:
       operationId: triggerStackFailover
       tags: [failover]
       description: |
-        Equivalent to POST /stacks/{id}/failover. Initiates the 6-step failover sequence.
-        Stack must be in RunningPrimary state.
+        In a lab, recover on the nominated secondary after fencing the primary and reviewing a verified recovery point.
+        Equivalent to POST /stacks/{id}/failover.
+        Follow the accepted operation at GET /operations/{operationId}.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        description: Required for lab failover. Supply the recovery point returned by the preview.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FailoverRequest'
       responses:
         '202':
-          description: Failover sequence initiated.
+          description: Failover accepted.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/FailoverStatus'
+                $ref: '#/components/schemas/FailoverAccepted'
+        '400':
+          description: Missing fencing confirmation, recovery point, or required clone name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '409':
-          description: Stack not in RunningPrimary state or failover already in progress.
+          description: Stack, destination, or recovery point is ineligible, or failover is already in progress.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Failover destination unavailable.
           content:
             application/json:
               schema:
@@ -135,8 +260,7 @@ paths:
       operationId: abortFailover
       tags: [failover]
       description: |
-        Only possible during step 1 (raft-quorum) or step 2 (zfs-sync). Once IP takeover
-        has begun (step 4), abort is not safe and will be rejected.
+        Applies to the legacy failover sequence before IP takeover. A lab takeover or clone cannot be aborted here.
       responses:
         '202':
           description: Abort accepted.
@@ -159,6 +283,7 @@ paths:
       summary: Get step-by-step log of the most recent failover sequence
       operationId: getFailoverLog
       tags: [failover]
+      description: Reports steps in the legacy failover sequence. Follow lab takeover and clone jobs with GET /operations/{operationId}.
       responses:
         '200':
           description: Ordered list of failover steps with their outcomes.

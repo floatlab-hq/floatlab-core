@@ -164,6 +164,8 @@ paths:
   # Failover
   /failover/status:
     $ref: './failover.yaml#/paths/~1failover~1status'
+  /failover/{stack_id}/preview:
+    $ref: './failover.yaml#/paths/~1failover~1{stack_id}~1preview'
   /failover/{stack_id}/trigger:
     $ref: './failover.yaml#/paths/~1failover~1{stack_id}~1trigger'
   /failover/{stack_id}/abort:

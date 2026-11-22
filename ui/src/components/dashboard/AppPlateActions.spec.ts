@@ -36,6 +36,13 @@ describe('App plate actions', () => {
     await wrapper.findAll('[role="menuitem"]').find(button => button.text() === 'Fail over to standby')!.trigger('click')
     expect(wrapper.emitted('action')).toEqual([['sync'], ['triggerFailover']])
   })
+  it('allows fenced recovery from a cached app while keeping other ownership commands locked', async () => {
+    const wrapper = render({ hostSwitch: 'triggerFailover', replica: true }, 'replication')
+    await wrapper.get('.plate-card').trigger('click')
+    expect(wrapper.findAll('[role="menuitem"]').find(button => button.text() === 'Sync now')!.attributes('disabled')).toBeDefined()
+    await wrapper.findAll('[role="menuitem"]').find(button => button.text() === 'Fail over to standby')!.trigger('click')
+    expect(wrapper.emitted('action')).toEqual([['triggerFailover']])
+  })
   it('does not offer syncing without a standby, during transfer, or while standby is active', async () => {
     for (const app of [{ standby: '' }, { replication: { label: 'Syncing', busy: true } }, { hostSwitch: 'restoreStack' as const }, { protectionAvailable: false }]) {
       const wrapper = render(app, 'replication')

@@ -266,6 +266,12 @@ It removes its owned domains, disks, and answers media after the run. It require
 ordinary CI Go tests skip these appliance scenarios unless explicitly enabled.
 See the [unattended installation guide](floatlab-appliance-image/README.md#unattended-installation).
 
+Use the failover labels to run the two- and three-node appliance scenarios.
+
+```bash
+nix develop "path:$PWD?dir=floatlab-appliance-image" -c env FLOATLAB_INTEGRATION=1 go test -count=1 -timeout 2h -v ./integration -args '-ginkgo.label-filter=FailoverTwoNodes || FailoverThreeNodes'
+```
+
 ### FloatLab Raft - Distributed Consensus Algorithm
 
 The raft algorithm is used to achieve distributed locking, to ensure that only one application instance
@@ -415,6 +421,24 @@ Select the target appliance with `FLOATLAB_URL` and authenticate with that appli
 The joining appliance must have no workloads or retained recovery material; existing labs cannot be merged. Enrollment installs lab credentials, joins the configuration database as a non-voter, waits for local catch-up, then promotes the node to a voter and marks it active. Joining adopts the destination lab's administrator accounts. `POST /nodes` creates an inventory record only; use the enrollment endpoints to add a lab member.
 
 The same operations are available through the CLI's generated API commands, including `lab api lab createLabInvitation` and `lab api lab joinLab --body-file join.json`. No separate enrollment utility is required.
+
+### Manual failover after a primary failure
+
+Nominate a secondary and configure replication of every writable mount to it before a failure. Same-stack takeover requires the primary to have published startup protection support from an updated appliance OS. From a reachable appliance, choose **Fail over** on the stack or use the CLI.
+
+```sh
+lab failover preview my-app
+lab failover trigger my-app --primary-fenced --recovery-point RECOVERY_POINT
+```
+
+The preview reports the newest verified recovery point common to all writable mounts and the time that has elapsed since it was taken. Writes made after that point may be lost. Power off the primary or otherwise prevent it from running the workload before confirming `--primary-fenced`.
+
+- In a lab of three or more active members, the nominated secondary commits ownership through the lab quorum before it starts the original stack. A published service takes a new address from the destination's pool. Keep the former primary fenced until it can reach a member with the new ownership record. Its old registration and datasets are retained. Reconcile them before moving the stack back, or nominate a clean secondary and replicate to it.
+- In a two-node lab, pass `--name my-app-recovery` to start an independently named clone. A published service uses a new IP from the destination's pool and the destination host's MAC. The original remains assigned to its primary.
+
+Use `--network-pool POOL` to select an eligible destination pool for published ports. Use a FloatLab-managed published address for failover. Compose projects with external networks or fixed MAC addresses require a separate recovery procedure. To check progress, run `lab api stacks getOperation --path-operation-id OPERATION_ID` with the returned operation ID.
+
+At appliance boot, FloatLab gives other lab members 10 seconds to come online. It checks recorded ownership and peer container status and probes known LAN addresses for responding MACs. If it finds no remote copy or owner and the addresses are quiet, the appliance can resume its existing workload according to its Docker service restart policies, even with every other member unreachable. It stops a local copy if it later learns that ownership changed. Keep a former primary fenced if it is isolated from the ownership record or has rolled back to a release without startup protection.
 
 ## CLI shell completion
 

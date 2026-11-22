@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ApiError, CommandEngine, idempotencyKey, type DashboardApi, type FloatLabApi, type Node, type Stack, type NodeStats, type StorageStats, type Notification, type RaftHealth, type LogLine, type UpdateApi, type BackupApi, type BackupRestoreApi, type BackupTarget } from '@floatlab/client'
-import type { StackMoveApi, Operation, HostNetworkApi, NetworkPool, HttpApi } from '@floatlab/client'
+import type { StackMoveApi, Operation, HostNetworkApi, NetworkPool, HttpApi, FailoverApi, FailoverPreview, FailoverRequest } from '@floatlab/client'
 import { appItem, auditEvent, hostItem, labEvent } from '../../dashboard/live'
 import { protectionStatus } from '../../dashboard/protection'
 import UiPlateCard from '../UiPlateCard.vue'
 import UiButton from '../UiButton.vue'
+import UiInput from '../UiInput.vue'
 import UiSelect from '../UiSelect.vue'
+import UiSwitch from '../UiSwitch.vue'
 import AppPlateActions from './AppPlateActions.vue'
 import type { AuditEntry } from '@floatlab/client'
 import DetailPanel from '../DetailPanel.vue'
@@ -19,7 +21,7 @@ import UiNodePlate from './UiNodePlate.vue'
 import LiveHostDetail from './LiveHostDetail.vue'
 import ApplianceUpdates from './ApplianceUpdates.vue'
 import BackupTargets from './BackupTargets.vue'
-const props = defineProps<{ api: DashboardApi & FloatLabApi & Partial<UpdateApi & BackupApi & BackupRestoreApi & StackMoveApi & HttpApi & Pick<HostNetworkApi, 'listNetworkPools'>> }>()
+const props = defineProps<{ api: DashboardApi & FloatLabApi & Partial<UpdateApi & BackupApi & BackupRestoreApi & StackMoveApi & FailoverApi & HttpApi & Pick<HostNetworkApi, 'listNetworkPools'>> }>()
 const updateApi = computed(() => props.api.listUpdateReleases && props.api.getUpdateStatus && props.api.runUpdateAction ? props.api as UpdateApi : undefined)
 const backupApi = computed(() => props.api.listBackupTargets && props.api.putBackupTarget && props.api.removeBackupTarget && props.api.triggerReplication && props.api.listReplication ? props.api as BackupApi & Partial<BackupRestoreApi> : undefined)
 const emit = defineEmits<{ logout: [] }>()
@@ -41,17 +43,28 @@ const commandConsole = ref<InstanceType<typeof CommandConsole>>()
 const hosts = computed(() => nodes.value.map(node => hostItem(node, stacks.value, stats.value[node.id], storage.value[node.id])))
 const protection = ref<Record<string, { targets: BackupTarget[]; jobs: Record<string, unknown>[]; error?: string; unavailable?: boolean }>>({})
 const pendingActions = ref(new Set<string>())
-type MoveProgress = { name: string; host: string; published: boolean; address?: string; operationId?: string; state: Operation['state']; checkpoint?: string; error?: string }
-const moves = ref<Record<string, MoveProgress>>({})
-const pollingMoves = new Set<string>()
+type OperationProgress = { name: string; host: string; published?: boolean; address?: string; operationId?: string; state: Operation['state']; checkpoint?: string; error?: string }
+const moves = ref<Record<string, OperationProgress>>({})
+const failovers = ref<Record<string, OperationProgress>>({})
+const pollingOperations = new Set<string>()
 const moveDestination = ref('')
 const movePool = ref('')
 const movePools = ref<NetworkPool[]>([])
 const moveSubmitError = ref('')
 const moveRequestKeys = new Map<string, { request: string; key: string }>()
+const failoverRequestKeys = new Map<string, { request: string; key: string }>()
+const failoverPreview = ref<FailoverPreview>()
+const failoverError = ref('')
+const failoverName = ref('')
+const failoverPool = ref('')
+const failoverPools = ref<NetworkPool[]>([])
+const primaryFenced = ref(false)
+let previewGeneration = 0
 const moveHosts = (stack?: Stack) => stack ? nodes.value.filter(node => node.id !== stack.primary_node && node.status !== 'offline') : []
 const canMove = (stack: Stack) => Boolean(props.api.moveStack && props.api.getOperation && stack.state === 'RunningPrimary' && moveHosts(stack).length)
-const movePending = (id: string) => ['pending', 'running'].includes(moves.value[id]?.state ?? '')
+const canFailover = (stack: Stack) => Boolean(stack.secondary_node && stack.state === 'RunningPrimary' && props.api.previewFailover && props.api.triggerFailover && props.api.getOperation)
+const isPending = (progress?: OperationProgress) => progress?.state === 'pending' || progress?.state === 'running'
+const operationPending = (id: string) => isPending(moves.value[id]) || isPending(failovers.value[id])
 const moveCheckpoint: Record<string, string> = {
   seeding: 'Replicating while the app runs',
   'reserving-destination': 'Reserving resources on the destination host',
@@ -60,10 +73,15 @@ const moveCheckpoint: Record<string, string> = {
   'transferring-ownership': 'Transferring ownership',
   'starting-destination': 'Starting the app on the destination host',
 }
-function moveMessage(move: MoveProgress) {
+function moveMessage(move: OperationProgress) {
   if (move.state === 'succeeded') return `${move.name} moved to ${move.host}${move.address ? ` · New IP address ${move.address}` : ''}`
   if (move.state === 'failed') return `Move of ${move.name} to ${move.host} failed`
   return `Moving ${move.name} to ${move.host} · ${moveCheckpoint[move.checkpoint ?? ''] ?? 'Preparing the move'}`
+}
+function failoverMessage(failover: OperationProgress) {
+  if (failover.state === 'succeeded') return `${failover.name} recovered on ${failover.host}`
+  if (failover.state === 'failed') return `Recovery of ${failover.name} failed`
+  return `Recovering ${failover.name} on ${failover.host}${failover.operationId ? ` · Operation ${failover.operationId}` : ''}`
 }
 const restartMotion = ref<Record<string, 'restart'>>({})
 const restartTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -75,7 +93,10 @@ function acceptedMutation(path: string) {
   restartMotion.value[id] = 'restart'
   restartTimers.set(id, setTimeout(() => { delete restartMotion.value[id]; restartTimers.delete(id) }, 3200))
 }
-const apps = computed(() => stacks.value.map(stack => ({ ...appItem(stack, nodes.value), actionPending: pendingActions.value.has(stack.id) || movePending(stack.id), moveAvailable: canMove(stack), runtimeMotion: restartMotion.value[stack.id], protectionAvailable: Boolean(backupApi.value) && !protection.value[stack.id]?.unavailable, ...protectionStatus(stack, nodes.value, protection.value[stack.id]?.targets ?? [], protection.value[stack.id]?.jobs ?? [], protection.value[stack.id]?.error) })))
+const apps = computed(() => stacks.value.map(stack => {
+  const item = appItem(stack, nodes.value)
+  return { ...item, hostSwitch: canFailover(stack) ? 'triggerFailover' as const : item.hostSwitch === 'restoreStack' ? item.hostSwitch : undefined, actionPending: pendingActions.value.has(stack.id) || operationPending(stack.id), moveAvailable: canMove(stack), runtimeMotion: restartMotion.value[stack.id], protectionAvailable: Boolean(backupApi.value) && !protection.value[stack.id]?.unavailable, ...protectionStatus(stack, nodes.value, protection.value[stack.id]?.targets ?? [], protection.value[stack.id]?.jobs ?? [], protection.value[stack.id]?.error) }
+}))
 const events = computed(() => [
   ...notifications.value.map(notification => ({ ts: notification.created_at, event: labEvent(notification, nodes.value) })),
   ...activity.value.map(entry => ({ ts: entry.ts, event: auditEvent(entry, stacks.value, nodes.value) })),
@@ -85,12 +106,14 @@ const selectedStack = computed(() => stacks.value.find(stack => stack.id === sel
 const selectedApps = computed(() => apps.value.filter(app => stacks.value.some(stack => stack.id === app.id && (stack.primary_node === selected.value || stack.secondary_node === selected.value))))
 const selectedItem = computed(() => apps.value.find(app => app.id === selectedApp.value))
 const selectedMove = computed(() => moves.value[selectedApp.value])
+const selectedFailover = computed(() => failovers.value[selectedApp.value])
+const failoverReady = computed(() => Boolean(primaryFenced.value && failoverPreview.value && (failoverPreview.value.mode === 'takeover' || (failoverName.value.trim() && failoverName.value.trim() !== selectedStack.value?.name))))
 const eligibleMovePools = computed(() => movePools.value.filter(pool => pool.membership_resolved && pool.node_ids.includes(moveDestination.value)))
 let active = true
 let origin: HTMLElement | undefined
 let timer: ReturnType<typeof setInterval> | undefined
 let protectionTimer: ReturnType<typeof setInterval> | undefined
-let moveTimer: ReturnType<typeof setInterval> | undefined
+let operationTimer: ReturnType<typeof setInterval> | undefined
 let protectionGeneration = 0
 let protectionLoading = false
 async function refreshProtection() {
@@ -157,7 +180,7 @@ function inspectApp(id: string) {
 }
 async function openMove(id: string) {
   const stack = stacks.value.find(stack => stack.id === id)
-  if (!stack || !canMove(stack) || pendingActions.value.has(id) || movePending(id)) return
+  if (!stack || !canMove(stack) || pendingActions.value.has(id) || operationPending(id)) return
   inspectApp(id)
   utility.value = 'move'
   delete moves.value[id]
@@ -166,33 +189,33 @@ async function openMove(id: string) {
     await read('Network pools', props.api.listNetworkPools(), value => { movePools.value = value })
   }
 }
-async function pollMove(id: string) {
-  const move = moves.value[id]
-  if (!active || !move?.operationId || !movePending(id) || pollingMoves.has(id) || !props.api.getOperation) return
-  pollingMoves.add(id)
+async function pollOperation(id: string, mode: 'move' | 'failover') {
+  const progress = (mode === 'move' ? moves : failovers).value[id]
+  if (!active || !progress?.operationId || !isPending(progress) || pollingOperations.has(id) || !props.api.getOperation) return
+  pollingOperations.add(id)
   try {
-    const status = await props.api.getOperation(move.operationId)
+    const status = await props.api.getOperation(progress.operationId)
     if (!active) return
-    move.state = status.state
-    move.checkpoint = status.checkpoint
-    move.error = status.error
-    if (!movePending(id)) void refresh()
-    if (status.state === 'succeeded' && move.published && props.api.request) {
+    progress.state = status.state
+    progress.checkpoint = status.checkpoint
+    progress.error = status.error
+    if (!isPending(progress)) void refresh()
+    if (mode === 'move' && status.state === 'succeeded' && progress.published && props.api.request) {
       const result = await props.api.request(`/stacks/${encodeURIComponent(id)}/status`).catch(() => undefined)
       if (active && result && typeof result === 'object' && 'stack_ip' in result && typeof result.stack_ip === 'string') {
-        move.address = result.stack_ip
+        progress.address = result.stack_ip
       }
     }
   } catch (cause) {
     if (!active) return
     if (cause instanceof ApiError && cause.status === 401) { active = false; emit('logout'); return }
-    move.error = cause instanceof Error ? cause.message : 'Move status unavailable'
-  } finally { pollingMoves.delete(id) }
+    progress.error = cause instanceof Error ? cause.message : 'Operation status unavailable'
+  } finally { pollingOperations.delete(id) }
 }
 async function submitMove() {
   const stack = selectedStack.value
   const host = moveHosts(stack).find(node => node.id === moveDestination.value)
-  if (!active || !stack || !host || !canMove(stack) || !props.api.moveStack || movePending(stack.id)) return
+  if (!active || !stack || !host || !canMove(stack) || !props.api.moveStack || operationPending(stack.id)) return
   const pool = eligibleMovePools.value.find(pool => pool.name === movePool.value)
   const request = { destination_node_id: host.id, ...(pool ? { network_pool: pool.name } : {}) }
   const signature = JSON.stringify(request)
@@ -209,7 +232,7 @@ async function submitMove() {
     if (!result?.operation_id) throw new Error('The server returned no move operation ID')
     moveRequestKeys.delete(stack.id)
     moves.value[stack.id]!.operationId = result.operation_id
-    await pollMove(stack.id)
+    await pollOperation(stack.id, 'move')
   } catch (cause) {
     if (!active) return
     if (cause instanceof ApiError && cause.status === 401) { active = false; emit('logout'); return }
@@ -220,8 +243,64 @@ async function submitMove() {
     else errors.value.push(`${stack.name} · ${message}`)
   }
 }
+async function openFailover(id: string) {
+  const stack = stacks.value.find(stack => stack.id === id)
+  if (!stack || !canFailover(stack) || !stack.secondary_node || !props.api.previewFailover || pendingActions.value.has(id) || operationPending(id)) return
+  if (utility.value !== 'failover' || selectedApp.value !== id) inspectApp(id)
+  utility.value = 'failover'
+  delete failovers.value[id]
+  failoverPreview.value = undefined; failoverError.value = ''; failoverName.value = ''; failoverPool.value = ''; failoverPools.value = []; primaryFenced.value = false
+  const generation = ++previewGeneration
+  const current = () => active && generation === previewGeneration && selectedApp.value === id && utility.value === 'failover'
+  try {
+    const preview = await props.api.previewFailover(id, stack.secondary_node)
+    if (!current()) return
+    failoverPreview.value = preview
+    if (preview.requires_network && props.api.listNetworkPools) {
+      const pools = await props.api.listNetworkPools()
+      if (current()) failoverPools.value = pools.filter(pool => pool.membership_resolved && pool.node_ids.length === 1 && pool.node_ids.includes(preview.destination_node_id))
+    }
+  } catch (cause) {
+    if (!current()) return
+    if (cause instanceof ApiError && cause.status === 401) { active = false; emit('logout'); return }
+    failoverError.value = cause instanceof Error ? cause.message : 'Recovery point unavailable'
+  }
+}
+async function submitFailover() {
+  const stack = selectedStack.value
+  const preview = failoverPreview.value
+  if (!active || !stack || !preview || !failoverReady.value || operationPending(stack.id) || !props.api.triggerFailover) return
+  const request: FailoverRequest = { destination_node_id: preview.destination_node_id, primary_fenced: true, recovery_point: preview.recovery_point }
+  if (preview.mode === 'clone') request.name = failoverName.value.trim()
+  if (failoverPool.value) request.network_pool = failoverPool.value
+  const signature = JSON.stringify(request)
+  let retry = failoverRequestKeys.get(stack.id)
+  if (retry?.request !== signature) {
+    retry = { request: signature, key: idempotencyKey() }
+    failoverRequestKeys.set(stack.id, retry)
+  }
+  const host = nodes.value.find(node => node.id === request.destination_node_id)?.name ?? request.destination_node_id
+  failoverError.value = ''
+  failovers.value[stack.id] = { name: request.name ?? stack.name, host, state: 'pending' }
+  try {
+    const result = await props.api.triggerFailover(stack.id, request, retry.key)
+    if (!active) return
+    if (!result?.operation_id) throw new Error('The server returned no failover operation ID')
+    failoverRequestKeys.delete(stack.id)
+    failovers.value[stack.id]!.operationId = result.operation_id
+    await pollOperation(stack.id, 'failover')
+  } catch (cause) {
+    if (!active) return
+    if (cause instanceof ApiError && cause.status === 401) { active = false; emit('logout'); return }
+    if (cause instanceof ApiError && cause.status !== 0) failoverRequestKeys.delete(stack.id)
+    delete failovers.value[stack.id]
+    const message = cause instanceof Error ? cause.message : 'Recovery could not be requested'
+    if (utility.value === 'failover' && selectedApp.value === stack.id) failoverError.value = message
+    else errors.value.push(`${stack.name} · ${message}`)
+  }
+}
 async function runAction(args: string[], id: string) {
-  if (pendingActions.value.has(id) || movePending(id)) return
+  if (pendingActions.value.has(id) || operationPending(id)) return
   pendingActions.value.add(id)
   try {
     const engine = new CommandEngine(props.api, {
@@ -253,6 +332,7 @@ function action(name: string, id?: string) {
   if (id && name === 'app-snapshots') { commandConsole.value?.launch(['snapshot', 'list', id]); return }
   if (id && name === 'app-logs') { inspectApp(id); utility.value = 'logs'; return }
   if (id && name === 'app-move') { void openMove(id); return }
+  if (id && name === 'app-triggerFailover') { void openFailover(id); return }
   if (id && name === 'app-delete') { commandConsole.value?.launch([name.slice(4), id]); return }
   if (id && name === 'app-host') { const host = apps.value.find(app => app.id === id)?.hostId; if (host) void inspect(host); return }
   if (id && ['app-sync', 'app-backup-run'].includes(name)) {
@@ -263,7 +343,7 @@ function action(name: string, id?: string) {
   }
   if (id && ['app-backups', 'app-replication'].includes(name)) { inspectApp(id); utility.value = name.slice(4); return }
   if (id && ['app-start', 'app-stop'].includes(name)) { void runAction([name.slice(4), id], id); return }
-  if (id && ['app-restartStack', 'app-triggerFailover', 'app-restoreStack'].includes(name)) { void runAction(['api', 'stacks', name.slice(4), '--path-id', id], id); return }
+  if (id && ['app-restartStack', 'app-restoreStack'].includes(name)) { void runAction(['api', 'stacks', name.slice(4), '--path-id', id], id); return }
   if (name.startsWith('host-') && id) { void inspect(id); return }
   if (name.startsWith('app-') && id) { inspectApp(id); return }
   if (name === 'add-app') { creating.value = true; return }
@@ -275,8 +355,11 @@ async function createApp(args: string[]) { creating.value = false; await nextTic
 async function close() { selected.value = ''; selectedApp.value = ''; utility.value = ''; await nextTick(); origin?.focus({ preventScroll: true }) }
 function restoreFocus() { origin?.focus({ preventScroll: true }) }
 function visibleRefresh() { if (document.visibilityState === 'visible') void refresh() }
-onMounted(() => { void refresh(); timer = setInterval(visibleRefresh, 30_000); protectionTimer = setInterval(refreshActiveJobs, 5_000); moveTimer = setInterval(() => Object.keys(moves.value).forEach(id => { void pollMove(id) }), 2_000); document.addEventListener('visibilitychange', visibleRefresh) })
-onBeforeUnmount(() => { active = false; protectionGeneration++; clearInterval(timer); clearInterval(protectionTimer); clearInterval(moveTimer); restartTimers.forEach(clearTimeout); restartTimers.clear(); document.removeEventListener('visibilitychange', visibleRefresh) })
+onMounted(() => { void refresh(); timer = setInterval(visibleRefresh, 30_000); protectionTimer = setInterval(refreshActiveJobs, 5_000); operationTimer = setInterval(() => {
+  for (const id of Object.keys(moves.value)) void pollOperation(id, 'move')
+  for (const id of Object.keys(failovers.value)) void pollOperation(id, 'failover')
+}, 2_000); document.addEventListener('visibilitychange', visibleRefresh) })
+onBeforeUnmount(() => { active = false; protectionGeneration++; clearInterval(timer); clearInterval(protectionTimer); clearInterval(operationTimer); restartTimers.forEach(clearTimeout); restartTimers.clear(); document.removeEventListener('visibilitychange', visibleRefresh) })
 </script>
 <template>
   <main class="live-dashboard">
@@ -287,6 +370,9 @@ onBeforeUnmount(() => { active = false; protectionGeneration++; clearInterval(ti
         <template v-for="(move, id) in moves" :key="id">
           <div v-if="utility !== 'move' || selectedApp !== id" role="status">{{ moveMessage(move) }}<span v-if="move.error"> · {{ move.error }}</span></div>
         </template>
+        <template v-for="(failover, id) in failovers" :key="id">
+          <div v-if="utility !== 'failover' || selectedApp !== id" :role="failover.state === 'failed' ? 'alert' : 'status'">{{ failoverMessage(failover) }}<span v-if="failover.error"> · {{ failover.error }}</span></div>
+        </template>
         <p v-if="!events.length && !loading">{{ errors.some(error => /^(Events|Activity):/.test(error)) ? 'Events unavailable' : 'No recent events' }}</p>
       </template>
       <template #hosts-empty>
@@ -295,7 +381,7 @@ onBeforeUnmount(() => { active = false; protectionGeneration++; clearInterval(ti
       <template #detail>
         <DetailPanel v-if="utility === 'node-key'" title="Node key" @close="close"><dl class="node-key"><template v-for="host in hosts" :key="host.id"><dt><UiNodePlate :name="host.name" /></dt><dd>{{ host.name }}<span>{{ host.address || 'Address unavailable' }}</span></dd></template></dl><p v-if="!hosts.length">No registered hosts</p></DetailPanel>
         <DetailPanel v-if="utility === 'events'" title="Recent lab events" @close="close"><LabEventLog :events="events" readonly /></DetailPanel>
-        <WorkloadDetail v-if="selectedStack && !['backups', 'replication', 'move'].includes(utility)" :key="selectedStack.id" :app="selectedItem" :initial-tab="utility === 'logs' ? 'logs' : 'containers'" :stack="selectedStack" :api="api" @close="close" @action="name => action(`app-${name}`, selectedStack?.id)" @command="workloadCommand" @updated="refresh" />
+        <WorkloadDetail v-if="selectedStack && !['backups', 'replication', 'move', 'failover'].includes(utility)" :key="selectedStack.id" :app="selectedItem" :initial-tab="utility === 'logs' ? 'logs' : 'containers'" :stack="selectedStack" :api="api" @close="close" @action="name => action(`app-${name}`, selectedStack?.id)" @command="workloadCommand" @updated="refresh" />
         <DetailPanel v-if="utility === 'move'" :title="`Move ${selectedMove?.name ?? selectedStack?.name ?? 'app'}`" @close="close">
           <template v-if="selectedMove">
             <p role="status">{{ moveMessage(selectedMove) }}</p>
@@ -312,6 +398,32 @@ onBeforeUnmount(() => { active = false; protectionGeneration++; clearInterval(ti
             <p v-if="moveSubmitError" role="alert">{{ moveSubmitError }}</p>
             <UiButton variant="primary" type="submit" :disabled="!moveDestination">Move app</UiButton>
           </form>
+        </DetailPanel>
+        <DetailPanel v-if="utility === 'failover'" :title="`Fail over ${selectedStack?.name ?? 'app'}`" @close="close">
+          <template v-if="selectedFailover">
+            <p role="status">{{ failoverMessage(selectedFailover) }}</p>
+            <p v-if="selectedFailover.error" :role="selectedFailover.state === 'failed' ? 'alert' : 'status'">{{ selectedFailover.error }}</p>
+          </template>
+          <form v-else-if="failoverPreview" class="move-form" @submit.prevent="submitFailover">
+            <p>Recover on {{ nodes.find(node => node.id === failoverPreview?.destination_node_id)?.name ?? failoverPreview.destination_node_id }} from snapshot {{ failoverPreview.snapshot }} taken at {{ new Date(failoverPreview.snapshot_at).toLocaleString() }}.</p>
+            <p>At preview time, {{ failoverPreview.potential_data_loss_seconds }} seconds of writes since the snapshot could be lost.</p>
+            <template v-if="failoverPreview.mode === 'clone'">
+              <label for="failover-name">New app name</label>
+              <UiInput id="failover-name" v-model="failoverName" variant="field" required />
+            </template>
+            <p v-if="failoverPreview.requires_network">The recovered app will get a new IP address and MAC address.</p>
+            <template v-if="failoverPools.length">
+              <label for="failover-network-pool">Destination network pool (optional)</label>
+              <UiSelect id="failover-network-pool" v-model="failoverPool" :options="failoverPools.map(pool => ({ value: pool.name, label: pool.name }))" />
+            </template>
+            <p>Power off the primary or otherwise prevent it from running the app before continuing.</p>
+            <label for="primary-fenced">I confirm the primary is fenced</label>
+            <UiSwitch id="primary-fenced" v-model="primaryFenced" label="I confirm the primary is fenced" />
+            <UiButton variant="primary" type="submit" :disabled="!failoverReady">{{ failoverPreview.mode === 'clone' ? 'Start clone' : 'Take over app' }}</UiButton>
+          </form>
+          <p v-else-if="!failoverError" role="status">Verifying the replica…</p>
+          <p v-if="failoverError" role="alert">{{ failoverError }}</p>
+          <UiButton v-if="failoverError && selectedStack" type="button" @click="openFailover(selectedStack.id)">Refresh recovery point</UiButton>
         </DetailPanel>
         <DetailPanel v-if="selectedStack && utility === 'backups' && backupApi" title="Backups and recovery" @close="close"><BackupTargets :key="selectedStack.id" :api="backupApi" :nodes="nodes" :stacks="[selectedStack]" @restored="refresh" /></DetailPanel>
         <DetailPanel v-if="selectedStack && utility === 'replication'" title="Replication" @close="close">

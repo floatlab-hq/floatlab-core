@@ -451,7 +451,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Trigger manual failover (RunningPrimary → FailingOver → RunningBackup) */
+        /**
+         * Trigger manual failover
+         * @description Alias of POST /failover/{stack_id}/trigger. In a lab, fence the primary and review a verified recovery point first.
+         */
         post: operations["triggerFailover"];
         delete?: never;
         options?: never;
@@ -883,8 +886,30 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get failover status across all stacks */
+        /**
+         * Get failover status across all stacks
+         * @description Reports legacy failover lifecycle state. Follow lab takeover and clone jobs with GET /operations/{operationId}.
+         */
         get: operations["listFailoverStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/failover/{stack_id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                stack_id: string;
+            };
+            cookie?: never;
+        };
+        /** Preview a verified manual failover recovery point */
+        get: operations["previewStackFailover"];
         put?: never;
         post?: never;
         delete?: never;
@@ -906,8 +931,9 @@ export interface paths {
         put?: never;
         /**
          * Trigger manual failover for a stack
-         * @description Equivalent to POST /stacks/{id}/failover. Initiates the 6-step failover sequence.
-         *     Stack must be in RunningPrimary state.
+         * @description In a lab, recover on the nominated secondary after fencing the primary and reviewing a verified recovery point.
+         *     Equivalent to POST /stacks/{id}/failover.
+         *     Follow the accepted operation at GET /operations/{operationId}.
          */
         post: operations["triggerStackFailover"];
         delete?: never;
@@ -929,8 +955,7 @@ export interface paths {
         put?: never;
         /**
          * Abort an in-progress failover
-         * @description Only possible during step 1 (raft-quorum) or step 2 (zfs-sync). Once IP takeover
-         *     has begun (step 4), abort is not safe and will be rejected.
+         * @description Applies to the legacy failover sequence before IP takeover. A lab takeover or clone cannot be aborted here.
          */
         post: operations["abortFailover"];
         delete?: never;
@@ -948,7 +973,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Get step-by-step log of the most recent failover sequence */
+        /**
+         * Get step-by-step log of the most recent failover sequence
+         * @description Reports steps in the legacy failover sequence. Follow lab takeover and clone jobs with GET /operations/{operationId}.
+         */
         get: operations["getFailoverLog"];
         put?: never;
         post?: never;
@@ -2106,6 +2134,26 @@ export interface components {
                 [key: string]: string;
             };
         };
+        FailoverRequest: {
+            /** @description The stack's nominated secondary. */
+            destination_node_id: string;
+            /**
+             * @description Explicit confirmation that the old primary cannot run the workload.
+             * @enum {boolean}
+             */
+            primary_fenced: true;
+            recovery_point: string;
+            /** @description Required for a clone in a two-node lab. Choose a new stack name. */
+            name?: string;
+            /** @description Optional destination-owned pool for the recovered stack's new physical-network identity. */
+            network_pool?: string;
+        };
+        FailoverAccepted: {
+            operation_id: string;
+            /** @description ID of the new stack for a clone, or the existing stack for a takeover. */
+            stack_id: string;
+            status: string;
+        };
         /** @enum {string} */
         ContainerStatus: "running" | "stopped" | "starting" | "paused" | "error";
         Container: {
@@ -2303,6 +2351,29 @@ export interface components {
             /** Format: date-time */
             completed_at?: string | null;
             error?: string | null;
+        };
+        FailoverPreview: {
+            stack_id: string;
+            source_node_id: string;
+            destination_node_id: string;
+            /**
+             * @description In a two-node lab, recover as a separate stack. With quorum, transfer ownership of the existing stack.
+             * @enum {string}
+             */
+            mode: "takeover" | "clone";
+            /** @description Opaque identity of the verified recovery point. Submit it unchanged to confirm this point. */
+            recovery_point: string;
+            snapshot: string;
+            /** Format: date-time */
+            snapshot_at: string;
+            /** @description Elapsed time from the verified recovery point to this preview. Writes in that interval may be lost. */
+            potential_data_loss_seconds: number;
+            /** @description The recovered stack needs a newly allocated IP address and MAC address on a physical network. */
+            requires_network: boolean;
+            datasets: {
+                dataset: string;
+                snapshot: string;
+            }[];
         };
         FailoverLogEntry: {
             /**
@@ -4086,16 +4157,23 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        /** @description Required for lab failover. Supply the recovery point returned by the preview. */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["FailoverRequest"];
+            };
+        };
         responses: {
             /** @description Failover accepted. */
             202: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["FailoverAccepted"];
+                };
             };
-            /** @description Stack is not in RunningPrimary state. */
+            /** @description Stack, destination, or recovery point is ineligible, or failover is already in progress. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4789,9 +4867,11 @@ export interface operations {
             };
         };
     };
-    triggerStackFailover: {
+    previewStackFailover: {
         parameters: {
-            query?: never;
+            query: {
+                destination_node_id: string;
+            };
             header?: never;
             path: {
                 stack_id: string;
@@ -4800,17 +4880,83 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Failover sequence initiated. */
+            /** @description Latest usable replica recovery point and possible data loss. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FailoverPreview"];
+                };
+            };
+            /** @description No usable recovery point or the destination is ineligible. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Failover destination unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    triggerStackFailover: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Unique key used to safely retry this mutation. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                stack_id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Required for lab failover. Supply the recovery point returned by the preview. */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["FailoverRequest"];
+            };
+        };
+        responses: {
+            /** @description Failover accepted. */
             202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FailoverStatus"];
+                    "application/json": components["schemas"]["FailoverAccepted"];
                 };
             };
-            /** @description Stack not in RunningPrimary state or failover already in progress. */
+            /** @description Missing fencing confirmation, recovery point, or required clone name. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Stack, destination, or recovery point is ineligible, or failover is already in progress. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Failover destination unavailable. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

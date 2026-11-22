@@ -226,6 +226,24 @@ func (s *Store) UpdateStackCompose(ctx context.Context, id, composeYAML string) 
 	if err != nil {
 		return fmt.Errorf("config: update stack compose: %w", err)
 	}
+	return s.stackComposeUpdated(ctx, id)
+}
+
+func (s *Store) UpdateStackComposeAndSecondary(ctx context.Context, id, source, secondary string) error {
+	result, err := s.db.Request(ctx, rqlite.Statement{
+		SQL:    `UPDATE stacks SET compose_yaml=?,backup_node_id=?,updated_at=? WHERE id=? AND COALESCE(backup_node_id,'') IN ('',?)`,
+		Params: []any{source, secondary, time.Now().UTC(), id, secondary},
+	})
+	if err != nil {
+		return fmt.Errorf("config: update stack secondary: %w", err)
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("config: stack secondary assignment changed")
+	}
+	return s.stackComposeUpdated(ctx, id)
+}
+
+func (s *Store) stackComposeUpdated(ctx context.Context, id string) error {
 	if st, err := s.GetStack(ctx, id); err != nil {
 		return err
 	} else if err = s.SyncBackupTargets(ctx, st); err != nil {

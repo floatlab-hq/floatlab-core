@@ -2634,7 +2634,7 @@
             },
             {
               "name": "triggerFailover",
-              "description": "Trigger manual failover (RunningPrimary → FailingOver → RunningBackup)",
+              "description": "Trigger manual failover",
               "options": [
                 {
                   "name": "--path-id",
@@ -2652,6 +2652,42 @@
                     {
                       "name": "Idempotency-Key",
                       "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
                     }
                   ]
                 }
@@ -2684,14 +2720,55 @@
                             "maxLength": 255
                           }
                         }
-                      ]
+                      ],
+                      "requestBody": {
+                        "required": false,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "destination_node_id",
+                                "primary_fenced",
+                                "recovery_point"
+                              ],
+                              "properties": {
+                                "destination_node_id": {
+                                  "type": "string",
+                                  "description": "The stack's nominated secondary."
+                                },
+                                "primary_fenced": {
+                                  "type": "boolean",
+                                  "enum": [
+                                    true
+                                  ],
+                                  "description": "Explicit confirmation that the old primary cannot run the workload."
+                                },
+                                "recovery_point": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string",
+                                  "description": "Required for a clone in a two-node lab. Choose a new stack name."
+                                },
+                                "network_pool": {
+                                  "type": "string",
+                                  "description": "Optional destination-owned pool for the recovered stack's new physical-network identity."
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "accept": "application/json"
                     },
                     "api": [
                       {
                         "operationId": "triggerFailover",
                         "inputs": {
                           "path/id": "option:--path-id",
-                          "header/Idempotency-Key": "option:--header-idempotency-key"
+                          "header/Idempotency-Key": "option:--header-idempotency-key",
+                          "body": "option:--body"
                         }
                       }
                     ]

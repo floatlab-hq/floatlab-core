@@ -92,7 +92,6 @@ func registerStackRoutes(r chi.Router, s *Server) {
 		r.Post("/stacks/{id}/move", s.handleStackMove)
 		r.Post("/stacks/{id}/upgrade", s.handleUpgradeStack)
 		r.Post("/stacks/{id}/restart", s.handleRestartStack)
-		r.Post("/stacks/{id}/failover", s.handleStackFailover)
 		r.Post("/stacks/{id}/restore", s.handleStackRestore)
 		r.Post("/stacks/{id}/snapshots/{snapshotId}/restore", s.handleRestoreSnapshot)
 		r.Delete("/stacks/{id}", s.handleDeleteStack)
@@ -190,6 +189,26 @@ func writeComposeValidationError(w http.ResponseWriter, err error) {
 	writeErrorCode(w, http.StatusBadRequest, "compose_validation", "compose validation error: "+err.Error())
 }
 
+func (s *Server) checkNewSecondary(ctx context.Context, primary, secondary string) error {
+	if secondary == "" {
+		return nil
+	}
+	if _, err := s.store.GetNode(ctx, secondary); err != nil || secondary == primary {
+		return errors.New("secondary_node must name a different registered node")
+	}
+	return nil
+}
+
+func (s *Server) checkStackNodeUpdate(ctx context.Context, stack *config.Stack, extension compose.StackExtension) error {
+	if extension.PrimaryNode != stack.PrimaryNodeID || stack.BackupNodeID != "" && extension.SecondaryNode != stack.BackupNodeID {
+		return errors.New("compose updates cannot change established node assignments")
+	}
+	if extension.SecondaryNode != stack.BackupNodeID {
+		return s.checkNewSecondary(ctx, stack.PrimaryNodeID, extension.SecondaryNode)
+	}
+	return nil
+}
+
 func (s *Server) handleValidateStack(w http.ResponseWriter, r *http.Request) {
 	var req validateStackRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -213,8 +232,8 @@ func (s *Server) handleValidateStack(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = canonical
-		if parsed.Extension.PrimaryNode != st.PrimaryNodeID || parsed.Extension.SecondaryNode != st.BackupNodeID {
-			writeErrorCode(w, http.StatusBadRequest, "compose_validation", "compose updates cannot change node assignments")
+		if err := s.checkStackNodeUpdate(r.Context(), st, parsed.Extension); err != nil {
+			writeComposeValidationError(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -355,16 +374,22 @@ func (s *Server) handleUpdateStackCompose(w http.ResponseWriter, r *http.Request
 		writeComposeValidationError(w, err)
 		return
 	}
-	if parsed.Extension.PrimaryNode != st.PrimaryNodeID || parsed.Extension.SecondaryNode != st.BackupNodeID {
-		writeError(w, http.StatusBadRequest, "compose updates cannot change node assignments")
+	if err := s.checkStackNodeUpdate(r.Context(), st, parsed.Extension); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	if err := s.store.UpdateStackCompose(r.Context(), id, canonical); err != nil {
+	if parsed.Extension.SecondaryNode != st.BackupNodeID {
+		err = s.store.UpdateStackComposeAndSecondary(r.Context(), id, canonical, parsed.Extension.SecondaryNode)
+	} else {
+		err = s.store.UpdateStackCompose(r.Context(), id, canonical)
+	}
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	st.ComposeYAML = canonical
+	st.BackupNodeID = parsed.Extension.SecondaryNode
 	st.UpdatedAt = time.Now().UTC()
 	var state string
 	if inst, ok := s.raft.FSM().State(id); ok {
@@ -531,7 +556,8 @@ func (s *Server) handleCreateAndStartStack(w http.ResponseWriter, r *http.Reques
 	if staging != "" {
 		workingDir = staging
 	}
-	if _, err := compose.ParseLifecycleAt(source, name, workingDir); err != nil {
+	spec, err := compose.ParseLifecycleAt(source, name, workingDir)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -554,6 +580,12 @@ func (s *Server) handleCreateAndStartStack(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
+	extension, _ := spec.Project.Extensions["x-fl-stack"].(map[string]any)
+	secondary, _ := extension["secondary_node"].(string)
+	if err := s.checkNewSecondary(r.Context(), executionNode, secondary); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if staging != "" {
 		if _, err := s.hosts.Execute(r.Context(), executionNode, "fs.dataset.create", ipc.DatasetCreatePayload{Dataset: "floatlab/" + name, BlockSize: "32K", Compression: "lz4"}); err != nil {
 			writeError(w, http.StatusBadGateway, err.Error())
@@ -564,7 +596,7 @@ func (s *Server) handleCreateAndStartStack(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	stack := &config.Stack{ID: uuid.NewString(), Name: name, PrimaryNodeID: executionNode, ComposeYAML: source, ZFSDataset: "floatlab/" + name, FailoverMode: "manual"}
+	stack := &config.Stack{ID: uuid.NewString(), Name: name, PrimaryNodeID: executionNode, BackupNodeID: secondary, ComposeYAML: source, ZFSDataset: "floatlab/" + name, FailoverMode: "manual"}
 	if err := s.store.CreateStack(r.Context(), stack); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return

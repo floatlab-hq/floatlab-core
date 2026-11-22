@@ -2,7 +2,7 @@ import { flushPromises, mount, enableAutoUnmount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, type Operation } from '@floatlab/client'
 import LiveDashboard from './LiveDashboard.vue'
-import { fixtureApi, interactiveFixtureApi, stack, node } from '../../dashboard/live-fixtures'
+import { fixtureApi, interactiveFixtureApi, stack, node, failoverTarget, failoverPoint } from '../../dashboard/live-fixtures'
 import CreateApp from './CreateApp.vue'
 import WorkloadDetail from './WorkloadDetail.vue'
 import CommandConsole from '../CommandConsole.vue'
@@ -101,7 +101,7 @@ describe('Live dashboard', () => {
     await wrapper.get('[aria-label="Close detail panel"]').trigger('click')
     expect(wrapper.findComponent(WorkloadDetail).exists()).toBe(false)
   })
-  it.each(['start', 'stop', 'restartStack', 'triggerFailover', 'restoreStack'])('runs %s inline without confirmation or opening the palette', async action => {
+  it.each(['start', 'stop', 'restartStack', 'restoreStack'])('runs %s inline without confirmation or opening the palette', async action => {
     const startStack = vi.fn().mockResolvedValue({}), stopStack = vi.fn().mockResolvedValue({}), request = vi.fn().mockResolvedValue({})
     const wrapper = mount(LiveDashboard, { props: { api: { ...interactiveFixtureApi(), startStack, stopStack, request } }, global: { stubs: { Teleport: true } } })
     await flushPromises()
@@ -113,6 +113,101 @@ describe('Live dashboard', () => {
     expect(wrapper.find('#palette-input').exists()).toBe(false)
     expect(wrapper.find('[aria-labelledby="palette-confirm-title"]').exists()).toBe(false)
     expect(wrapper.findComponent(WorkloadDetail).exists()).toBe(false)
+  })
+  it.each(['takeover', 'clone'] as const)('verifies and confirms a fenced %s from a cached app', async mode => {
+    const pool = { id: 'pool-2', name: 'beta-pool', cidr: '192.168.1.0/24', start_ip: '192.168.1.50', end_ip: '192.168.1.59', node_ids: [failoverTarget.id], membership_resolved: true }
+    const api = {
+      ...interactiveFixtureApi([{ ...stack, secondary_node: failoverTarget.id, replica: true, stale: true }]),
+      listNodes: async () => [{ ...node, status: 'offline' as const }, failoverTarget],
+      listNetworkPools: vi.fn().mockResolvedValue([pool]),
+      previewFailover: vi.fn().mockResolvedValue({ ...failoverPoint, mode, requires_network: mode === 'clone' }),
+      triggerFailover: vi.fn().mockResolvedValue({ operation_id: 'recover', status: 'pending' }),
+      getOperation: vi.fn().mockResolvedValue({ state: 'succeeded' }),
+    }
+    const wrapper = mount(LiveDashboard, { props: { api }, global: { stubs: { Teleport: true } } })
+    await flushPromises()
+    await wrapper.get('[aria-label^="plex (cached) replication:"]').trigger('click')
+    await wrapper.findAll('[role="menuitem"]').find(button => button.text() === 'Fail over to standby')!.trigger('click')
+    await flushPromises()
+    const panel = wrapper.get('[aria-label="Fail over plex"]')
+    expect(api.previewFailover).toHaveBeenCalledWith(stack.id, failoverTarget.id)
+    expect(panel.text()).toContain('fl-verified')
+    expect(panel.text()).toContain('60 seconds of writes')
+    expect(panel.get('button[type="submit"]').attributes('disabled')).toBeDefined()
+    await panel.get('form').trigger('submit')
+    expect(api.triggerFailover).not.toHaveBeenCalled()
+    await panel.get('[role="switch"]').trigger('click')
+    if (mode === 'clone') {
+      expect(panel.text()).toContain('new IP address and MAC address')
+      await panel.get('#failover-name').setValue(stack.name)
+      expect(panel.get('button[type="submit"]').attributes('disabled')).toBeDefined()
+      await panel.get('#failover-name').setValue('plex-recovery')
+      await panel.get('#failover-network-pool').setValue(pool.name)
+    } else {
+      expect(panel.find('#failover-name').exists()).toBe(false)
+      expect(api.listNetworkPools).not.toHaveBeenCalled()
+    }
+    expect(panel.get('button[type="submit"]').attributes('disabled')).toBeUndefined()
+    await panel.get('form').trigger('submit')
+    await flushPromises()
+    expect(api.triggerFailover).toHaveBeenCalledWith(stack.id, {
+      destination_node_id: failoverTarget.id, primary_fenced: true, recovery_point: 'verified-point',
+      ...(mode === 'clone' ? { name: 'plex-recovery', network_pool: pool.name } : {}),
+    }, expect.any(String))
+    expect(api.getOperation).toHaveBeenCalledWith('recover')
+    expect(panel.text()).toContain('recovered on lab-beta')
+  })
+  it('lets the operator reload a replica preview that could not be verified', async () => {
+    const api = {
+      ...interactiveFixtureApi([{ ...stack, secondary_node: failoverTarget.id }]),
+      previewFailover: vi.fn().mockRejectedValueOnce(new ApiError('No verified replica', 409)).mockResolvedValueOnce(failoverPoint),
+      triggerFailover: vi.fn(),
+    }
+    const wrapper = mount(LiveDashboard, { props: { api } })
+    await flushPromises()
+    wrapper.getComponent(LabDashboard).vm.$emit('action', 'app-triggerFailover', stack.id)
+    await flushPromises()
+    const panel = wrapper.get('[aria-label="Fail over plex"]')
+    expect(panel.get('[role="alert"]').text()).toBe('No verified replica')
+    expect(panel.find('form').exists()).toBe(false)
+    await panel.findAll('button').find(button => button.text() === 'Refresh recovery point')!.trigger('click')
+    await flushPromises()
+    expect(panel.get('button[type="submit"]').attributes('disabled')).toBeDefined()
+    expect(api.triggerFailover).not.toHaveBeenCalled()
+  })
+  it.each([
+    { status: 0, message: 'Connection lost' },
+    { status: 409, message: 'the original primary still reports running containers' },
+  ])('shows a failover submission error and allows retry after HTTP $status', async ({ status, message }) => {
+    const triggerFailover = vi.fn().mockRejectedValueOnce(new ApiError(message, status)).mockResolvedValueOnce({ operation_id: 'recover', status: 'pending' })
+    const api = {
+      ...interactiveFixtureApi([{ ...stack, secondary_node: failoverTarget.id }]),
+      listNodes: async () => [node, failoverTarget],
+      previewFailover: vi.fn().mockResolvedValue(failoverPoint),
+      triggerFailover,
+      getOperation: vi.fn().mockResolvedValue({ state: 'running' }),
+    }
+    const wrapper = mount(LiveDashboard, { props: { api } })
+    await flushPromises()
+    wrapper.getComponent(LabDashboard).vm.$emit('action', 'app-triggerFailover', stack.id)
+    await flushPromises()
+    const panel = wrapper.get('[aria-label="Fail over plex"]')
+    await panel.get('[role="switch"]').trigger('click')
+    await panel.get('form').trigger('submit')
+    await flushPromises()
+    expect(panel.get('[role="alert"]').text()).toBe(message)
+    expect(api.getOperation).not.toHaveBeenCalled()
+    await panel.get('form').trigger('submit')
+    await flushPromises()
+    expect(triggerFailover).toHaveBeenCalledTimes(2)
+    expect(triggerFailover.mock.calls[1]!.slice(0, 2)).toEqual(triggerFailover.mock.calls[0]!.slice(0, 2))
+    const firstKey = triggerFailover.mock.calls[0]![2]
+    const retryKey = triggerFailover.mock.calls[1]![2]
+    expect(firstKey).toEqual(expect.any(String))
+    if (status === 0) expect(retryKey).toBe(firstKey)
+    else expect(retryKey).not.toBe(firstKey)
+    expect(panel.find('[role="alert"]').exists()).toBe(false)
+    expect(panel.get('[role="status"]').text()).toContain('Operation recover')
   })
   it.each([true, false])('follows the move through cutover when the new IP is available (%s)', async addressAvailable => {
     vi.useFakeTimers()

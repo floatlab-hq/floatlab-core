@@ -168,35 +168,56 @@ func (s *Server) handleRestoreBackup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	root := "floatlab/" + name
-	raw, err := s.hosts.Execute(r.Context(), req.DestinationNodeID, "fs.dataset.list", ipc.DatasetListPayload{Parent: "floatlab"})
-	if err != nil {
-		writeError(w, 502, err.Error())
+	if status, err := s.checkBackupRestoreDestination(r.Context(), req.DestinationNodeID, root); err != nil {
+		writeError(w, status, err.Error())
 		return
+	}
+	now := time.Now().UTC()
+	stack := &config.Stack{ID: uuid.NewString(), Name: name, PrimaryNodeID: req.DestinationNodeID, ComposeYAML: restored, ZFSDataset: root, FailoverMode: "manual", CreatedAt: now, UpdatedAt: now}
+	payload := worker.BackupRestorePayload{SourceNodeID: req.SourceNodeID, BackupNodeID: req.BackupNodeID, Snapshots: req.Snapshots}
+	s.queueBackupRestore(w, r, stack, payload)
+}
+
+func (s *Server) checkBackupRestoreDestination(ctx context.Context, node, root string) (int, error) {
+	raw, err := s.hosts.Execute(ctx, node, "fs.dataset.list", ipc.DatasetListPayload{Parent: "floatlab"})
+	if err != nil {
+		return 502, err
 	}
 	var datasets ipc.DatasetListResult
 	if err := json.Unmarshal(raw, &datasets); err != nil {
-		writeError(w, 502, err.Error())
-		return
+		return 502, err
 	}
 	for _, dataset := range datasets.Datasets {
 		if dataset.Name == root || strings.HasPrefix(dataset.Name, root+"/") {
-			writeError(w, 409, "restore destination dataset already exists")
-			return
+			return 409, fmt.Errorf("restore destination dataset already exists")
 		}
 	}
-	sort.Slice(req.Snapshots, func(i, j int) bool { return req.Snapshots[i].Dataset < req.Snapshots[j].Dataset })
-	now := time.Now().UTC()
-	stack := &config.Stack{ID: uuid.NewString(), Name: name, PrimaryNodeID: req.DestinationNodeID, ComposeYAML: restored, ZFSDataset: root, FailoverMode: "manual", CreatedAt: now, UpdatedAt: now}
-	opID := operationID(r.Context())
-	intent := run.StackStateChanged{StackID: stack.ID, From: run.StateIdle, To: run.StateRestoring, Event: run.EventBackupRestoreStart, Timestamp: now, NodeID: stack.PrimaryNodeID}
-	payload := worker.BackupRestorePayload{Lifecycle: intent, OperationID: opID, StackID: stack.ID, SourceNodeID: req.SourceNodeID, BackupNodeID: req.BackupNodeID, DestinationNodeID: req.DestinationNodeID, DatasetPath: root, Snapshots: req.Snapshots, Actor: actor(r)}
+	return 0, nil
+}
+
+func (s *Server) queueBackupRestore(w http.ResponseWriter, r *http.Request, stack *config.Stack, payload worker.BackupRestorePayload) {
+	sort.Slice(payload.Snapshots, func(i, j int) bool { return payload.Snapshots[i].Dataset < payload.Snapshots[j].Dataset })
+	payload.OperationID = operationID(r.Context())
+	payload.StackID = stack.ID
+	payload.DestinationNodeID = stack.PrimaryNodeID
+	payload.DatasetPath = stack.ZFSDataset
+	payload.Actor = actor(r)
+	payload.Lifecycle = run.StackStateChanged{StackID: stack.ID, From: run.StateIdle, To: run.StateRestoring, Event: run.EventBackupRestoreStart, Timestamp: time.Now().UTC(), NodeID: stack.PrimaryNodeID}
+	admission := config.StackInsert(stack)
+	if payload.OwnerGeneration != 0 {
+		payload.TakeoverStack = stack
+		admission = rqlite.Statement{
+			SQL:    `INSERT INTO workload_move_reservations(operation_id,stack_id,name) VALUES(?,?,?)`,
+			Params: []any{payload.OperationID, stack.ID, stack.Name},
+		}
+	}
 	if err := s.db.Execute(r.Context(), []rqlite.Statement{
-		config.StackInsert(stack),
-		{SQL: `UPDATE operations SET stack_id=?,action='start' WHERE id=?`, Params: []any{stack.ID, opID}},
-		worker.TaskInsert("backup-restore-"+opID, worker.TaskBackupRestore, stack.ID, payload),
+		admission,
+		{SQL: `UPDATE operations SET stack_id=?,action='start' WHERE id=?`, Params: []any{stack.ID, payload.OperationID}},
+		worker.TaskInsert("backup-restore-"+payload.OperationID, worker.TaskBackupRestore, stack.ID, payload),
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": opID, "stack_id": stack.ID, "status": "pending"})
+	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": payload.OperationID, "stack_id": stack.ID, "status": "pending"})
 }

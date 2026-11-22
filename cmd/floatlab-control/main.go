@@ -247,7 +247,10 @@ func run(cmd *cobra.Command, args []string) error {
 		if err := ipam.MigratePools(ctx, db, hosts); err != nil {
 			log.Warn("network pool migration incomplete", zap.Error(err))
 		}
-		if err := ipam.RestoreNodeServices(ctx, db, hosts, hostNodeID); err != nil {
+		if err := srv.RestoreWorkloadsOnStartup(ctx); err != nil {
+			log.Warn("workload startup reconciliation incomplete", zap.Error(err))
+		}
+		if err := ipam.RestoreNodeServices(ctx, db, hosts, hostNodeID, srv.CheckWorkloadStart); err != nil {
 			log.Warn("service address restoration incomplete", zap.Error(err))
 		}
 		// Retry ownership reconciliation after DHCP startup or hostd reconnection.
@@ -259,7 +262,10 @@ func run(cmd *cobra.Command, args []string) error {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					if err := ipam.RestoreNodeServices(ctx, db, hosts, hostNodeID); err != nil {
+					if err := srv.RestoreWorkloadsOnStartup(ctx); err != nil {
+						log.Debug("workload startup reconciliation deferred", zap.Error(err))
+					}
+					if err := ipam.RestoreNodeServices(ctx, db, hosts, hostNodeID, srv.CheckWorkloadStart); err != nil {
 						log.Debug("service address reconciliation deferred", zap.Error(err))
 					}
 				}
@@ -291,6 +297,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 		// Orchestrator: drives stack state machine from Raft + IPC events.
 		orch := orchestrator.New(store, raftNode, hosts, db, log)
+		orch.SetWorkloadOwnerCheck(srv.IsLocalWorkloadOwner)
 		launch(func() {
 			if err := orch.Run(ctx); err != nil && err != context.Canceled {
 				log.Error("orchestrator exited", zap.Error(err))
@@ -303,6 +310,8 @@ func run(cmd *cobra.Command, args []string) error {
 		// Task worker: polls rqlite tasks table and dispatches IPC to hostd.
 		w := worker.New(db, store, hosts, raftNode, log)
 		w.SetBackupRestorePreparer(srv.PrepareBackupRestore)
+		w.SetBackupRestoreOwner(srv.CommitReplicaTakeover)
+		w.SetWorkloadOwnerCheck(srv.IsLocalWorkloadOwner)
 		w.SetStackMoveHandler(srv.RunStackMove)
 		launch(func() {
 			if err := w.Run(ctx); err != nil && err != context.Canceled {
@@ -329,6 +338,13 @@ func run(cmd *cobra.Command, args []string) error {
 	}, db, store, raftNode, hosts, broker, seq, log)
 
 	if !preflight {
+		if err := srv.EnableWorkloadStartup(ctx); err != nil {
+			if applianceConfig != "" || labPeerURL != "" {
+				return err
+			}
+			log.Warn("workload startup protection unavailable", zap.Error(err))
+		}
+		hosts.SetWorkloadStartCheck(srv.CheckWorkloadStart)
 		if err := startLab(ctx, srv, labDB, db, hosts, log); err != nil {
 			return err
 		}

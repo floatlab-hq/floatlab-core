@@ -15,6 +15,8 @@
   virtualisation.docker = {
     enable = true;
     enableOnBoot = true;
+    # FloatLab checks workload ownership before restarting projects after boot.
+    extraOptions = "--restart=false";
     storageDriver = "zfs";
     daemon.settings = {
       "data-root" = "/floatlab/system/docker";

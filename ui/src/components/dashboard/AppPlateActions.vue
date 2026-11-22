@@ -16,6 +16,7 @@ function status(kind: string): TransferStatus {
 }
 function items(kind: string) {
   const locked = Boolean(props.app.replica)
+  const switchDisabled = busy.value || (locked && props.app.hostSwitch !== 'triggerFailover')
   if (kind === 'runtime') return [
     { id: running.value ? 'stop' : 'start', label: running.value ? 'Stop' : 'Start', disabled: locked || busy.value },
     { id: 'restartStack', label: 'Restart', disabled: locked || !running.value || busy.value },
@@ -24,13 +25,13 @@ function items(kind: string) {
     { id: 'logs', label: 'View logs' },
     { id: 'open', label: 'App details' },
     { id: 'host', label: `Open host · ${props.app.host || 'Unknown'}`, disabled: !props.app.hostId },
-    ...(props.app.hostSwitch ? [{ id: props.app.hostSwitch, label: `${props.app.hostSwitch === 'restoreStack' ? 'Restore primary' : 'Fail over'} · ${props.app.standby}`, disabled: locked || busy.value }] : []),
+    ...(props.app.hostSwitch ? [{ id: props.app.hostSwitch, label: `${props.app.hostSwitch === 'restoreStack' ? 'Restore primary' : 'Fail over'} · ${props.app.standby}`, disabled: switchDisabled }] : []),
   ]
   const available = props.app.protectionAvailable !== false
   if (kind === 'replication') return [
     { id: 'sync', label: 'Sync now', disabled: locked || props.app.hostSwitch === 'restoreStack' || !props.app.standby || !available || Boolean(status(kind).busy) },
     { id: 'replication', label: 'View replication history', disabled: !available },
-    ...(props.app.hostSwitch ? [{ id: props.app.hostSwitch, label: props.app.hostSwitch === 'restoreStack' ? 'Restore primary' : 'Fail over to standby', disabled: locked || busy.value }] : []),
+    ...(props.app.hostSwitch ? [{ id: props.app.hostSwitch, label: props.app.hostSwitch === 'restoreStack' ? 'Restore primary' : 'Fail over to standby', disabled: switchDisabled }] : []),
   ]
   return [
     { id: 'backups', label: 'Recovery points', disabled: !available },

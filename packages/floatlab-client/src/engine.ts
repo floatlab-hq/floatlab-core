@@ -1,6 +1,6 @@
 import { ApiError } from "./api";
 import { v4 as idempotencyKey } from "uuid";
-import type { AlertsApi, AlertRuleUpdate } from "./types";
+import type { AlertsApi, AlertRuleUpdate, FailoverApi } from "./types";
 import { backupRestoreDatasets } from "./backups";
 import { runHttpCommand } from "./http-command";
 import type { HttpApi } from "./types";
@@ -21,7 +21,7 @@ const text = (value: unknown) => typeof value === "string" ? value : JSON.string
 export class CommandEngine {
   private stacks?: { at: number; value: Stack[] };
   private nodes?: { at: number; value: Node[] };
-  constructor(readonly api: FloatLabApi & Partial<UpdateApi & LabApi & BackupApi & BackupRestoreApi & AlertsApi & HttpApi>, readonly runtime: CommandRuntime, private readonly ttlMs = 10_000) {}
+  constructor(readonly api: FloatLabApi & Partial<UpdateApi & LabApi & BackupApi & BackupRestoreApi & AlertsApi & FailoverApi & HttpApi>, readonly runtime: CommandRuntime, private readonly ttlMs = 10_000) {}
 
   async dispatch(input: string | string[]): Promise<{ code: number; result: CommandResult }> {
     try {
@@ -113,6 +113,7 @@ export class CommandEngine {
       return name === "alerts" ? this.alerts(args) : this.alertRules(args);
     }
     if (name === "lab") return this.lab(args, flags);
+    if (name === "failover") return this.failover(args, flags);
  if(name === "backup") return args[0] === "restore" ? this.restoreBackup(args.slice(1), flags) : this.backup(args);
     if (name === "config") {
       if (args.length !== 1) throw new CommandError("Usage: config <stack>");
@@ -134,6 +135,26 @@ export class CommandEngine {
     if (name === "upgrade") return this.upgrade(args);
     if (name === "update") return this.update(args, flags);
     return this.snapshot(args);
+  }
+
+  private async failover([action, stackName]: string[], flags: Record<string, string | boolean>): Promise<CommandResult> {
+    const api = this.api;
+    if (!api.previewFailover || !api.triggerFailover) throw new CommandError("Failover API unavailable");
+    const stack = await this.stack(stackName!);
+    const destination = stack.secondary_node;
+    if (!destination) throw new CommandError("The stack has no nominated secondary");
+    if (action === "preview") return {kind: "text", text: text(await api.previewFailover(stack.id, destination))};
+    const point = flags["recovery-point"];
+    if (flags["primary-fenced"] !== true || typeof point !== "string" || !point.trim()) throw new CommandError("Confirm the primary is fenced and use the recovery point from failover preview");
+    const result = await api.triggerFailover(stack.id, {
+      destination_node_id: destination,
+      primary_fenced: true,
+      recovery_point: point,
+      ...(typeof flags.name === "string" ? {name: flags.name} : {}),
+      ...(typeof flags["network-pool"] === "string" ? {network_pool: flags["network-pool"]} : {}),
+    }, idempotencyKey());
+    this.changed();
+    return {kind: "operation", action: "failover", state: result.status, operationId: result.operation_id, text: text(result)};
   }
 
   private async restoreBackup(args: string[], flags: Record<string, string | boolean>): Promise<CommandResult> {

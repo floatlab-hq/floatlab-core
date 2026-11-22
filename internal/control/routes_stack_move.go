@@ -118,10 +118,16 @@ func (s *Server) handleStackMove(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 503, err.Error())
 		return
 	}
-	if _, err := s.cfg.LabDB.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT operation_id FROM stack_move_grants WHERE stack_id=? LIMIT 1`, Params: []any{id}}); err != nil {
+	owner, err := sharedStackOwner(ctx, s.cfg.LabDB, id)
+	if err != nil {
 		writeError(w, 503, "lab quorum required to move a stack: "+err.Error())
 		return
 	}
+	if owner.node != "" && owner.node != s.cfg.LocalNodeID {
+		writeError(w, 409, "local workload is no longer the current owner")
+		return
+	}
+	generation = max(generation, owner.generation)
 	move := stackMove{OperationID: opID, StackID: id, Stack: *st, Destination: req.DestinationNodeID,
 		NetworkPool: req.NetworkPool, Generation: generation + 1, Datasets: datasets, Targets: targets}
 	var prepared struct {
@@ -228,7 +234,11 @@ func movedCompose(source, destination, original, pool string) (string, error) {
 		project["x-fl-stack"] = extension
 	}
 	extension["primary_node"] = destination
-	extension["secondary_node"] = original
+	if original == "" {
+		delete(extension, "secondary_node")
+	} else {
+		extension["secondary_node"] = original
+	}
 	if pool != "" {
 		project["x-fl-network-pool"] = pool
 	}
@@ -241,10 +251,20 @@ func reverseComposeTargets(value any, destination, original string) {
 	switch node := value.(type) {
 	case map[string]any:
 		if targets, ok := node["x-fl-backups"].([]any); ok {
+			keep := targets[:0]
 			for _, target := range targets {
 				if policy, ok := target.(map[string]any); ok && policy["node_id"] == destination {
+					if original == "" {
+						continue
+					}
 					policy["node_id"] = original
 				}
+				keep = append(keep, target)
+			}
+			if len(keep) == 0 {
+				delete(node, "x-fl-backups")
+			} else {
+				node["x-fl-backups"] = keep
 			}
 		}
 		for _, child := range node {

@@ -3,11 +3,11 @@ package control
 import (
 	"context"
 	"encoding/json"
-	"github.com/floatlab/floatlab-core/pkg/run"
 	"io"
 	"net/http"
 	"time"
 
+	"github.com/floatlab/floatlab-core/pkg/run"
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
 )
@@ -15,9 +15,16 @@ import (
 func registerFailoverRoutes(r chi.Router, s *Server) {
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireAdminJWT)
+		r.Use(s.routeFailoverDestination)
+		r.Use(s.idempotency)
+		r.Get("/failover/{stack_id}/preview", s.handleFailoverPreview)
+		r.Post("/failover/{stack_id}/trigger", s.handleTriggerFailover)
+		r.Post("/stacks/{id}/failover", s.handleStackFailover)
+	})
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireAdminJWT)
 		r.Use(s.idempotency)
 		r.Get("/failover/status", s.handleFailoverStatus)
-		r.Post("/failover/{stack_id}/trigger", s.handleTriggerFailover)
 		r.Post("/failover/{stack_id}/abort", s.handleAbortFailover)
 		r.Get("/failover/{stack_id}/log", s.handleFailoverLog)
 	})
@@ -50,6 +57,10 @@ func (s *Server) handleFailoverStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTriggerFailover(w http.ResponseWriter, r *http.Request) {
+	if s.peerWorkloads != nil {
+		s.handleReplicaFailover(w, r, chi.URLParam(r, "stack_id"))
+		return
+	}
 	s.submitFailover(w, r, chi.URLParam(r, "stack_id"), false)
 }
 
@@ -94,6 +105,10 @@ func (s *Server) handleFailoverLog(w http.ResponseWriter, r *http.Request) {
 // handleStackFailover is mounted on /stacks/{id}/failover to match the frontend
 // API client which calls POST /stacks/{id}/failover.
 func (s *Server) handleStackFailover(w http.ResponseWriter, r *http.Request) {
+	if s.peerWorkloads != nil {
+		s.handleReplicaFailover(w, r, chi.URLParam(r, "id"))
+		return
+	}
 	var body struct {
 		Action string `json:"action"`
 	}

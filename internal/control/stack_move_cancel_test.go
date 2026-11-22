@@ -89,7 +89,11 @@ func TestRejectedMoveReservationCancelsDurablyBeforeReleasingSource(t *testing.T
 		t.Fatalf("pre-cutover rejection stopped source: %+v", instance)
 	}
 	// Late reserve/activate requests cannot recreate released ownership resources.
-	if err := source.grantStackMove(ctx, move.OperationID, move); err != nil {
+	hash, err := move.payloadHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sourceDB.Execute(ctx, []rqlite.Statement{{SQL: `INSERT INTO stack_move_grants(operation_id,stack_id,payload_hash) VALUES(?,?,?)`, Params: []any{move.OperationID, move.StackID, hash}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := destination.cancelStackMoveReservation(ctx, move); err != nil {

@@ -502,16 +502,27 @@ paths:
           type: string
           format: uuid
     post:
-      summary: Trigger manual failover (RunningPrimary → FailingOver → RunningBackup)
+      summary: Trigger manual failover
       operationId: triggerFailover
       tags: [stacks]
+      description: Alias of POST /failover/{stack_id}/trigger. In a lab, fence the primary and review a verified recovery point first.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        description: Required for lab failover. Supply the recovery point returned by the preview.
+        content:
+          application/json:
+            schema:
+              $ref: './failover.yaml#/components/schemas/FailoverRequest'
       responses:
         '202':
           description: Failover accepted.
+          content:
+            application/json:
+              schema:
+                $ref: './failover.yaml#/components/schemas/FailoverAccepted'
         '409':
-          description: Stack is not in RunningPrimary state.
+          description: Stack, destination, or recovery point is ineligible, or failover is already in progress.
           content:
             application/json:
               schema:

@@ -96,16 +96,24 @@ func (s *Server) workloadOwner(ctx context.Context, stackID, operationID string)
 	if err != nil {
 		return "", err
 	}
-	if len(rows.Values) > 0 {
+	if len(rows.Values) > 0 && operationID != "" {
 		return s.cfg.LocalNodeID, nil
 	}
 	owner := ""
+	if len(rows.Values) > 0 {
+		owner = s.cfg.LocalNodeID
+	}
 	var generation int64
 	moveOwner := ""
 	if stackID != "" && operationID == "" {
 		generation, moveOwner, err = stackMoveOwner(ctx, s.db, stackID)
 		if err != nil {
 			return "", err
+		}
+		for _, shared := range s.cachedSharedMoveOwners(ctx, stackID) {
+			if shared.generation >= generation {
+				generation, moveOwner = shared.generation, shared.node
+			}
 		}
 	}
 	conflict := false
@@ -428,6 +436,11 @@ func (s *Server) appendReplicaStacks(ctx context.Context, result []stackResponse
 	}
 	seen := map[string]bool{}
 	visible := result[:0]
+	for id, move := range s.cachedSharedMoveOwners(ctx, "") {
+		if move.generation >= owners[id].generation {
+			owners[id] = move
+		}
+	}
 	for _, stack := range result {
 		if move := owners[stack.ID]; move.node != "" && move.node != stack.OwnerNode {
 			continue

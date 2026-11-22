@@ -148,7 +148,7 @@ func CheckStackDestination(ctx context.Context, db *rqlite.Client, hosts *hostcl
 
 // RestoreNodeServices uses cluster allocation ownership after reboot. A host must
 // not blindly replay its old addresses after another node has taken them over.
-func RestoreNodeServices(ctx context.Context, db *rqlite.Client, hosts *hostclient.Pool, node string) error {
+func RestoreNodeServices(ctx context.Context, db *rqlite.Client, hosts *hostclient.Pool, node string, checkWorkloadStart func(context.Context, string) error) error {
 	rows, err := db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT a.stack_id FROM network_allocations a JOIN stack_runtime r ON r.stack_id=a.stack_id WHERE r.active_node_id=? AND r.deleted_at IS NULL AND a.state IN ('pending','active')`, Params: []interface{}{node}})
 	if err != nil {
 		return err
@@ -156,6 +156,9 @@ func RestoreNodeServices(ctx context.Context, db *rqlite.Client, hosts *hostclie
 	services := []hostnetwork.Service{}
 	for _, row := range rows.Values {
 		stackID, _ := row[0].(string)
+		if checkWorkloadStart(ctx, stackID) != nil {
+			continue
+		}
 		service, ok, err := StackService(ctx, db, stackID)
 		if err != nil {
 			return err

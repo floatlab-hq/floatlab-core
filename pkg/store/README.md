@@ -61,7 +61,7 @@ Recovery follows the token-first and GUID-verification approach reviewed in [mod
 
 On target or node removal, scheduling stops, pending source cleanup releases only that target's FloatLab holds and properties, and source retention runs again. Unreachable sources keep durable cleanup work until reconnection. Removing a target preserves received backup data.
 
-Backup policies retain their primary-node ownership. Scheduling and manual replication pause while a workload runs on its failover node; automatic migration of the backup source and its recovery points is separate work.
+Use [manual failover](../../README.md#manual-failover-after-a-primary-failure) to start on the nominated secondary when a primary is fenced. Recovery clones the selected replica snapshots and preserves their received history. Review replication targets on the new owner after takeover.
 
 ## Restore a backup
 

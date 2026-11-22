@@ -46,6 +46,7 @@ type Server struct {
 	labServer     *Server
 	workloadDB    *rqlite.Client
 	peerWorkloads *workloadPeers
+	startup       workloadStartup
 	joinPending   func() bool
 	membershipMu  sync.RWMutex
 	stackLocks    [64]sync.Mutex

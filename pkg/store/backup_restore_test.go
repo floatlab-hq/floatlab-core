@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The command fixture checks the real ownership/activation sequence without needing a ZFS pool.
@@ -128,6 +130,42 @@ func TestLocalBackupRestoreClonesAndActivatesWithoutChangingBackup(t *testing.T)
 	}
 	if guid, err := run(ctx, "zfs", "get", "-H", "-o", "value", "guid", backup+"@"+m.Snapshot); err != nil || guid != m.GUID {
 		t.Fatalf("backup snapshot changed: %q %v", guid, err)
+	}
+}
+
+func TestBackupRecoveryPointSurvivesAnInterruptedNewerReceive(t *testing.T) {
+	_, put := restoreFixture(t)
+	backup := BackupDataset("source", "floatlab/web/data")
+	put(backup, map[string]string{
+		"floatlab:backup-source": "source",
+		"receive_resume_token":   "partial",
+		"snapshots":              backup + "@fl-000000\t123\n" + backup + "/%recv@fl-000001\t456\n",
+	})
+	points, err := backupRecoveryPointsLocked(t.Context(), "source", backup)
+	if err != nil || len(points) != 1 || points[0] != (BackupSnapshot{Name: "fl-000000", GUID: "123"}) {
+		t.Fatalf("expected only the previously received snapshot: %+v %v", points, err)
+	}
+}
+
+func TestBackupRecoveryLockHonorsCancellation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "receive.lock")
+	receive, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer receive.Close()
+	if err := acquireBackupFileLock(t.Context(), receive); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer preview.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	if err := acquireBackupFileLock(ctx, preview); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("preview did not honor its deadline against an active receive: %v", err)
 	}
 }
 

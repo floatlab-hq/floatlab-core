@@ -3,6 +3,7 @@ package worker
 import (
 	"encoding/json"
 
+	"github.com/floatlab/floatlab-core/pkg/config"
 	"github.com/floatlab/floatlab-core/pkg/run"
 )
 
@@ -41,6 +42,9 @@ type BackupRestorePayload struct {
 	DestinationNodeID string                        `json:"destination_node_id"`
 	DatasetPath       string                        `json:"dataset_path"`
 	Snapshots         []BackupRestoreSnapshot       `json:"snapshots"`
+	ExpectedGUIDs     map[string]string             `json:"expected_guids,omitempty"`
+	OwnerGeneration   int64                         `json:"owner_generation,omitempty"`
+	TakeoverStack     *config.Stack                 `json:"takeover_stack,omitempty"`
 	Prepared          map[string]BackupRestoreMount `json:"prepared,omitempty"`
 	Actor             string                        `json:"actor"`
 }

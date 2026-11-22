@@ -454,14 +454,27 @@ func (g *Guest) Link(ctx context.Context, up bool) error {
 }
 
 func (g *Guest) PowerCycle(ctx context.Context) error {
+	if err := g.PowerOff(ctx); err != nil {
+		return err
+	}
+	return g.PowerOn(ctx)
+}
+
+func (g *Guest) PowerOff(ctx context.Context) error {
 	l, close, err := connect(ctx, g.Run.Socket)
 	if err != nil {
 		return err
 	}
 	defer close()
-	if err := l.DomainDestroy(g.Domain); err != nil {
+	return l.DomainDestroy(g.Domain)
+}
+
+func (g *Guest) PowerOn(ctx context.Context) error {
+	l, close, err := connect(ctx, g.Run.Socket)
+	if err != nil {
 		return err
 	}
+	defer close()
 	return l.DomainCreate(g.Domain)
 }
 

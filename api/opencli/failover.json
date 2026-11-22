@@ -126,6 +126,74 @@
               ]
             },
             {
+              "name": "previewStackFailover",
+              "description": "Preview a verified manual failover recovery point",
+              "options": [
+                {
+                  "name": "--path-stack-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "stack_id",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--query-destination-node-id",
+                  "required": true,
+                  "arguments": [
+                    {
+                      "name": "destination_node_id",
+                      "required": true
+                    }
+                  ]
+                }
+              ],
+              "metadata": [
+                {
+                  "name": "floatlab",
+                  "value": {
+                    "http": {
+                      "method": "GET",
+                      "path": "/failover/{stack_id}/preview",
+                      "parameters": [
+                        {
+                          "name": "stack_id",
+                          "in": "path",
+                          "option": "--path-stack-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                          }
+                        },
+                        {
+                          "name": "destination_node_id",
+                          "in": "query",
+                          "option": "--query-destination-node-id",
+                          "required": true,
+                          "schema": {
+                            "type": "string"
+                          }
+                        }
+                      ],
+                      "accept": "application/json"
+                    },
+                    "api": [
+                      {
+                        "operationId": "previewStackFailover",
+                        "inputs": {
+                          "path/stack_id": "option:--path-stack-id",
+                          "query/destination_node_id": "option:--query-destination-node-id"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
               "name": "triggerStackFailover",
               "description": "Trigger manual failover for a stack",
               "options": [
@@ -136,6 +204,51 @@
                     {
                       "name": "stack_id",
                       "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--header-idempotency-key",
+                  "arguments": [
+                    {
+                      "name": "Idempotency-Key",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body",
+                  "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                  "arguments": [
+                    {
+                      "name": "body",
+                      "required": true
+                    }
+                  ]
+                },
+                {
+                  "name": "--body-file",
+                  "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                  "arguments": [
+                    {
+                      "name": "path",
+                      "required": true,
+                      "metadata": [
+                        {
+                          "name": "floatlab",
+                          "value": {
+                            "provider": "files"
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "metadata": [
+                    {
+                      "name": "floatlab",
+                      "value": {
+                        "capability": "files"
+                      }
                     }
                   ]
                 }
@@ -157,15 +270,66 @@
                             "type": "string",
                             "format": "uuid"
                           }
+                        },
+                        {
+                          "name": "Idempotency-Key",
+                          "in": "header",
+                          "option": "--header-idempotency-key",
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "maxLength": 255
+                          }
                         }
                       ],
+                      "requestBody": {
+                        "required": false,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": [
+                                "destination_node_id",
+                                "primary_fenced",
+                                "recovery_point"
+                              ],
+                              "properties": {
+                                "destination_node_id": {
+                                  "type": "string",
+                                  "description": "The stack's nominated secondary."
+                                },
+                                "primary_fenced": {
+                                  "type": "boolean",
+                                  "enum": [
+                                    true
+                                  ],
+                                  "description": "Explicit confirmation that the old primary cannot run the workload."
+                                },
+                                "recovery_point": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string",
+                                  "description": "Required for a clone in a two-node lab. Choose a new stack name."
+                                },
+                                "network_pool": {
+                                  "type": "string",
+                                  "description": "Optional destination-owned pool for the recovered stack's new physical-network identity."
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
                       "accept": "application/json"
                     },
                     "api": [
                       {
                         "operationId": "triggerStackFailover",
                         "inputs": {
-                          "path/stack_id": "option:--path-stack-id"
+                          "path/stack_id": "option:--path-stack-id",
+                          "header/Idempotency-Key": "option:--header-idempotency-key",
+                          "body": "option:--body"
                         }
                       }
                     ]

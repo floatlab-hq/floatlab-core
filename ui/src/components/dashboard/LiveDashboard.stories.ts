@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/vue3-vite'
 import LiveDashboard from './LiveDashboard.vue'
-import { fixtureApi, interactiveFixtureApi, stack, node } from '../../dashboard/live-fixtures'
+import { fixtureApi, interactiveFixtureApi, stack, node, failoverTarget, failoverPoint } from '../../dashboard/live-fixtures'
 import { userEvent, within } from 'storybook/test'
 import type { Operation } from '@floatlab/client'
 const args = { api: interactiveFixtureApi() }
@@ -63,6 +63,22 @@ export const MoveApp: StoryObj<typeof meta> = {
     await userEvent.click(await canvas.findByRole('button', { name: /^plex runtime:/ }))
     await userEvent.click(await within(canvasElement.ownerDocument.body).findByRole('menuitem', { name: 'Move app…' }))
     await userEvent.selectOptions(await canvas.findByLabelText('Destination host'), moveHost.id)
+  },
+}
+export const FailoverPreview: StoryObj<typeof meta> = {
+  args: { api: {
+    ...interactiveFixtureApi([{ ...stack, secondary_node: failoverTarget.id, replica: true, stale: true }]),
+    listNodes: async () => [{ ...node, status: 'offline' }, failoverTarget],
+    getNodeStats: async id => ({ node_id: id, range: '1h', series: {} }),
+    getStorageStats: async id => ({ node_id: id, range: '1h', series: {} }),
+    listNetworkPools: async () => [],
+    previewFailover: async () => ({ ...failoverPoint, mode: 'clone', requires_network: true }),
+    triggerFailover: async () => ({ operation_id: 'failover-example', stack_id: 'new-app', status: 'pending' }),
+    getOperation: async () => ({ operation_id: 'failover-example', action: 'failover', actor: 'admin', state: 'succeeded', checkpoint: 'succeeded', created_at: node.created_at, updated_at: node.updated_at }),
+  } },
+  play: async ({ canvasElement }) => {
+    await userEvent.click(await within(canvasElement).findByRole('button', { name: /^plex \(cached\) replication:/ }))
+    await userEvent.click(await within(canvasElement.ownerDocument.body).findByRole('menuitem', { name: 'Fail over to standby' }))
   },
 }
 export const NodeKey: StoryObj<typeof meta> = {
