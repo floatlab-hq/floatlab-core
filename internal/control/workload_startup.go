@@ -31,6 +31,11 @@ type workloadStartup struct {
 	pending sync.Map
 }
 
+type startupCandidate struct {
+	checked  bool
+	resuming bool
+}
+
 type workloadStartupStatus struct {
 	Running    bool   `json:"running"`
 	Owner      string `json:"owner_node_id,omitempty"`
@@ -69,7 +74,7 @@ func (s *Server) CheckWorkloadStart(ctx context.Context, stackID string) error {
 	if !s.startup.ready.Load() {
 		return errors.New("waiting for workload startup checks")
 	}
-	if _, waiting := s.startup.pending.Load(stackID); waiting {
+	if candidate, waiting := s.startup.pending.Load(stackID); waiting && !candidate.(startupCandidate).checked {
 		return errors.New("workload startup checks are incomplete or another copy is responding")
 	}
 	local, err := s.IsLocalWorkloadOwner(ctx, stackID)
@@ -106,7 +111,7 @@ func (s *Server) RestoreWorkloadsOnStartup(ctx context.Context) error {
 	}
 	if !s.startup.ready.Load() {
 		for id := range local {
-			s.startup.pending.Store(id, false)
+			s.startup.pending.Store(id, startupCandidate{})
 		}
 		s.startup.ready.Store(true)
 	} else if s.peerWorkloads != nil {
@@ -114,12 +119,12 @@ func (s *Server) RestoreWorkloadsOnStartup(ctx context.Context) error {
 			s.log.Warn("former workload shutdown deferred", zap.Error(err))
 		}
 	}
-	s.startup.pending.Range(func(key, resuming any) bool {
+	s.startup.pending.Range(func(key, candidate any) bool {
 		id := key.(string)
 		stack := local[id]
 		if stack == nil {
 			s.startup.pending.Delete(id)
-		} else if err := s.restoreWorkloadOnStartup(ctx, stack, resuming.(bool)); err != nil {
+		} else if err := s.restoreWorkloadOnStartup(ctx, stack, candidate.(startupCandidate)); err != nil {
 			s.log.Debug("workload startup deferred", zap.String("stack_id", id), zap.Error(err))
 		}
 		return ctx.Err() == nil
@@ -127,7 +132,7 @@ func (s *Server) RestoreWorkloadsOnStartup(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func (s *Server) restoreWorkloadOnStartup(ctx context.Context, stack *config.Stack, resuming bool) error {
+func (s *Server) restoreWorkloadOnStartup(ctx context.Context, stack *config.Stack, candidate startupCandidate) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	id, node := stack.ID, s.cfg.LocalNodeID
@@ -167,8 +172,14 @@ func (s *Server) restoreWorkloadOnStartup(ctx context.Context, stack *config.Sta
 	if err != nil {
 		return err
 	}
+	if active != nil {
+		// Let durable work finish, then see whether the workload still needs to start.
+		candidate.checked = true
+		s.startup.pending.Store(id, candidate)
+		return nil
+	}
 	s.startup.pending.Delete(id)
-	if (localRunning && !resuming) || active != nil || !ok || state.State != run.StateRunningPrimary {
+	if (localRunning && !candidate.resuming) || !ok || state.State != run.StateRunningPrimary {
 		return nil
 	}
 	if hasService {
@@ -191,7 +202,7 @@ func (s *Server) restoreWorkloadOnStartup(ctx context.Context, stack *config.Sta
 		}
 	}
 	if err != nil {
-		s.startup.pending.Store(id, true)
+		s.startup.pending.Store(id, startupCandidate{resuming: true})
 	}
 	return err
 }

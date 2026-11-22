@@ -13,6 +13,7 @@ import (
 	"github.com/floatlab/floatlab-core/pkg/config"
 	"github.com/floatlab/floatlab-core/pkg/hostclient"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
+	"github.com/floatlab/floatlab-core/pkg/operation"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
 	"github.com/floatlab/floatlab-core/pkg/run"
 	"github.com/google/uuid"
@@ -86,8 +87,24 @@ func TestManagedStartupRestoresLocalWorkloadOrKeepsItFenced(t *testing.T) {
 			if err := s.CheckWorkloadStart(ctx, stack.ID); err == nil {
 				t.Fatal("start allowed during startup delay")
 			}
-			s.startup.pending.Store(stack.ID, false)
+			s.startup.pending.Store(stack.ID, startupCandidate{})
 			s.startup.ready.Store(true)
+			if scenario.peer == nil {
+				created := time.Now().UTC()
+				op := operation.Operation{ID: "snapshot", StackID: stack.ID, Action: "snapshots", State: "running", CreatedAt: created, UpdatedAt: created}
+				if err := s.ops.Create(ctx, op); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.RestoreWorkloadsOnStartup(ctx); err != nil || starts.Load() != 0 {
+					t.Fatalf("startup must wait for the active operation: %v", err)
+				}
+				if err := s.CheckWorkloadStart(ctx, stack.ID); err != nil {
+					t.Fatalf("the active operation must be able to finish: %v", err)
+				}
+				if err := s.ops.Update(ctx, op.ID, "succeeded", "succeeded", ""); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err := s.RestoreWorkloadsOnStartup(ctx); err != nil {
 				t.Fatal(err)
 			}
