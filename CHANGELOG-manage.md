@@ -10,7 +10,7 @@
 - Add built-in alerts for peer reachability and network quality, Docker health and memory limits, failed operations and protection jobs, and aging recovery points. Expose ZFS scrub status through the storage API.
 - Retry guarded startup after interrupted operations and prevent concurrent lifecycle, backup, and recovery operations from racing over the same workload.
 - Use the project dataset's `docker-compose.yml` as the source of truth. Migration saves conflicting files under `.floatlab/compose-before-cutover-*.yml` and preserves read-only peer views. Older management binaries reject the migrated workload database.
-- Recognize the 0.4.x host series. Upgrade management first, then move to host 0.4.0 for Compose writes, image upgrades, and guarded startup.
+- Recognize the 0.4.x host series. Compose writes, image upgrades, and guarded startup require the matching host release.
 - Fix release checksum generation for the renamed `lab` binaries and allow retrying management publication from an existing tag.
 
 ## 0.3.0

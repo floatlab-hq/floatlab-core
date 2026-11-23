@@ -8,6 +8,7 @@
 - Hand workload startup over from Docker to the control plane so it can check ownership, peer containers, and LAN addresses before resuming workloads. Pair this host with management 0.4.0 for guarded startup and manual failover.
 - Add host operations for moving stacks between lab nodes, inspecting registry image updates, and publishing managed Compose files atomically in project datasets.
 - Retry network configuration after hotplug failures and detect dropped replication SSH sessions sooner with keepalives.
+- The built-in host updater requires a qualified source version. This release has no qualified in-place upgrade sources.
 
 ## 0.3.0
 
