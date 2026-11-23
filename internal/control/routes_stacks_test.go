@@ -144,7 +144,7 @@ func TestContainerStartChecksStateAndDispatchesOwnedContainer(t *testing.T) {
 }
 
 func TestContainerStatusMatchesPublicEnum(t *testing.T) {
-	for state, want := range map[string]string{"exited": "stopped", "created": "stopped", "restarting": "error", "running": "running"} {
+	for state, want := range map[string]string{"exited": "stopped", "created": "stopped", "restarting": "starting", "running": "running"} {
 		if got := containerStatus(state); got != want {
 			t.Errorf("containerStatus(%q) = %q, want %q", state, got, want)
 		}

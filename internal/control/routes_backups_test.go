@@ -62,10 +62,11 @@ func TestBackupTargetAPIValidationAndCleanupContract(t *testing.T) {
 		`{"dataset":"floatlab/other/data","node_id":"backup","schedule":"h/24"}`,
 		`{"dataset":"floatlab/demo/data","node_id":"unknown","schedule":"h/24"}`,
 		`{"dataset":"floatlab/demo/data","node_id":"backup","schedule":"h/0"}`,
+		`{"dataset":"floatlab/demo/data","node_id":"backup","schedule":"h/24","monitoring_policy":{"warning_age_seconds":600,"max_age_seconds":300}}`,
 	} {
 		call("PUT", body, 400)
 	}
-	body := `{"dataset":"floatlab/demo/data","node_id":"backup","schedule":"h/24 d/28"}`
+	body := `{"dataset":"floatlab/demo/data","node_id":"backup","schedule":"h/24 d/28","monitoring_policy":{"start_grace_seconds":180,"completion_budget_seconds":1200,"warning_age_seconds":7200,"max_age_seconds":14400}}`
 	resp := call("PUT", body, 200)
 	var saved config.BackupTarget
 	if err := json.Unmarshal(resp.Body.Bytes(), &saved); err != nil {
@@ -73,6 +74,17 @@ func TestBackupTargetAPIValidationAndCleanupContract(t *testing.T) {
 	}
 	if !saved.Enabled || saved.SourceNodeID != "source" || saved.Generation < 1 || saved.LocalPolicy != "1h/24" {
 		t.Fatalf("invalid saved target %+v", saved)
+	}
+	if saved.MonitoringPolicy == nil || saved.MonitoringPolicy.StartGraceSeconds != 180 || saved.MonitoringPolicy.MaxAgeSeconds != 14400 {
+		t.Fatalf("missing monitoring policy: %+v", saved.MonitoringPolicy)
+	}
+	unchanged := call("PUT", `{"dataset":"floatlab/demo/data","node_id":"backup","schedule":"h/24 d/28"}`, 200)
+	if !bytes.Contains(unchanged.Body.Bytes(), []byte(`"max_age_seconds":14400`)) {
+		t.Fatal("omitted monitoring policy cleared the overrides")
+	}
+	reset := call("PUT", `{"dataset":"floatlab/demo/data","node_id":"backup","schedule":"h/24 d/28","monitoring_policy":{}}`, 200)
+	if bytes.Contains(reset.Body.Bytes(), []byte(`"monitoring_policy"`)) {
+		t.Fatal("empty monitoring policy did not restore inheritance")
 	}
 	if !bytes.Contains(call("GET", "", 200).Body.Bytes(), []byte(`"node_id":"backup"`)) {
 		t.Fatal("missing target")

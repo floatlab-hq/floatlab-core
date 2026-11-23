@@ -28,7 +28,7 @@ type Result struct {
 	Resource    Resource               `json:"resource"`
 	Observer    string                 `json:"observer,omitempty"`
 	Target      string                 `json:"target,omitempty"`
-	Status      string                 `json:"status"` // healthy, failing, unknown, disabled, unsupported
+	Status      string                 `json:"status"` // healthy, failing, unknown, disabled, unsupported, paused
 	Reason      string                 `json:"reason,omitempty"`
 	ObservedAt  time.Time              `json:"observed_at,omitempty"`
 	EvaluatedAt time.Time              `json:"evaluated_at"`
@@ -63,7 +63,7 @@ func Record(ctx context.Context, db *rqlite.Client, broker *notify.Broker, t Tra
 		return fmt.Errorf("monitoring: check identity, producer, kind and evaluation time required")
 	}
 	switch r.Status {
-	case "healthy", "failing", "unknown", "disabled", "unsupported":
+	case "healthy", "failing", "unknown", "disabled", "unsupported", "paused":
 	default:
 		return fmt.Errorf("monitoring: invalid check status")
 	}
@@ -141,6 +141,8 @@ func Record(ctx context.Context, db *rqlite.Client, broker *notify.Broker, t Tra
 			} else {
 				if rank(t.Severity) > rank(old.Severity) {
 					kind = "alert.escalated"
+				} else if t.Notify && !old.Notified {
+					kind = "alert"
 				}
 				statements = append(statements, stmt(`UPDATE alerts SET severity=?,message=?,labels=?,updated_at=?,stack_id=?,node_id=? WHERE id=?`, t.Severity, t.Message, string(labels), now, r.Resource.WorkloadID, r.Resource.HostID, next.IncidentID))
 			}

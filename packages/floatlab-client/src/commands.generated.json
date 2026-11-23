@@ -420,7 +420,7 @@
               },
               {
                 "name": "deleteAlertRule",
-                "description": "Delete an alert rule",
+                "description": "Delete a custom alert rule",
                 "options": [
                   {
                     "name": "--path-id",
@@ -447,8 +447,7 @@
                             "option": "--path-id",
                             "required": true,
                             "schema": {
-                              "type": "string",
-                              "format": "uuid"
+                              "type": "string"
                             }
                           }
                         ]
@@ -589,8 +588,7 @@
                             "option": "--path-id",
                             "required": true,
                             "schema": {
-                              "type": "string",
-                              "format": "uuid"
+                              "type": "string"
                             }
                           }
                         ],
@@ -874,6 +872,53 @@
                 ]
               },
               {
+                "name": "resetAlertRule",
+                "description": "Reset a built-in alert rule to its shipped settings",
+                "options": [
+                  {
+                    "name": "--path-id",
+                    "required": true,
+                    "arguments": [
+                      {
+                        "name": "id",
+                        "required": true
+                      }
+                    ]
+                  }
+                ],
+                "metadata": [
+                  {
+                    "name": "floatlab",
+                    "value": {
+                      "http": {
+                        "method": "POST",
+                        "path": "/alert-rules/{id}/reset",
+                        "parameters": [
+                          {
+                            "name": "id",
+                            "in": "path",
+                            "option": "--path-id",
+                            "required": true,
+                            "schema": {
+                              "type": "string"
+                            }
+                          }
+                        ],
+                        "accept": "application/json"
+                      },
+                      "api": [
+                        {
+                          "operationId": "resetAlertRule",
+                          "inputs": {
+                            "path/id": "option:--path-id"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
                 "name": "silenceAlert",
                 "description": "Mute an active alert and its notifications until a given time",
                 "options": [
@@ -1042,8 +1087,7 @@
                             "option": "--path-id",
                             "required": true,
                             "schema": {
-                              "type": "string",
-                              "format": "uuid"
+                              "type": "string"
                             }
                           }
                         ],
@@ -1072,6 +1116,17 @@
                                   },
                                   "for_duration": {
                                     "type": "string"
+                                  },
+                                  "critical_for_duration": {
+                                    "type": "string",
+                                    "description": "Critical band duration override for a built-in rule."
+                                  },
+                                  "thresholds": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                      "type": "number"
+                                    },
+                                    "description": "Named numeric overrides for a built-in rule. Unspecified settings keep their effective values."
                                   },
                                   "freshness_query": {
                                     "type": "string",
@@ -8755,6 +8810,28 @@
                                   "schedule": {
                                     "type": "string",
                                     "example": "h/24 d/28"
+                                  },
+                                  "monitoring_policy": {
+                                    "type": "object",
+                                    "description": "Per-destination deadlines. Omitted or zero values inherit the corresponding built-in alert rule setting. Set an empty object to clear the previous overrides.",
+                                    "properties": {
+                                      "start_grace_seconds": {
+                                        "type": "integer",
+                                        "minimum": 0
+                                      },
+                                      "completion_budget_seconds": {
+                                        "type": "integer",
+                                        "minimum": 0
+                                      },
+                                      "warning_age_seconds": {
+                                        "type": "integer",
+                                        "minimum": 0
+                                      },
+                                      "max_age_seconds": {
+                                        "type": "integer",
+                                        "minimum": 0
+                                      }
+                                    }
                                   }
                                 }
                               }
@@ -9766,12 +9843,48 @@
                         "body/condition": "json:changes",
                         "body/severity": "json:changes",
                         "body/for_duration": "json:changes",
+                        "body/critical_for_duration": "json:changes",
+                        "body/thresholds": "json:changes",
                         "body/freshness_query": "json:changes",
                         "body/recovery_condition": "json:changes",
                         "body/recovery_duration": "json:changes",
                         "body/max_sample_age": "json:changes",
                         "body/annotations": "json:changes",
                         "body/enabled": "json:changes"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "name": "reset",
+            "description": "Restore a built-in rule's shipped settings",
+            "arguments": [
+              {
+                "name": "rule",
+                "required": true,
+                "metadata": [
+                  {
+                    "name": "floatlab",
+                    "value": {
+                      "appendSpace": false,
+                      "provider": "rules"
+                    }
+                  }
+                ]
+              }
+            ],
+            "metadata": [
+              {
+                "name": "floatlab",
+                "value": {
+                  "api": [
+                    {
+                      "operationId": "resetAlertRule",
+                      "inputs": {
+                        "path/id": "argument:rule"
                       }
                     }
                   ]

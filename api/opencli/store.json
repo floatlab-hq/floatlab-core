@@ -1393,6 +1393,28 @@
                                 "schedule": {
                                   "type": "string",
                                   "example": "h/24 d/28"
+                                },
+                                "monitoring_policy": {
+                                  "type": "object",
+                                  "description": "Per-destination deadlines. Omitted or zero values inherit the corresponding built-in alert rule setting. Set an empty object to clear the previous overrides.",
+                                  "properties": {
+                                    "start_grace_seconds": {
+                                      "type": "integer",
+                                      "minimum": 0
+                                    },
+                                    "completion_budget_seconds": {
+                                      "type": "integer",
+                                      "minimum": 0
+                                    },
+                                    "warning_age_seconds": {
+                                      "type": "integer",
+                                      "minimum": 0
+                                    },
+                                    "max_age_seconds": {
+                                      "type": "integer",
+                                      "minimum": 0
+                                    }
+                                  }
                                 }
                               }
                             }

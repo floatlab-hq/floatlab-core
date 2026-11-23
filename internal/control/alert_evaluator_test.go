@@ -30,7 +30,7 @@ func TestLoadBothRuleStores(t *testing.T) {
 	}
 	s := Server{db: db}
 	rules, err := s.alertRules(ctx)
-	if err != nil || len(rules) != 2 {
+	if err != nil || len(rules) < 3 {
 		t.Fatalf("%+v %v", rules, err)
 	}
 	if rules[0].RecoveryCondition != "used < 85" || rules[0].FreshnessQuery != "timestamp(used)" || rules[0].MaxAge != 2*time.Minute {
@@ -38,6 +38,13 @@ func TestLoadBothRuleStores(t *testing.T) {
 	}
 	if !strings.Contains(rules[1].Condition, `node_id="backup"`) || !strings.Contains(rules[1].Condition, "> 95.5") || !strings.Contains(rules[1].RecoveryCondition, "<= 95.5") || rules[1].FreshnessQuery == "" {
 		t.Fatal(rules[1])
+	}
+	found := false
+	for _, rule := range rules[2:] {
+		found = found || rule.ID == "service.memory.high" && rule.Bands != nil
+	}
+	if !found {
+		t.Fatal("missing built-in memory rule")
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -39,7 +40,12 @@ func updateMutationFence(next http.Handler) http.Handler {
 }
 
 func (s *Server) runUpdateBackground(ctx context.Context) {
-	runUpdateBackground(ctx, s.runAlertEvaluator)
+	runUpdateBackground(ctx, func(ctx context.Context) {
+		var checks sync.WaitGroup
+		checks.Go(func() { s.runPeerReachability(ctx) })
+		s.runAlertEvaluator(ctx)
+		checks.Wait()
+	})
 }
 
 // Acknowledge the API drain only after its admitted writes and evaluator stop.

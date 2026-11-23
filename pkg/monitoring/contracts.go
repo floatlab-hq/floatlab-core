@@ -14,6 +14,7 @@ type Execution struct {
 	ID             string     `json:"id"`
 	Kind           string     `json:"kind"`
 	Resource       Resource   `json:"resource"`
+	Generation     int64      `json:"generation,omitempty"`
 	State          string     `json:"state"`
 	Active         bool       `json:"active"`
 	WasMissed      bool       `json:"was_missed"`
@@ -129,7 +130,7 @@ func SaveExecution(ctx context.Context, db *rqlite.Client, e Execution) error {
 	if oldState == "succeeded" || oldState == "failed" {
 		return fmt.Errorf("monitoring: completed occurrence is immutable; create another occurrence")
 	}
-	if old.Kind != e.Kind || old.Resource != e.Resource || !old.ScheduledAt.Equal(e.ScheduledAt) {
+	if old.Kind != e.Kind || old.Resource != e.Resource || old.Generation != e.Generation || !old.ScheduledAt.Equal(e.ScheduledAt) {
 		return fmt.Errorf("monitoring: occurrence identity cannot change")
 	}
 	if old.StartedAt != nil && (e.StartedAt == nil || !old.StartedAt.Equal(*e.StartedAt)) {

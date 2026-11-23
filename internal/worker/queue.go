@@ -35,6 +35,9 @@ type Handler func(ctx context.Context, payload json.RawMessage) error
 
 var ErrMoveMustResume = errors.New("stack move will retry")
 
+var errScheduledReplicationRetired = errors.New("scheduled replication target changed before completion")
+var errScheduledReplicationSnapshotFailed = errors.New("scheduled replication snapshot creation failed")
+
 func (w *Worker) SetStackMoveHandler(handler Handler) {
 	w.handlers[TaskStackMove] = handler
 }
@@ -173,7 +176,7 @@ func (w *Worker) handleStackUpgrade(ctx context.Context, raw json.RawMessage) er
 		if _, err := w.pool.Execute(ctx, p.NodeID, "compose.up", ipc.ComposeUpPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: oldRuntime}); err != nil {
 			return err
 		}
-		return WaitHealthy(ctx, w.pool, p.NodeID, p.StackID, timeout(p.HealthTimeout), nil)
+		return waitForComposeReady(ctx, w.pool, p.NodeID, p.StackID, oldRuntime, timeout(p.HealthTimeout))
 	}
 	finishRollback := func() error {
 		event := run.EventRollbackDone
@@ -228,7 +231,7 @@ func (w *Worker) handleStackUpgrade(ctx context.Context, raw json.RawMessage) er
 	if _, err := w.pool.Execute(ctx, p.NodeID, "compose.up", ipc.ComposeUpPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: newRuntime}); err != nil {
 		return fail(err)
 	}
-	if err := WaitHealthy(ctx, w.pool, p.NodeID, p.StackID, timeout(p.HealthTimeout), nil); err != nil {
+	if err := waitForComposeReady(ctx, w.pool, p.NodeID, p.StackID, newRuntime, timeout(p.HealthTimeout)); err != nil {
 		return fail(err)
 	}
 	if err := w.advanceUpgrade(ctx, &p, run.EventUpdateDone); err != nil {
@@ -253,7 +256,7 @@ func (w *Worker) handleStackRestart(ctx context.Context, raw json.RawMessage) er
 	if _, err := w.pool.Execute(ctx, p.NodeID, "compose.up", ipc.ComposeUpPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: p.ComposeFile}); err != nil {
 		return err
 	}
-	if err := WaitHealthy(ctx, w.pool, p.NodeID, p.StackID, timeout(p.HealthTimeout), nil); err != nil {
+	if err := waitForComposeReady(ctx, w.pool, p.NodeID, p.StackID, p.ComposeFile, timeout(p.HealthTimeout)); err != nil {
 		return err
 	}
 	_ = operation.RecordEvent(ctx, w.db, operation.Event{StackID: p.StackID, Type: "Restart", Outcome: "succeeded", OperationID: p.OperationID, Actor: p.Actor})
@@ -385,7 +388,7 @@ func (w *Worker) handleStackRestore(ctx context.Context, raw json.RawMessage) er
 		if _, err := w.pool.Execute(ctx, p.NodeID, "compose.up", ipc.ComposeUpPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: p.ComposeFile}); err != nil {
 			return err
 		}
-		if err := WaitHealthy(ctx, w.pool, p.NodeID, p.StackID, timeout(p.HealthTimeout), nil); err != nil {
+		if err := waitForComposeReady(ctx, w.pool, p.NodeID, p.StackID, p.ComposeFile, timeout(p.HealthTimeout)); err != nil {
 			return err
 		}
 	}
@@ -521,43 +524,6 @@ func (w *Worker) promoteTree(ctx context.Context, nodeID, root string, datasets 
 	return nil
 }
 
-func WaitHealthy(ctx context.Context, hosts *hostclient.Pool, nodeID, stackID string, duration time.Duration, completedServices map[string]bool) error {
-	deadline := time.NewTimer(duration)
-	defer deadline.Stop()
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	for {
-		raw, err := hosts.Execute(ctx, nodeID, "docker.list", ipc.DockerListPayload{StackID: stackID})
-		if err == nil {
-			var result ipc.DockerListResult
-			if json.Unmarshal(raw, &result) == nil && len(result.Containers) > 0 {
-				ready := true
-				for _, container := range result.Containers {
-					if completedServices[container.Service] && container.State == "exited" && container.ExitCode == 0 {
-						continue
-					}
-					if container.State != "running" || (container.Health != "healthy" && container.Health != "none") {
-						ready = false
-					}
-					if container.Health == "unhealthy" {
-						return fmt.Errorf("stack %s has an unhealthy container", stackID)
-					}
-				}
-				if ready {
-					return nil
-				}
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-deadline.C:
-			return fmt.Errorf("stack %s did not become healthy within %s", stackID, duration)
-		case <-ticker.C:
-		}
-	}
-}
-
 func timeout(value string) time.Duration {
 	duration, err := time.ParseDuration(value)
 	if err != nil || duration <= 0 {
@@ -635,11 +601,15 @@ func (w *Worker) finishUpgrade(ctx context.Context, p StackUpgradePayload) error
 func (w *Worker) poll(ctx context.Context) error {
 	claimSQL := `
 		UPDATE tasks
-		SET state = 'running', locked_by = ?, updated_at = datetime('now')
+		SET state = 'running', locked_by = ?, started_at = COALESCE(started_at, datetime('now')), updated_at = datetime('now')
 		WHERE id = (
 			SELECT id FROM tasks
 			WHERE state = 'pending'
 			  AND attempts < ?
+			  AND (type <> 'repl.trigger' OR COALESCE(json_extract(payload,'$.scheduled'),0) = 0 OR EXISTS (
+			      SELECT 1 FROM tasks snapshot WHERE snapshot.id=json_extract(tasks.payload,'$.snapshot_task_id')
+			      AND snapshot.type='snapshot.create' AND snapshot.state IN ('done','failed')
+			  ))
 			  AND (
 			      attempts = 0
 			      OR updated_at <= datetime('now', '-' || (attempts * ?) || ' seconds')
@@ -715,7 +685,7 @@ func (w *Worker) poll(ctx context.Context) error {
 		if errors.Is(execErr, ErrMoveMustResume) {
 			return w.db.Execute(ctx, []rqlite.Statement{{SQL: `UPDATE tasks SET state='pending',attempts=1,error=?,updated_at=datetime('now'),locked_by=NULL WHERE id=?`, Params: []any{execErr.Error(), taskID}}})
 		}
-		if fenced || int(attempts)+1 >= maxAttempts {
+		if fenced || errors.Is(execErr, errScheduledReplicationRetired) || errors.Is(execErr, errScheduledReplicationSnapshotFailed) || int(attempts)+1 >= maxAttempts {
 			terminal := []rqlite.Statement{{SQL: `UPDATE tasks SET state='failed',attempts=attempts+1,error=?,updated_at=datetime('now'),locked_by=NULL WHERE id=?`, Params: []interface{}{execErr.Error(), taskID}}}
 			if taskType == TaskBackupRestore {
 				var restore BackupRestorePayload
@@ -843,6 +813,9 @@ func (w *Worker) handleReplTrigger(ctx context.Context, raw json.RawMessage) err
 			return err
 		}
 		if !active {
+			if p.Scheduled {
+				return errScheduledReplicationRetired
+			}
 			return nil
 		}
 	}
@@ -850,6 +823,9 @@ func (w *Worker) handleReplTrigger(ctx context.Context, raw json.RawMessage) err
 		rows, err := w.db.Query(ctx, rqlite.Statement{SQL: `SELECT state FROM tasks WHERE id=? AND type=?`, Params: []interface{}{p.SnapshotTaskID, TaskSnapshotCreate}})
 		if err != nil {
 			return err
+		}
+		if p.Scheduled && len(rows.Values) == 1 && rows.Values[0][0] == "failed" {
+			return errScheduledReplicationSnapshotFailed
 		}
 		if len(rows.Values) != 1 || rows.Values[0][0] != "done" {
 			return fmt.Errorf("repl.trigger: snapshot creation %s has not succeeded", p.SnapshotTaskID)
@@ -866,7 +842,13 @@ func (w *Worker) handleReplTrigger(ctx context.Context, raw json.RawMessage) err
 			return checkErr
 		}
 		if !active {
-			return w.cleanupBackups(ctx)
+			if err := w.cleanupBackups(ctx); err != nil {
+				return err
+			}
+			if p.Scheduled {
+				return errScheduledReplicationRetired
+			}
+			return nil
 		}
 	}
 	if err == nil {
@@ -884,11 +866,12 @@ func (w *Worker) handleReplTrigger(ctx context.Context, raw json.RawMessage) err
 		}
 	}
 	if err == nil {
-		var resultBody struct {
-			PruneError string `json:"prune_error"`
-		}
+		var resultBody store.SendResult
 		if parseErr := json.Unmarshal(result, &resultBody); parseErr != nil {
 			return parseErr
+		}
+		if err := w.saveRecoveryPoint(ctx, p, resultBody); err != nil {
+			return err
 		}
 		var pruneErr error
 		if resultBody.PruneError != "" {
@@ -898,8 +881,10 @@ func (w *Worker) handleReplTrigger(ctx context.Context, raw json.RawMessage) err
 			return alertErr
 		}
 	}
-	if alertErr := w.replicationOutcome(ctx, p, err); alertErr != nil {
-		return alertErr
+	if !p.Scheduled {
+		if alertErr := w.replicationOutcome(ctx, p, err); alertErr != nil {
+			return alertErr
+		}
 	}
 	return err
 }

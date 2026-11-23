@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/floatlab/floatlab-core/internal/ipam"
 	"github.com/floatlab/floatlab-core/internal/orchestrator"
 	"github.com/floatlab/floatlab-core/internal/worker"
@@ -333,15 +332,7 @@ func (s *Server) acceptStackMove(ctx context.Context, move stackMove) error {
 	if _, err := s.hosts.Execute(ctx, move.Destination, "compose.up", ipc.ComposeUpPayload{StackID: stack.ID, DatasetPath: stack.ZFSDataset, ComposeFile: runtime}); err != nil {
 		return err
 	}
-	completed := map[string]bool{}
-	for _, service := range spec.Project.Services {
-		for name, dependency := range service.DependsOn {
-			if dependency.Condition == types.ServiceConditionCompletedSuccessfully {
-				completed[name] = true
-			}
-		}
-	}
-	if err := worker.WaitHealthy(ctx, s.hosts, move.Destination, stack.ID, spec.HealthTimeout, completed); err != nil {
+	if err := worker.WaitHealthy(ctx, s.hosts, move.Destination, stack.ID, spec.HealthTimeout, spec.OneShotServices); err != nil {
 		return err
 	}
 	if err := s.reverseMoveBackups(ctx, move, &stack, spec); err != nil {

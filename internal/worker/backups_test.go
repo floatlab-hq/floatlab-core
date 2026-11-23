@@ -9,12 +9,76 @@ import (
 	"github.com/floatlab/floatlab-core/pkg/hostclient"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
+	"github.com/floatlab/floatlab-core/pkg/store"
 	"go.uber.org/zap"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestVerifiedRecoveryPointCannotMoveBackwards(t *testing.T) {
+	ctx := t.Context()
+	db := testdb.Start(t)
+	if err := rqlite.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.NewStore(db)
+	p := ReplTriggerPayload{StackID: "app", Dataset: "floatlab/app/data", NodeID: "primary", DestNodeID: "backup", Generation: 1}
+	if err := cfg.PutBackupTarget(ctx, config.BackupTarget{StackID: p.StackID, Dataset: p.Dataset, SourceNodeID: p.NodeID, NodeID: p.DestNodeID, Schedule: "h/8"}); err != nil {
+		t.Fatal(err)
+	}
+	w := Worker{db: db}
+	for _, result := range []store.SendResult{
+		{Snapshot: "fl-000001", GUID: "latest", SnapshotCreatedUnix: 100},
+		{Snapshot: "fl-000002", GUID: "older", SnapshotCreatedUnix: 90},
+		{Snapshot: "fl-000003", SnapshotCreatedUnix: 300},
+	} {
+		if err := w.saveRecoveryPoint(ctx, p, result); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT snapshot,guid,snapshot_time FROM monitoring_recovery_points`})
+	if err != nil || len(rows.Values) != 1 || rows.Values[0][0] != "fl-000001" || rows.Values[0][1] != "latest" || rows.Values[0][2] != float64(100) {
+		t.Fatalf("recovery point advanced without newer verified source data: %v %v", rows, err)
+	}
+}
+
+func TestScheduledReplicationWaitsForSnapshotBeforeRecordingStart(t *testing.T) {
+	ctx := t.Context()
+	db := testdb.Start(t)
+	if err := rqlite.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	w := New(db, nil, nil, nil, zap.NewNop())
+	if err := EnqueueTask(ctx, db, "transfer", TaskReplTrigger, "app", ReplTriggerPayload{SnapshotTaskID: "snapshot", Scheduled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	statement := rqlite.Statement{SQL: `SELECT state,started_at,attempts FROM tasks WHERE id='transfer'`}
+	rows, err := db.QueryStrong(ctx, statement)
+	if err != nil || rows.Values[0][0] != "pending" || rows.Values[0][1] != nil || rows.Values[0][2] != float64(0) {
+		t.Fatalf("transfer waiting on snapshot was marked started: %v %v", rows, err)
+	}
+	if err := EnqueueTask(ctx, db, "snapshot", TaskSnapshotCreate, "app", SnapshotCreatePayload{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Execute(ctx, []rqlite.Statement{{SQL: `UPDATE tasks SET state='failed' WHERE id='snapshot'`}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = db.QueryStrong(ctx, statement)
+	if err != nil || rows.Values[0][0] != "failed" || rows.Values[0][2] != float64(1) {
+		t.Fatalf("failed prerequisite retried: %v %v", rows, err)
+	}
+}
 
 func TestReplicationRequiresSuccessfulSnapshotCreation(t *testing.T) {
 	ctx := context.Background()

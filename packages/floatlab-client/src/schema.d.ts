@@ -1248,11 +1248,31 @@ export interface paths {
         };
         /** Get an alert rule by ID */
         get: operations["getAlertRule"];
-        /** Update an alert rule */
+        /**
+         * Update an alert rule
+         * @description Built-in rules support overrides for their effective thresholds, durations, and enabled state.
+         */
         put: operations["updateAlertRule"];
         post?: never;
-        /** Delete an alert rule */
+        /** Delete a custom alert rule */
         delete: operations["deleteAlertRule"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/alert-rules/{id}/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reset a built-in alert rule to its shipped settings */
+        post: operations["resetAlertRule"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2161,8 +2181,11 @@ export interface components {
             name: string;
             image: string;
             status: components["schemas"]["ContainerStatus"];
-            /** @enum {string} */
-            health?: "healthy" | "unhealthy" | "starting" | "none";
+            /**
+             * @description Result of the configured container healthcheck. A running container can have no healthcheck or an unknown result.
+             * @enum {string}
+             */
+            health?: "healthy" | "unhealthy" | "starting" | "none" | "unknown";
             node_id: string;
             /** Format: uuid */
             stack_id: string;
@@ -2582,10 +2605,11 @@ export interface components {
         /** @enum {string} */
         AlertSeverity: "info" | "warning" | "critical";
         AlertRule: {
-            /** Format: uuid */
+            /** @description Stable catalogue ID for a built-in rule or UUID for a custom rule. */
             id: string;
             /** @example High CPU */
             name: string;
+            /** @description Filtered MetricsQL predicate for metric rules. Native built-in rules describe their condition in plain text. */
             condition: components["schemas"]["AlertRuleCondition"];
             severity: components["schemas"]["AlertSeverity"];
             /**
@@ -2603,6 +2627,8 @@ export interface components {
              * @example 5m
              */
             for_duration?: string;
+            /** @description Duration of fresh breach evidence for a built-in rule's critical band. */
+            critical_for_duration?: string;
             /** @description MetricsQL query returning source observation Unix timestamps with the same resource labels. Required for enabled rules; derived queries must return the oldest required source timestamp. */
             freshness_query?: string;
             /**
@@ -2626,8 +2652,18 @@ export interface components {
             };
             /** @default true */
             enabled: boolean;
+            /** @description True for rules shipped with FloatLab. */
+            built_in?: boolean;
+            /** @description Whether local settings override the shipped rule. */
+            overridden?: boolean;
+            /** @description Effective numeric thresholds supported by a built-in rule. */
+            thresholds?: {
+                [key: string]: number;
+            };
+            /** @description Unit for a metric rule's warning, critical, and recovery thresholds. */
+            threshold_unit?: string;
             /** Format: date-time */
-            created_at: string;
+            created_at?: string;
             /** Format: date-time */
             updated_at?: string;
             /** @description Persisted per-resource evaluation status, including unknown and query/validation errors. */
@@ -2636,13 +2672,17 @@ export interface components {
                     [key: string]: string;
                 } | null;
                 /** @enum {string} */
-                state?: "inactive" | "pending" | "firing" | "unknown" | "resolved";
+                state?: "inactive" | "pending" | "firing" | "unknown" | "resolved" | "paused" | "disabled" | "unsupported";
                 observed?: number | null;
                 /** Format: date-time */
                 observed_at?: string | null;
                 /** Format: date-time */
                 evaluated_at?: string | null;
                 error?: string;
+                reason?: string | null;
+                evidence?: {
+                    [key: string]: unknown;
+                } | null;
             }[];
         };
         AlertRuleCreate: {
@@ -2683,6 +2723,12 @@ export interface components {
             condition?: components["schemas"]["AlertRuleCondition"];
             severity?: components["schemas"]["AlertSeverity"];
             for_duration?: string;
+            /** @description Critical band duration override for a built-in rule. */
+            critical_for_duration?: string;
+            /** @description Named numeric overrides for a built-in rule. Unspecified settings keep their effective values. */
+            thresholds?: {
+                [key: string]: number;
+            };
             /** @description MetricsQL query returning source observation Unix timestamps with the same resource labels. Required for enabled rules; derived queries must return the oldest required source timestamp. */
             freshness_query?: string;
             /**
@@ -2710,7 +2756,7 @@ export interface components {
         Alert: {
             /** Format: uuid */
             id: string;
-            /** Format: uuid */
+            /** @description Stable catalogue ID for a built-in rule or UUID for a custom rule. */
             rule_id: string;
             /** Format: uuid */
             stack_id?: string | null;
@@ -2734,7 +2780,7 @@ export interface components {
             updated_at?: string | null;
             resolution_reason?: string | null;
             /** @enum {string|null} */
-            evaluation_state?: "inactive" | "pending" | "firing" | "unknown" | "resolved" | null;
+            evaluation_state?: "inactive" | "pending" | "firing" | "unknown" | "resolved" | "paused" | null;
             /** @description Producer incident kind. */
             kind?: string;
             /** @description Exact resource of the currently open monitoring incident; null when unavailable. */
@@ -3110,6 +3156,13 @@ export interface components {
                 snapshot: string;
             }[];
         };
+        /** @description Per-destination deadlines. Omitted or zero values inherit the corresponding built-in alert rule setting. Set an empty object to clear the previous overrides. */
+        ProtectionMonitoringPolicy: {
+            start_grace_seconds?: number;
+            completion_budget_seconds?: number;
+            warning_age_seconds?: number;
+            max_age_seconds?: number;
+        };
         BackupTarget: {
             stack_id: string;
             dataset: string;
@@ -3119,6 +3172,7 @@ export interface components {
             schedule: string;
             /** @description Source retention policy, independent from destination retention. */
             local_policy: string;
+            monitoring_policy?: components["schemas"]["ProtectionMonitoringPolicy"];
             enabled: boolean;
             cleanup_pending: boolean;
             /**
@@ -3133,6 +3187,7 @@ export interface components {
             node_id: string;
             /** @example h/24 d/28 */
             schedule: string;
+            monitoring_policy?: components["schemas"]["ProtectionMonitoringPolicy"];
         };
         ZfsFault: {
             /** Format: uuid */
@@ -5845,6 +5900,46 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Built-in rules can be disabled or reset. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    resetAlertRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Built-in rule with local overrides cleared. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertRule"];
+                };
+            };
+            /** @description Built-in rule not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
             };
         };
     };

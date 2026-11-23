@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -13,6 +14,7 @@ import (
 	"github.com/floatlab/floatlab-core/pkg/alerts"
 	"github.com/floatlab/floatlab-core/pkg/compose"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
+	"github.com/floatlab/floatlab-core/pkg/run"
 	"go.uber.org/zap"
 )
 
@@ -23,9 +25,16 @@ func (s *Server) runAlertEvaluator(ctx context.Context) {
 	for {
 		if evaluator.IsLeader() {
 			// Each query is bounded separately so a slow pass cannot starve later rules.
+			now := time.Now().UTC()
 			rules, err := s.alertRules(ctx)
 			if err == nil {
-				err = evaluator.Tick(ctx, rules, time.Now().UTC())
+				err = evaluator.Tick(ctx, rules, now)
+			}
+			if evaluator.IsLeader() {
+				err = errors.Join(err, s.evaluateProtection(ctx, now))
+			}
+			if evaluator.IsLeader() {
+				err = errors.Join(err, s.evaluateOperationFailures(ctx, now))
 			}
 			if err != nil && ctx.Err() == nil {
 				s.log.Warn("alert evaluation failed", zap.Error(err))
@@ -67,6 +76,10 @@ func (s *Server) alertRules(ctx context.Context) ([]alerts.Rule, error) {
 		}
 		rules = append(rules, rule)
 	}
+	activeNodes, pausedStacks, oneShots, err := s.workloadAlertResources(ctx)
+	if err != nil {
+		return nil, err
+	}
 	rows, err = s.db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT r.id,r.name,r.metric,COALESCE(r.selector,''),r.comparator,r.threshold,r.duration,r.severity,r.message,r.stack_id,r.active,s.zfs_dataset,COALESCE(rt.active_node_id,s.primary_node_id),s.compose_yaml,s.name FROM stack_alert_rules r JOIN stacks s ON s.id=r.stack_id LEFT JOIN stack_runtime rt ON rt.stack_id=s.id WHERE rt.deleted_at IS NULL`})
 	if err != nil {
 		return nil, err
@@ -79,6 +92,10 @@ func (s *Server) alertRules(ctx context.Context) ([]alerts.Rule, error) {
 			rule.For = -1
 		}
 		metric, selector := str(row[2]), str(row[3])
+		if strings.HasPrefix(metric, "container_") {
+			rule.Paused = pausedStacks[rule.StackID]
+			rule.ExcludedServices = oneShots
+		}
 		dataset := str(row[11])
 		if strings.HasPrefix(metric, "managed_volume_") {
 			var err error
@@ -106,7 +123,53 @@ func (s *Server) alertRules(ctx context.Context) ([]alerts.Rule, error) {
 		rule.RecoveryCondition = "(" + query + ") " + inverse[op] + " " + threshold
 		rules = append(rules, rule)
 	}
+	builtIns, err := s.metricBuiltInAlerts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, builtIn := range builtIns {
+		rule := builtIn.metricRule()
+		if builtIn.Workload {
+			rule.ActiveNodes, rule.PausedStacks, rule.ExcludedServices = activeNodes, pausedStacks, oneShots
+		}
+		rules = append(rules, rule)
+	}
 	return rules, nil
+}
+
+func (s *Server) workloadAlertResources(ctx context.Context) (map[string]string, map[string]bool, map[string]map[string]int, error) {
+	rows, err := s.db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT s.id,COALESCE(rt.active_node_id,s.primary_node_id),s.compose_yaml
+		FROM stacks s LEFT JOIN stack_runtime rt ON rt.stack_id=s.id WHERE rt.deleted_at IS NULL`})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	activeNodes := make(map[string]string, len(rows.Values))
+	paused := map[string]bool{}
+	oneShots := map[string]map[string]int{}
+	for _, row := range rows.Values {
+		stackID, nodeID, source := str(row[0]), str(row[1]), str(row[2])
+		activeNodes[stackID] = nodeID
+		if s.raft != nil {
+			if instance, ok := s.raft.FSM().State(stackID); ok {
+				paused[stackID] = instance.State == run.StateIdle || instance.State == run.StateStopping
+				if instance.NodeID != "" {
+					activeNodes[stackID] = instance.NodeID
+				}
+			}
+		}
+		if strings.Contains(source, "service_completed_successfully") || strings.Contains(source, "x-fl-one-shot") {
+			services, err := compose.ReadOneShotServices(source)
+			if err != nil {
+				activeNodes[stackID] = ""
+				if s.log != nil {
+					s.log.Warn("built-in alert workload policy unavailable", zap.String("stack_id", stackID), zap.Error(err))
+				}
+				continue
+			}
+			oneShots[stackID] = services
+		}
+	}
+	return activeNodes, paused, oneShots, nil
 }
 
 func composeAlertQuery(metric, selector, stackID, nodeID, dataset string) (string, string, error) {

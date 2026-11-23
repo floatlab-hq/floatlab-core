@@ -87,11 +87,29 @@ rule in both systems. Both producers use the shared monitoring incident store;
 webhook identity includes resource labels (excluding severity), and recurrence
 after recovery creates a new incident rather than overwriting history.
 
-This change installs the evaluator and existing-rule adapters, not the proposed
-built-in catalogue or new host/SMART/ZFS/protection collectors. Setup alerts,
-notification delivery endpoints, incident maintenance/inhibition policies and
-automatic severity bands remain separate work. A rule's configured severity can
-be changed without replacing its active incident.
+## Built-in rules
+
+The management service ships a static catalogue backed by available collectors.
+Built-in rules have stable names such as `service.memory.high`. The rule list shows
+their effective thresholds and whether local overrides are present. Use
+`alert-rules edit service.memory.high '{"thresholds":{"warning":91}}'` to
+override a threshold, `alert-rules disable service.memory.high` to disable it,
+and `alert-rules reset service.memory.high` to restore the shipped settings.
+Editing one setting preserves the rest of the rule. Built-ins can be disabled
+or reset and remain in the catalogue.
+
+Metric rules with warning and critical bands evaluate both from the same fresh
+observation. A severity change retains the active incident. Workload health
+checks pause on an intentional stack stop and require a new observation when
+the workload resumes.
+
+Protection uses recorded UTC scheduled occurrences, separately scoped to each
+destination. Installation-level deadlines come from the built-in rule thresholds.
+A backup target's optional `monitoring_policy` can supply start grace, completion
+budget, warning point age, and maximum point age in seconds. Set it to an empty
+object to restore inheritance. Age checks become eligible when the effective age
+limits are configured. A transfer must verify the received snapshot GUID before
+its source creation time can advance the known recovery point.
 
 See [the rule catalogue](../../internal/control/ALERT_RULES.md) for the broader
 requirements and proposed defaults.

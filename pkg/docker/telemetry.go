@@ -56,6 +56,7 @@ func (c *Client) collectTelemetry(ctx context.Context, nodeID, logsURL, metricsU
 		if err != nil || inspected.Container.Config == nil {
 			continue
 		}
+		service, replica := item.Labels["com.docker.compose.service"], item.Labels["com.docker.compose.container-number"]
 		if item.State == container.StateRunning {
 			sample, err := c.dc.ContainerStats(ctx, item.ID, dockerclient.ContainerStatsOptions{})
 			if err == nil {
@@ -68,17 +69,29 @@ func (c *Client) collectTelemetry(ctx context.Context, nodeID, logsURL, metricsU
 					if inspected.Container.HostConfig != nil && inspected.Container.HostConfig.Memory > 0 {
 						stats.MemoryStats.Limit = uint64(inspected.Container.HostConfig.Memory)
 					}
-					err = pushMetrics(ctx, client, metricsURL, dockerMetrics(stats, stackID, nodeID, item.Labels["com.docker.compose.service"], item.Labels["com.docker.compose.container-number"]))
+					err = pushMetrics(ctx, client, metricsURL, dockerMetrics(stats, stackID, nodeID, service, replica))
 				}
 			}
 			if err != nil {
 				log.Warn("telemetry: container metrics", zap.String("container", item.ID), zap.Error(err))
 			}
 		}
+		state := inspected.Container.State
+		var observed strings.Builder
+		labels := containerServiceLabels(stackID, nodeID, service, replica)
 		// shortcut: Docker's lifetime restart count resets on replacement; use persisted events for restart-window rules.
-		err = pushMetrics(ctx, client, metricsURL, fmt.Sprintf("container_restart_count{stack_id=%s,node_id=%s,service=%s,replica=%s} %d\n", strconv.Quote(stackID), strconv.Quote(nodeID), strconv.Quote(item.Labels["com.docker.compose.service"]), strconv.Quote(item.Labels["com.docker.compose.container-number"]), inspected.Container.RestartCount))
+		fmt.Fprintf(&observed, "container_restart_count%s %d\n", labels, inspected.Container.RestartCount)
+		if state != nil && state.Status == container.StateRunning && !state.Restarting && state.Health != nil {
+			switch state.Health.Status {
+			case "healthy":
+				fmt.Fprintf(&observed, "container_health_unhealthy%s 0\n", labels)
+			case "unhealthy":
+				fmt.Fprintf(&observed, "container_health_unhealthy%s 1\n", labels)
+			}
+		}
+		err = pushMetrics(ctx, client, metricsURL, observed.String())
 		if err != nil {
-			log.Warn("telemetry: restart count", zap.Error(err))
+			log.Warn("telemetry: container state", zap.Error(err))
 		}
 		since := checkpoints[item.ID]
 		if since.IsZero() {
@@ -139,6 +152,17 @@ func dockerMetrics(stats container.StatsResponse, stackID, nodeID, service, repl
 	metric("container_cpu_usage_seconds_total", float64(stats.CPUStats.CPUUsage.TotalUsage)/1e9)
 	metric("container_memory_usage_bytes", float64(stats.MemoryStats.Usage))
 	metric("container_memory_limit_bytes", float64(stats.MemoryStats.Limit))
+	if stats.MemoryStats.Limit > 0 {
+		labels := containerServiceLabels(stackID, nodeID, service, replica)
+		fmt.Fprintf(&body, "container_memory_enforced_limit_bytes%s %d\n", labels, stats.MemoryStats.Limit)
+		inactive, ok := stats.MemoryStats.Stats["total_inactive_file"] // cgroup v1
+		if !ok {
+			inactive, ok = stats.MemoryStats.Stats["inactive_file"] // cgroup v2
+		}
+		if ok && inactive <= stats.MemoryStats.Usage {
+			fmt.Fprintf(&body, "container_memory_working_set_bytes%s %d\n", labels, stats.MemoryStats.Usage-inactive)
+		}
+	}
 	var rx, tx uint64
 	for _, network := range stats.Networks {
 		rx += network.RxBytes
@@ -153,6 +177,10 @@ func dockerMetrics(stats container.StatsResponse, stackID, nodeID, service, repl
 		fmt.Fprintf(&body, "container_blkio_device_usage_total{stack_id=%s,container_id=%s,node_id=%s,op=%s,device=%s} %d\n", strconv.Quote(stackID), strconv.Quote(stats.ID), strconv.Quote(nodeID), strconv.Quote(entry.Op), strconv.Quote(fmt.Sprintf("%d:%d", entry.Major, entry.Minor)), entry.Value)
 	}
 	return body.String()
+}
+
+func containerServiceLabels(stackID, nodeID, service, replica string) string {
+	return fmt.Sprintf(`{stack_id=%s,node_id=%s,service=%s,replica=%s}`, strconv.Quote(stackID), strconv.Quote(nodeID), strconv.Quote(service), strconv.Quote(replica))
 }
 
 func pushMetrics(ctx context.Context, client *http.Client, baseURL, body string) error {

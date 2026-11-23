@@ -28,6 +28,7 @@ func registerConfigRoutes(r chi.Router, s *Server) {
 		r.Get("/alert-rules/{id}", s.handleAlertRules)
 		r.Put("/alert-rules/{id}", s.labMutation(func(target *Server) http.HandlerFunc { return target.handleAlertRules }))
 		r.Delete("/alert-rules/{id}", s.labMutation(func(target *Server) http.HandlerFunc { return target.handleAlertRules }))
+		r.Post("/alert-rules/{id}/reset", s.labMutation(func(target *Server) http.HandlerFunc { return target.handleBuiltInAlertReset }))
 		r.Get("/alerts", s.handleAlerts)
 		r.Get("/alerts/{id}", s.handleAlerts)
 		r.Delete("/alerts/{id}", s.handleDeleteAlert)
@@ -164,8 +165,10 @@ func (s *Server) handleNetworks(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+const alertRuleEvaluations = `SELECT json_group_array(json_object('labels',json_extract(state_json,'$.Labels'),'state',COALESCE(json_extract(state_json,'$.Status'),'unknown'),'observed',json_extract(state_json,'$.Value'),'observed_at',json_extract(state_json,'$.LastObserved'),'evaluated_at',json_extract(state_json,'$.LastEvaluated'),'error',COALESCE(json_extract(state_json,'$.Error'),''))) FROM alert_evaluations WHERE rule_id=`
+
 const ruleProjection = `SELECT id,name,condition,severity,stack_id,node_id,for_duration,recovery_condition,recovery_duration,max_sample_age,freshness_query,annotations,enabled,created_at,updated_at,
- (SELECT json_group_array(json_object('labels',json_extract(state_json,'$.Labels'),'state',COALESCE(json_extract(state_json,'$.Status'),'unknown'),'observed',json_extract(state_json,'$.Value'),'observed_at',json_extract(state_json,'$.LastObserved'),'evaluated_at',json_extract(state_json,'$.LastEvaluated'),'error',COALESCE(json_extract(state_json,'$.Error'),''))) FROM alert_evaluations WHERE rule_id=alert_rules.id) AS evaluations FROM alert_rules`
+ (` + alertRuleEvaluations + `alert_rules.id) AS evaluations FROM alert_rules`
 
 func normalizeRule(row map[string]interface{}) {
 	row["enabled"] = number(row["enabled"]) != 0
@@ -174,19 +177,26 @@ func normalizeRule(row map[string]interface{}) {
 		_ = json.Unmarshal([]byte(value), &annotations)
 	}
 	row["annotations"] = annotations
+	row["evaluations"] = ruleEvaluations(row["evaluations"])
+}
+
+func ruleEvaluations(raw interface{}) []map[string]interface{} {
 	evaluations := []map[string]interface{}{}
-	if value, ok := row["evaluations"].(string); ok {
+	if value, ok := raw.(string); ok {
 		_ = json.Unmarshal([]byte(value), &evaluations)
 	}
-	row["evaluations"] = evaluations
+	return evaluations
 }
 
 func (s *Server) handleAlertRules(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	builtIn, isBuiltIn := builtInAlertDefault(id)
 	switch r.Method {
 	case http.MethodGet:
 		query := ruleProjection + " WHERE 1=1"
 		args := []interface{}{}
+		scoped := r.URL.Query().Get("stack_id") != "" || r.URL.Query().Get("node_id") != ""
+		var enabled *bool
 		if id != "" {
 			query += " AND id=?"
 			args = append(args, id)
@@ -201,6 +211,7 @@ func (s *Server) handleAlertRules(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 					filter = b
+					enabled = &b
 				}
 				query += " AND " + field + "=?"
 				args = append(args, filter)
@@ -213,6 +224,18 @@ func (s *Server) handleAlertRules(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, row := range rows {
 			normalizeRule(row)
+		}
+		if !scoped && (id == "" || isBuiltIn) {
+			builtIns, err := s.builtInAlertObjects(r, id)
+			if err != nil {
+				writeError(w, 500, err.Error())
+				return
+			}
+			for _, row := range builtIns {
+				if enabled == nil || row["enabled"] == *enabled {
+					rows = append(rows, row)
+				}
+			}
 		}
 		if id != "" {
 			if len(rows) == 0 {
@@ -240,6 +263,18 @@ func (s *Server) handleAlertRules(w http.ResponseWriter, r *http.Request) {
 		}
 		var input map[string]json.RawMessage
 		if !decodeBody(w, r, &input) {
+			return
+		}
+		if isBuiltIn && r.Method == http.MethodPut {
+			s.handleBuiltInAlertUpdate(w, r, builtIn, input)
+			return
+		}
+		if _, hasThresholds := input["thresholds"]; hasThresholds {
+			writeError(w, 400, "numeric thresholds are only supported for built-in rules")
+			return
+		}
+		if _, hasCriticalDuration := input["critical_for_duration"]; hasCriticalDuration {
+			writeError(w, 400, "critical_for_duration is only supported for built-in rules")
 			return
 		}
 		raw, _ := json.Marshal(input)
@@ -341,6 +376,10 @@ func (s *Server) handleAlertRules(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, status, map[string]interface{}{"id": id, "name": body.Name, "condition": body.Condition, "severity": body.Severity, "stack_id": body.StackID, "node_id": body.NodeID, "for_duration": body.Duration, "recovery_condition": body.RecoveryCondition, "recovery_duration": body.RecoveryDuration, "max_sample_age": body.MaxSampleAge, "freshness_query": body.FreshnessQuery, "annotations": body.Annotations, "enabled": enabled, "created_at": created, "updated_at": now})
 	case http.MethodDelete:
+		if isBuiltIn {
+			writeError(w, 409, "built-in rules can be disabled or reset")
+			return
+		}
 		result, err := s.db.Request(r.Context(), rqlite.Statement{SQL: `DELETE FROM alert_rules WHERE id=?`, Params: []interface{}{id}})
 		if err != nil {
 			writeError(w, 500, err.Error())

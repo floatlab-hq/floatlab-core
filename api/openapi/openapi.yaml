@@ -204,6 +204,8 @@ paths:
     $ref: './config.yaml#/paths/~1alert-rules'
   /alert-rules/{id}:
     $ref: './config.yaml#/paths/~1alert-rules~1{id}'
+  /alert-rules/{id}/reset:
+    $ref: './config.yaml#/paths/~1alert-rules~1{id}~1reset'
   /alerts:
     $ref: './config.yaml#/paths/~1alerts'
   /alerts/{id}:

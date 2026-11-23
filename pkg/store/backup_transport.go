@@ -135,7 +135,7 @@ func (b *commandBackup) remoteArgs(action string) []string {
 	return []string{"-T", "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "GlobalKnownHostsFile=/dev/null", "-o", "HostKeyAlias=" + b.r.DestNodeID, "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-o", "UserKnownHostsFile=" + b.r.KnownHostsFile, "-i", b.r.IdentityFile, "-p", strconv.Itoa(b.r.DestPort), "floatlab-replica@" + b.r.DestHost, "zfs-backup", action, b.r.DestDataset, policy}
 }
 func (b *commandBackup) Source(ctx context.Context, dataset string) ([]BackupSnapshot, error) {
-	out, err := run(ctx, "zfs", "list", "-H", "-p", "-t", "snapshot", "-o", "name,guid", "-s", "createtxg", "-d", "1", dataset)
+	out, err := run(ctx, "zfs", "list", "-H", "-p", "-t", "snapshot", "-o", "name,guid,creation", "-s", "createtxg", "-d", "1", dataset)
 	if err != nil {
 		return nil, err
 	}
@@ -152,9 +152,13 @@ func parseBackupSnapshots(out, dataset string) []BackupSnapshot {
 	var snaps []BackupSnapshot
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Fields(line)
-		if len(f) == 2 && strings.HasPrefix(f[0], dataset+"@") {
+		if (len(f) == 2 || len(f) == 3) && strings.HasPrefix(f[0], dataset+"@") {
 			name := strings.TrimPrefix(f[0], dataset+"@")
-			snaps = append(snaps, BackupSnapshot{Name: name, GUID: f[1]})
+			snapshot := BackupSnapshot{Name: name, GUID: f[1]}
+			if len(f) == 3 {
+				snapshot.CreatedUnix, _ = strconv.ParseInt(f[2], 10, 64)
+			}
+			snaps = append(snaps, snapshot)
 		}
 	}
 	return snaps

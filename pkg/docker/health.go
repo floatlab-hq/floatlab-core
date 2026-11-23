@@ -23,7 +23,7 @@ type ContainerSummary struct {
 	ID       string
 	Name     string
 	State    string // running, exited, dead, ...
-	Health   string // healthy, unhealthy, starting, none
+	Health   string // healthy, unhealthy, starting, none, unknown
 	Image    string
 	StackID  string // com.floatlab.stack_id label
 	Service  string // com.docker.compose.service label
@@ -42,11 +42,11 @@ func (c *Client) ListByStack(ctx context.Context, stackID string) ([]ContainerSu
 	out := make([]ContainerSummary, 0, len(result.Items))
 	for _, ct := range result.Items {
 		id := ct.ID
-		health, exitCode := containerDetails(ctx, c, ct.ID, string(ct.State))
+		state, health, exitCode := containerDetails(ctx, c, ct.ID, string(ct.State))
 		out = append(out, ContainerSummary{
 			ID:       id,
 			Name:     firstContainerName(ct.Names),
-			State:    string(ct.State),
+			State:    state,
 			Health:   health,
 			Image:    ct.Image,
 			StackID:  stackID,
@@ -57,19 +57,23 @@ func (c *Client) ListByStack(ctx context.Context, stackID string) ([]ContainerSu
 	return out, nil
 }
 
-func containerDetails(ctx context.Context, c *Client, containerID, state string) (string, int) {
+func containerDetails(ctx context.Context, c *Client, containerID, state string) (string, string, int) {
 	result, err := c.dc.ContainerInspect(ctx, containerID, dockerclient.ContainerInspectOptions{})
-	if err != nil {
-		return "none", 0
+	if err != nil || result.Container.State == nil {
+		return state, "unknown", 0
 	}
-	if result.Container.State == nil {
-		return "none", 0
+	reported := result.Container.State
+	if reported.Status != "" {
+		state = string(reported.Status)
 	}
-	exitCode := result.Container.State.ExitCode
-	if state != "running" || result.Container.State.Health == nil {
-		return "none", exitCode
+	if reported.Restarting {
+		state = "restarting"
 	}
-	return string(result.Container.State.Health.Status), exitCode
+	health := "none"
+	if state == "running" && reported.Health != nil {
+		health = string(reported.Health.Status)
+	}
+	return state, health, reported.ExitCode
 }
 
 func firstContainerName(names []string) string {

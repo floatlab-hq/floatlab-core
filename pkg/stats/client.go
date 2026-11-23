@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -21,6 +22,24 @@ func NewClient(base string) *Client {
 		base: base,
 		hc:   &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// ImportPrometheus writes a batch of Prometheus exposition samples.
+func (c *Client) ImportPrometheus(ctx context.Context, body string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.base, "/")+"/api/v1/import/prometheus", strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "text/plain; version=0.0.4")
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("stats: import Prometheus samples: status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // MetricPoint is a single (timestamp, value) pair.

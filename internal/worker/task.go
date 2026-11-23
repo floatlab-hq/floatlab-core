@@ -78,6 +78,7 @@ type SnapshotDeletePayload struct {
 // ReplTriggerPayload is stored in tasks.payload for repl.trigger tasks.
 type ReplTriggerPayload struct {
 	SnapshotTaskID string `json:"snapshot_task_id,omitempty"`
+	Scheduled      bool   `json:"scheduled,omitempty"`
 	Generation     int64  `json:"generation,omitempty"`
 	TargetRevision string `json:"target_revision,omitempty"`
 	DestNodeID     string `json:"dest_node_id,omitempty"`

@@ -745,6 +745,8 @@ func containerStatus(state string) string {
 	switch state {
 	case "running", "paused", "starting", "error":
 		return state
+	case "restarting":
+		return "starting"
 	case "created", "exited", "dead", "removing":
 		return "stopped"
 	default:

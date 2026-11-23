@@ -258,6 +258,23 @@ components:
       type: string
       enum: [idle, running, complete, failed]
 
+    ProtectionMonitoringPolicy:
+      type: object
+      description: Per-destination deadlines. Omitted or zero values inherit the corresponding built-in alert rule setting. Set an empty object to clear the previous overrides.
+      properties:
+        start_grace_seconds:
+          type: integer
+          minimum: 0
+        completion_budget_seconds:
+          type: integer
+          minimum: 0
+        warning_age_seconds:
+          type: integer
+          minimum: 0
+        max_age_seconds:
+          type: integer
+          minimum: 0
+
     BackupTarget:
       type: object
       required: [stack_id, dataset, node_id, source_node_id, schedule, local_policy, enabled, cleanup_pending, generation]
@@ -276,6 +293,8 @@ components:
         local_policy:
           type: string
           description: Source retention policy, independent from destination retention.
+        monitoring_policy:
+          $ref: '#/components/schemas/ProtectionMonitoringPolicy'
         enabled:
           type: boolean
         cleanup_pending:
@@ -298,6 +317,8 @@ components:
         schedule:
           type: string
           example: h/24 d/28
+        monitoring_policy:
+          $ref: '#/components/schemas/ProtectionMonitoringPolicy'
 
     ReplicationJob:
       type: object

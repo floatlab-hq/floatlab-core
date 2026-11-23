@@ -9,6 +9,33 @@ import (
 	"testing"
 )
 
+func TestOneShotServicesSurviveRuntimeYAML(t *testing.T) {
+	source := `name: example
+services:
+  migration: {image: alpine}
+  setup: {image: alpine, x-fl-one-shot: true, scale: 2}
+  app:
+    image: alpine
+    depends_on:
+      migration: {condition: service_completed_successfully}
+`
+	spec, err := ParseLifecycle(source, "example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.OneShotServices["migration"] != 1 || spec.OneShotServices["setup"] != 2 || spec.OneShotServices["app"] != 0 {
+		t.Fatalf("one-shot services: %v", spec.OneShotServices)
+	}
+	runtime, err := RuntimeYAML(source, "example", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oneShots, err := ReadOneShotServices(runtime)
+	if err != nil || oneShots["migration"] != 1 || oneShots["setup"] != 2 || oneShots["app"] != 0 {
+		t.Fatalf("runtime one-shot services: %v, %v", oneShots, err)
+	}
+}
+
 func TestParseLifecycle(t *testing.T) {
 	source := `name: demo
 x-fl-health-timeout: 30s

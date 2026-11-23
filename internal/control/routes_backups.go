@@ -24,6 +24,12 @@ func (s *Server) handlePutBackupTarget(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid JSON")
 		return
 	}
+	if target.MonitoringPolicy != nil {
+		if err := target.MonitoringPolicy.Validate(); err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+	}
 	target.StackID = chi.URLParam(r, "stack_id")
 	st, err := s.store.GetStack(r.Context(), target.StackID)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/floatlab/floatlab-core/pkg/notify"
@@ -43,11 +44,14 @@ func (e *Evaluator) Tick(ctx context.Context, rules []Rule, now time.Time) error
 		}
 		active[rule.ID] = true
 		var observations map[string]*Observation
-		queryErr := rule.Validate()
-		if queryErr == nil {
-			queryCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			observations, queryErr = e.observe(queryCtx, rule, now)
-			cancel()
+		var queryErr error
+		if !rule.Paused {
+			queryErr = rule.Validate()
+			if queryErr == nil {
+				queryCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+				observations, queryErr = e.observe(queryCtx, rule, now)
+				cancel()
+			}
 		}
 		if queryErr != nil {
 			failures = append(failures, fmt.Errorf("rule %s: %w", rule.ID, queryErr))
@@ -77,10 +81,23 @@ func (e *Evaluator) Tick(ctx context.Context, rules []Rule, now time.Time) error
 			if !e.IsLeader() || ctx.Err() != nil {
 				return errors.Join(append(failures, ctx.Err())...)
 			}
-			next := advance(rule, old.State, observations[id], now)
-			next.Error = ""
-			if queryErr != nil {
-				next.Error = queryErr.Error()
+			if old.Labels != nil && rule.resourceRetired(old.Labels) {
+				if old.Status != "resolved" || old.AlertID != "" {
+					next := old.State
+					next.Status, next.LastEvaluated = "resolved", now
+					if err := save(ctx, e.DB, e.Broker, rule, old, next, now, "resource no longer eligible", e.Observer); err != nil {
+						failures = append(failures, err)
+					}
+				}
+				continue
+			}
+			next, paused := pause(rule, old.State, observations[id], now)
+			if !paused {
+				next = advance(rule, old.State, observations[id], now)
+				next.Error = ""
+				if queryErr != nil {
+					next.Error = queryErr.Error()
+				}
 			}
 			if err := save(ctx, e.DB, e.Broker, rule, old, next, now, "", e.Observer); err != nil {
 				failures = append(failures, err)
@@ -111,10 +128,15 @@ func (e *Evaluator) Tick(ctx context.Context, rules []Rule, now time.Time) error
 
 func (e *Evaluator) observe(ctx context.Context, rule Rule, now time.Time) (map[string]*Observation, error) {
 	observations := map[string]*Observation{}
-	for _, predicate := range []struct {
+	type predicate struct {
 		Query  string
 		Firing bool
-	}{{rule.Condition, true}, {rule.RecoveryCondition, false}} {
+	}
+	predicates := []predicate{{rule.Condition, true}, {rule.RecoveryCondition, false}}
+	if rule.Bands != nil {
+		predicates = []predicate{{rule.Bands.Query, true}}
+	}
+	for _, predicate := range predicates {
 		if predicate.Query == "" {
 			continue
 		}
@@ -123,16 +145,8 @@ func (e *Evaluator) observe(ctx context.Context, rule Rule, now time.Time) (map[
 			return nil, err
 		}
 		for _, sample := range samples {
-			labels := map[string]string{}
-			for k, v := range sample.Labels {
-				if k != "__name__" {
-					labels[k] = v
-				}
-			}
-			if rule.StackID != "" && labels["stack_id"] != rule.StackID {
-				continue
-			}
-			if rule.NodeID != "" && labels["node_id"] != rule.NodeID {
+			labels, ok := rule.resourceLabels(sample.Labels)
+			if !ok {
 				continue
 			}
 			id := instanceID(rule, labels)
@@ -151,13 +165,15 @@ func (e *Evaluator) observe(ctx context.Context, rule Rule, now time.Time) (map[
 		}
 		freshness := map[string]time.Time{}
 		for _, sample := range samples {
-			labels := map[string]string{}
-			for k, v := range sample.Labels {
-				if k != "__name__" {
-					labels[k] = v
-				}
+			labels, ok := rule.resourceLabels(sample.Labels)
+			if !ok {
+				continue
 			}
 			id := instanceID(rule, labels)
+			if _, duplicate := freshness[id]; duplicate || math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
+				freshness[id] = time.Time{}
+				continue
+			}
 			freshness[id] = time.Unix(0, int64(sample.Value*1e9)).UTC()
 		}
 		for id, observation := range observations {
@@ -165,4 +181,27 @@ func (e *Evaluator) observe(ctx context.Context, rule Rule, now time.Time) (map[
 		}
 	}
 	return observations, nil
+}
+
+func (r Rule) resourceLabels(raw map[string]string) (map[string]string, bool) {
+	stackID, nodeID := raw["stack_id"], raw["node_id"]
+	if r.StackID != "" && stackID != r.StackID || r.NodeID != "" && nodeID != r.NodeID {
+		return nil, false
+	}
+	if r.resourceRetired(raw) || r.ActiveNodes != nil && r.ActiveNodes[stackID] != nodeID {
+		return nil, false
+	}
+	labels := map[string]string{}
+	for key, value := range raw {
+		if key != "__name__" {
+			labels[key] = value
+		}
+	}
+	return labels, true
+}
+
+func (r Rule) resourceRetired(labels map[string]string) bool {
+	stackID := labels["stack_id"]
+	_, managed := r.ActiveNodes[stackID]
+	return r.ActiveNodes != nil && !managed || r.ExcludedServices[stackID][labels["service"]] > 0
 }

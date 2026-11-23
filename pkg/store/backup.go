@@ -74,8 +74,9 @@ type ReplicationRequest struct {
 	IdentityFile, KnownHostsFile                                                      string
 }
 type BackupSnapshot struct {
-	Name string
-	GUID string
+	Name        string
+	GUID        string
+	CreatedUnix int64 `json:"created_unix,omitempty"`
 }
 type BackupState struct {
 	Snapshots   []BackupSnapshot
@@ -244,6 +245,9 @@ func ReplicateBackup(ctx context.Context, r ReplicationRequest, t BackupTranspor
 			return nil, fmt.Errorf("destination snapshot GUID verification failed: %s", s.Name)
 		}
 	}
+	result.Snapshot = source[target].Name
+	result.GUID = source[target].GUID
+	result.SnapshotCreatedUnix = source[target].CreatedUnix
 	if err = t.Protect(ctx, r.Snapshot, r.DestNodeID, "hold", true); err != nil {
 		return nil, err
 	}

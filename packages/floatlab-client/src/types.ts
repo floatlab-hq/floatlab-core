@@ -19,6 +19,7 @@ export interface AlertsApi {
   listAlertRules(): Promise<AlertRule[]>;
   getAlertRule(id: string): Promise<AlertRule>;
   updateAlertRule(id: string, changes: AlertRuleUpdate, key: string): Promise<AlertRule>;
+  resetAlertRule(id: string, key: string): Promise<AlertRule>;
 }
 
 export interface DashboardApi {
@@ -146,10 +147,11 @@ export interface LabApi {
   releaseLabPeerAddress(nodeId: string, operationId: string): Promise<Record<string, unknown>>;
 }
 
-export type BackupTarget = { stack_id: string; dataset: string; node_id: string; source_node_id: string; schedule: string; local_policy: string; enabled: boolean; cleanup_pending: boolean; error?: string };
+export type ProtectionMonitoringPolicy = { start_grace_seconds?: number; completion_budget_seconds?: number; warning_age_seconds?: number; max_age_seconds?: number };
+export type BackupTarget = { stack_id: string; dataset: string; node_id: string; source_node_id: string; schedule: string; local_policy: string; enabled: boolean; cleanup_pending: boolean; error?: string; monitoring_policy?: ProtectionMonitoringPolicy };
 export interface BackupApi {
  listBackupTargets(stackId: string): Promise<BackupTarget[]>;
- putBackupTarget(stackId: string, target: {dataset: string; node_id: string; schedule: string}, key: string): Promise<BackupTarget>;
+ putBackupTarget(stackId: string, target: {dataset: string; node_id: string; schedule: string; monitoring_policy?: ProtectionMonitoringPolicy}, key: string): Promise<BackupTarget>;
  removeBackupTarget(stackId: string, target: {dataset: string; node_id: string}, key: string): Promise<unknown>;
  triggerReplication(stackId: string, nodeId: string | undefined, dataset: string | undefined, key: string): Promise<unknown>;
  listReplication(stackId: string): Promise<Record<string, unknown>[]>;

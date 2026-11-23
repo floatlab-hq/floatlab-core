@@ -105,7 +105,7 @@ func request() ReplicationRequest {
 	return ReplicationRequest{Dataset: "tank/workload", Snapshot: "fl-c", SourceNodeID: "source", DestNodeID: "backup", JobID: "job"}
 }
 func snapshots() []BackupSnapshot {
-	return []BackupSnapshot{{"fl-a", "1"}, {"fl-b", "2"}, {"fl-c", "3"}}
+	return []BackupSnapshot{{Name: "fl-a", GUID: "1", CreatedUnix: 100}, {Name: "fl-b", GUID: "2", CreatedUnix: 200}, {Name: "fl-c", GUID: "3", CreatedUnix: 300}}
 }
 func TestReplicationSeedsAllIntermediateSnapshots(t *testing.T) {
 	m := &memoryBackup{source: snapshots()}
@@ -159,7 +159,7 @@ func TestReplicationDoesNotAbortOnTemporaryValidationFailure(t *testing.T) {
 	}
 }
 func TestReplicationPreservesUnrelatedDestinationAndSourceHolds(t *testing.T) {
-	m := &memoryBackup{source: snapshots(), state: BackupState{Snapshots: []BackupSnapshot{{"fl-older", "older"}, {"fl-a", "1"}}}, held: map[string]bool{"fl-a:hold:other": true, "fl-a:hold:backup": true}}
+	m := &memoryBackup{source: snapshots(), state: BackupState{Snapshots: []BackupSnapshot{{Name: "fl-older", GUID: "older"}, {Name: "fl-a", GUID: "1"}}}, held: map[string]bool{"fl-a:hold:other": true, "fl-a:hold:backup": true}}
 	if _, err := ReplicateBackup(context.Background(), request(), m); err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestReplicationPreservesUnrelatedDestinationAndSourceHolds(t *testing.T) {
 	}
 }
 func TestReplicationRejectsMissingCommonBase(t *testing.T) {
-	m := &memoryBackup{source: snapshots(), state: BackupState{Snapshots: []BackupSnapshot{{"fl-other", "other"}}}}
+	m := &memoryBackup{source: snapshots(), state: BackupState{Snapshots: []BackupSnapshot{{Name: "fl-other", GUID: "other"}}}}
 	if _, err := ReplicateBackup(context.Background(), request(), m); err == nil {
 		t.Fatal("expected missing common base failure")
 	}
@@ -290,7 +290,7 @@ func TestReplicationFailedCatchupPinsCompletedSeedBeforePruning(t *testing.T) {
 	if len(kept) != 1 || kept[0].Name != "fl-a" {
 		t.Fatalf("non-resumable failure retained more than its recovery point: %v", kept)
 	}
-	m.source = append(kept, BackupSnapshot{"fl-d", "4"})
+	m.source = append(kept, BackupSnapshot{Name: "fl-d", GUID: "4", CreatedUnix: 400})
 	r := request()
 	r.Snapshot = "fl-d"
 	if _, err := ReplicateBackup(context.Background(), r, m); err != nil {

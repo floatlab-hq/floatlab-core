@@ -301,6 +301,10 @@ func startLab(ctx context.Context, srv *control.Server, labDB, local *rqlite.Cli
 			srv.ServeWorkloadStartupPeer(w, r)
 			return
 		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/health" {
+			srv.Handler().ServeHTTP(w, r)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/v1/storage/backups") || strings.HasPrefix(r.URL.Path, "/api/v1/storage/replication") || strings.HasPrefix(r.URL.Path, "/api/v1/stacks") || strings.HasPrefix(r.URL.Path, "/api/v1/operations/") || strings.HasPrefix(r.URL.Path, "/api/v1/failover/") || (r.Method == http.MethodGet && r.URL.Path == "/api/v1/nodes/"+hostNodeID+"/health") {
 			srv.Handler().ServeHTTP(w, r)
 			return

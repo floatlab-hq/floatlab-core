@@ -1,30 +1,32 @@
 # Management alert rule catalogue
 
-Status: evaluator implemented; built-in catalogue and additional collectors
-remain outstanding. Updated 2026-10-28. See the
-[implemented evaluator](../../pkg/alerts/README.md) for current capabilities and
-configuration. This document defines the rules and
-evaluation behaviours needed by an evaluator running in the management service.
-It does not implement rules or promise that their inputs are already collected.
-Thresholds below are initial product defaults for review, not hardware guarantees.
+The rules below capture the 2026-11-23 decisions and follow
+[RFD-0009](../../rfd/rfd-0009.md). See the
+[evaluator](../../pkg/alerts/README.md) for configuration and the installed
+catalogue. Numerical values are initial product defaults and require calibration
+on representative appliances before enabling rules whose collectors are pending.
 
 ## Current implementation and outstanding tasks
 
-Implemented: leader-owned custom management/Compose rule evaluation,
-resource-specific persistent incidents, recovery/freshness predicates, duration
-continuity, recurrence, and transactional notifications. The appliance scenario
-in `integration/alert_evaluator_test.go` exercises real VictoriaMetrics and
-management restart behavior. Compose CPU, memory, lifetime restart count, and
-managed-volume space adapters are available.
+The first built-in rules cover peer reachability and ICMP quality, Docker health
+and memory limits, terminal management failures, scheduled protection failures,
+and recovery-point age. The evaluator persists resource-specific incidents and
+transactional notifications, tracks fresh evidence and duration continuity, and
+reuses the incident through severity changes. The appliance scenario in
+`integration/alert_evaluator_test.go`
+exercises the custom evaluator against VictoriaMetrics across a management restart.
 
-- [ ] Install the reviewed built-in rule catalogue with calibrated defaults.
+- [ ] Complete the built-in catalogue as its collectors become available. Ship
+  rules with enough fresh observations to establish eligibility and recovery.
 - [ ] Add missing host, SMART, pool/vdev/scrub/resilver, desired-workload, and
   protection collectors with durable destination recovery-point evidence.
 - [ ] Add replacement-aware restart/OOM event windows; Docker's lifetime restart
   count resets when a container is replaced.
-- [ ] Add notification endpoint configuration and external delivery with failure
-  and retry handling. Existing persistence/SSE provides local delivery.
-- [ ] Implement maintenance/inhibition policies and automatic severity bands.
+- [ ] Reconcile protection occurrences that fell entirely within scheduler
+  downtime. Deadline checks currently use occurrences persisted by the scheduler.
+- [ ] Add PWA push and configured external delivery with failure and retry
+  handling. Local history and notifications can ship with the first rules.
+- [ ] Implement broader maintenance and relationship-based inhibition policies.
 - [ ] Define and implement the deferred setup-alert lifecycle below.
 - [ ] Validate the full catalogue acceptance scenarios and external node-down
   monitoring. An evaluator on the appliance cannot notify while that node is down.
@@ -62,6 +64,16 @@ evaluator to avoid duplicate incidents. Management conditions use MetricsQL;
 legacy rules without recovery/freshness expressions stay unknown until updated.
 Compose rules use the implemented numeric-comparator adapter. See the evaluator
 README for compatibility and schema behavior.
+
+### Built-in settings
+
+Built-in rules ship as versioned static configuration with stable rule IDs.
+Operators can override thresholds and enablement locally. Reset removes the
+local overrides and reapplies the currently shipped values. Built-ins remain
+in the catalogue when disabled. Installation defaults apply to eligible resources
+that inherit them, and explicit resource settings take precedence. Use percentage
+thresholds on small filesystems and configure absolute free-space floors where
+they are useful. Temperature rules require reported or configured device limits.
 
 ## Deferred: setup alerts
 
@@ -122,7 +134,7 @@ the next valid evaluation. Defaults apply only to eligible, enabled resources.
 
 | Rule ID | Scope and input | Proposed trigger | Recovery / qualification |
 | --- | --- | --- | --- |
-| `filesystem.space.low` | Node/mount; total and bytes available to writers | W > 85% used OR < 10 GiB available for 10m; C > 95% OR < 1 GiB for 2m | Below warning used threshold minus 5 percentage points AND above warning free floor plus 1 GiB for 5m. Set smaller floors for small filesystems. |
+| `filesystem.space.low` | Node/mount with total and bytes available to writers | W > 85% used for 10m and C > 95% for 2m. A configured free-space floor can independently trigger either band. | Below warning used threshold minus 5 percentage points and above any configured warning free floor plus its recovery margin for 5m. |
 | `filesystem.inodes.low` | Node/mount; available/total inodes | W < 10% for 10m; C < 3% for 2m | > 15% for 5m; only filesystems with meaningful inode limits. |
 | `filesystem.readonly` | Node/mount; expected writable and observed read-only | C for 1m | Writable for 2m; exclude deliberately read-only mounts. |
 | `zfs.pool.capacity.high` | Node/pool GUID; allocated/size and free bytes | W > 80% for 10m; C > 90% for 5m; C immediately if no usable space | < 75% for 5m; capacity is separate from pool health. |
@@ -142,29 +154,42 @@ or successful sender alone does not establish a usable destination copy.
 
 | Rule ID | Input | Proposed trigger | Recovery / qualification |
 | --- | --- | --- | --- |
-| `replication.schedule.missed` | Expected run and actual start/completion | W when due run has not started by due + grace; C when it has not completed by its completion deadline | Matching run completes successfully; distinguish scheduler delay from transfer failure. |
 | `replication.recovery_point.stale` | Timestamp of source snapshot most recently confirmed received at destination | W age > configured warning age; C age > recovery point objective (RPO) | Confirmed received point is within warning age. A newly completed transfer of an old snapshot can remain stale. |
-| `replication.failed` | Unique transfer outcomes and failure class | W on failed attempt; C after 3 consecutive failed attempts or an unrecoverable failure | Successful verified transfer; a running retry does not resolve it. |
+| `replication.failed` | Scheduled occurrences and separately tracked retry attempts | W on the first failed or missed occurrence. Notify on the second consecutive failure. Show missed start and overdue completion as distinct reasons. | A verified successful scheduled occurrence resets the count. Notify on recovery after a previously notified incident. |
 | `replication.stalled` | Running transfer, progress timestamp, runtime | W no progress for 10m; C no progress for 30m OR configured maximum runtime exceeded | Progress resumes for 2 evaluations or transfer succeeds; a failed transfer changes to failure condition. |
 | `replication.unavailable` | Expected target and prerequisites | W target inaccessible for 5m; C no usable failover copy when one is required | Target accessible and required copy verified; retain stale-copy state independently. |
 | `snapshot.schedule.missed` | Per dataset/tier schedule, successful snapshot timestamp | W completion deadline missed; C configured maximum snapshot age exceeded | New valid snapshot satisfies that tier; an enqueue timestamp is insufficient. |
 | `backup.failed_or_stale` | Per backup destination; outcome and last verified recovery point | W failed run or missed completion deadline; C maximum backup age exceeded | Verified successful backup within age limit; replication is not evidence of backup success. |
 | `backup.verification.failed` | Verification/restore-test result and schedule | C failed verification; W verification deadline missed | New successful verification of a usable backup. Enable only where verification is configured. |
 
-A protection policy must supply schedule/timezone, start grace, completion budget,
-warning age and maximum age/RPO. Use actual scheduled occurrences, including
-calendar intervals and daylight-saving changes; never assume every job runs daily.
-For interval policies a suggested start grace is `max(2m, 10% of interval)`;
-completion budget must reflect expected transfer size. Warn-age must be below RPO.
-Never-successful jobs are pending until the initial completion deadline, then
-alert explicitly as “no successful copy”. Initial seeding needs its own bounded
-completion budget; it must not silently mark protection healthy. Disabled policies
-and intentional pauses must be visible as unprotected/paused, not missed runs.
+Use the actual UTC schedule for deadlines, including calendar intervals. Start
+grace defaults to 2m. Set completion budgets and warning/maximum recovery-point
+ages explicitly or through inherited installation settings. Choose the completion
+budget for the expected transfer size, and keep warning age below maximum age.
+Scheduled failure counts use occurrences. Worker retries and manual transfers
+leave that count unchanged. A verified manual transfer can improve recovery-point
+freshness. A confirmed maximum-age breach fires independently of the failure count.
+
+Initial seeding is pending until the configured initial completion deadline. An
+expired deadline with no verified destination point raises an explicit critical
+condition. Disabled or explicitly paused protection is visible and suppresses
+missed-run notifications. Continue to show the last verified recovery point and
+its age. A deliberate workload stop pauses workload health checks and leaves
+scheduled snapshots, backup and replication active on the data owner.
 
 ### Services and containers
 
 Use stable `(stack, service, replica)` identity across container replacement.
 Observe the currently assigned active node, including failover to a backup node.
+
+**Running** means the expected processes are up and observed restart churn is
+below its threshold. **Healthy** additionally requires a successful configured
+healthcheck. Show application health as unverified when the workload has no
+healthcheck. Inspect or probe errors produce unknown observations. Recognize
+`service_completed_successfully` dependencies as one-shot services. Other
+one-shots can declare `x-fl-one-shot: true`, and a zero exit is successful
+completion. An intentional stop pauses all workload health checks until the
+next start. Infrastructure and protection checks continue independently.
 
 | Rule ID | Input | Proposed trigger | Recovery / qualification |
 | --- | --- | --- | --- |
@@ -230,16 +255,26 @@ their collectors or features arrive later.
 
 | Rule ID | Scope/input | Proposed trigger and recovery |
 | --- | --- | --- |
-| `node.unreachable` | Expected online node; management/host heartbeat | W absent for 1m; C 5m; recover after 2m of valid heartbeats. |
+| `node.unreachable` | Ordered pair of current lab members with ICMP and control-plane API observations | W when both probes fail for the first time. Notify on the second consecutive failed check. C after 5m of sustained failure. Either confirmed reachable path can clear the combined failure. |
 | `telemetry.stale` | Node/collector/resource; expected collection cadence | W no fresh observation for max(3 intervals, 2m); C 10m for required fast health collectors; recover after 2 valid observations. Override deadlines for slow SMART/test collectors. |
 | `management.dependency.unavailable` | rqlite, VictoriaMetrics, hostd, Docker and required network/DNS dependencies | W failed probes for 1m; C 5m; recover after 2m successful. Probe only configured dependencies. |
 | `management.quorum.at_risk` | Management Raft and configuration-store membership/leader health, separately | W loss of redundancy for 1m; C no leader/quorum for 1m; recover after stable quorum for 2m. Requires an observer that can still run. |
 | `management.task.stalled` | Pending/running task age, lock/progress and type-specific budget | W budget exceeded; C 2x budget; recover on progress/completion or transition to failed operation. |
-| `management.operation.failed` | Terminal lifecycle/failover/restore outcome | C failed operation; retain incident until acknowledged or superseded by verified successful recovery. Preserve step/error evidence. |
+| `management.operation.failed` | Terminal lifecycle/failover/restore outcome | C on a failed operation. Retain the incident until verified successful recovery supersedes it. Preserve the failure step and error evidence. |
 | `network.pool.exhausted` | Allocatable addresses after reservations | W < 10% free for 5m; C zero; recover > 15% for 5m. |
 | `certificate.expiring` | Managed certificate expiry | W < 30 days; C < 7 days or expired; recover after valid renewal with > 30 days remaining. |
 | `clock.offset.high` | Node clock synchronization/offset | W absolute offset > 5s for 5m; C > 30s for 5m; recover < 1s for 5m. |
 | `notifications.delivery.failed` | Configured delivery sink; attempts and pending age | W 3 failures in 10m; C oldest undelivered critical notification > 10m; recover after delivery succeeds and backlog drains. |
+| `zfs.dataset.unavailable` | Required managed workload dataset and expected mount | Detect a missing dataset or missing required mount. Recover when presence and mount are confirmed. |
+| `protection.destination.space.low` | Configured destination with inspectable capacity | Apply configured capacity bands to the destination independently of transfer outcome. |
+| `protection.cleanup.failed` | Snapshot or destination retention cleanup result | Warn on failed cleanup. Resolve after successful cleanup. Verified transfer receipt remains independently visible. |
+| `platform.update.available` | Installed and latest applicable version per host and component | Check on enrollment and daily. Notify once per newly observed applicable version. Track failed checks separately. |
+
+Every enrolled member probes every other enrolled member and records ICMP loss
+and round-trip time in VictoriaMetrics with both observer and target labels.
+Show API reachability, ICMP, host report freshness, and Docker availability
+independently. A working API path keeps ICMP-only failure from opening a node
+unreachable incident. Missing probe data is unknown.
 
 The evaluator cannot reliably report its own total outage, a dead appliance or a
 database outage through that same failed path. Keep an externally observable
@@ -265,10 +300,13 @@ requirement, not something an in-process rule can guarantee.
    vdev or replication destination as needed, not volatile container IDs, metric
    values or severity. Track first observed, pending/firing times, last evaluated,
    current evidence, recovery time and recurrence separately.
-5. Notify on first firing, severity escalation and recovery. Do not notify every
-   tick. Start with no periodic reminders; notification read/acknowledged/silenced
-   state must not change the measured condition. Use an idempotent durable handoff
-   so persistence succeeds before delivery and retries do not duplicate events.
+5. Notify on first firing, severity escalation and recovery where a notification
+   was previously sent. Host reachability and scheduled replication use their
+   second-failure policy. Confirmed critical faults and recovery-point objective
+   breaches notify when their own trigger fires. Start with no periodic reminders.
+   Acknowledging an incident leaves measured status intact. A failed management
+   operation remains open until verified recovery supersedes it. Persist incident
+   transitions and notification handoff together and deduplicate delivery retries.
 6. Silence/maintenance suppresses delivery while recording evaluations. Planned
    stop/start/failover grace is bounded; it must expire even if work hangs. Never
    suppress unrelated corruption/SMART failures merely because an upgrade runs.

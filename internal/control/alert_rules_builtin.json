@@ -1,0 +1,95 @@
+[
+  {
+    "id": "service.memory.high",
+    "name": "Service memory utilization high",
+    "description": "Check service working set against its enforced memory limit.",
+    "query": "100 * container_memory_working_set_bytes / container_memory_enforced_limit_bytes",
+    "freshness_query": "((timestamp(container_memory_working_set_bytes) <= timestamp(container_memory_enforced_limit_bytes)) or timestamp(container_memory_enforced_limit_bytes)) and timestamp(container_memory_working_set_bytes)",
+    "workload": true,
+    "enabled": true,
+    "unit": "percent",
+    "thresholds": {"warning": 90, "critical": 97, "warning_recovery": 85, "critical_recovery": 92},
+    "for_duration": "5m",
+    "critical_for_duration": "5m",
+    "recovery_duration": "5m"
+  },
+  {
+    "id": "service.unhealthy",
+    "name": "Service healthcheck failing",
+    "description": "Check Docker health for long-running services with a configured healthcheck.",
+    "query": "container_health_unhealthy",
+    "freshness_query": "timestamp(container_health_unhealthy)",
+    "workload": true,
+    "enabled": true,
+    "unit": "ratio",
+    "thresholds": {"warning": 0.5, "critical": 0.5, "warning_recovery": 0.5, "critical_recovery": 0.5},
+    "for_duration": "2m",
+    "critical_for_duration": "5m",
+    "recovery_duration": "2m"
+  },
+  {
+    "id": "node.unreachable",
+    "name": "Lab node unreachable",
+    "description": "Check peer ICMP reachability and the peer control-plane API.",
+    "enabled": true,
+    "thresholds": {"notify_after_failures": 2},
+    "for_duration": "0s",
+    "critical_for_duration": "5m",
+    "recovery_duration": "0s"
+  },
+  {
+    "id": "network.icmp.loss",
+    "name": "Lab link packet loss high",
+    "description": "Check five-minute ICMP loss per observer and destination.",
+    "query": "avg_over_time(fl_lab_peer_icmp_packet_loss_percent[5m]) and (fl_lab_peer_icmp_observed == 1)",
+    "freshness_query": "timestamp(fl_lab_peer_icmp_observed)",
+    "enabled": true,
+    "unit": "percent",
+    "thresholds": {"warning": 20, "critical": 99, "warning_recovery": 10, "critical_recovery": 90},
+    "for_duration": "5m",
+    "critical_for_duration": "5m",
+    "recovery_duration": "5m"
+  },
+  {
+    "id": "network.icmp.latency.high",
+    "name": "Lab link latency high",
+    "description": "Check five-minute ICMP round-trip latency per observer and destination.",
+    "query": "avg_over_time(fl_lab_peer_icmp_rtt_seconds[5m]) and (fl_lab_peer_icmp_reachable == 1)",
+    "freshness_query": "timestamp(fl_lab_peer_icmp_reachable)",
+    "enabled": true,
+    "unit": "seconds",
+    "thresholds": {"warning": 0.2, "critical": 1, "warning_recovery": 0.15, "critical_recovery": 0.75},
+    "for_duration": "5m",
+    "critical_for_duration": "5m",
+    "recovery_duration": "5m"
+  },
+  {
+    "id": "snapshot.schedule.missed",
+    "name": "Scheduled snapshot missed or failed",
+    "description": "Check expected snapshot occurrences against confirmed execution.",
+    "enabled": true,
+    "thresholds": {"start_grace_seconds": 120, "completion_budget_seconds": 0}
+  },
+  {
+    "id": "replication.failed",
+    "name": "Scheduled replication missed or failed",
+    "description": "Check consecutive failed or missed scheduled replication occurrences per destination.",
+    "enabled": true,
+    "thresholds": {"consecutive_failures": 2, "start_grace_seconds": 120, "completion_budget_seconds": 0}
+  },
+  {
+    "id": "replication.recovery_point.stale",
+    "name": "Destination recovery point stale",
+    "description": "Check the source timestamp of the most recent verified destination copy. A zero age threshold inherits the configured policy.",
+    "enabled": true,
+    "thresholds": {"warning_age_seconds": 0, "max_age_seconds": 0}
+  },
+  {
+    "id": "management.operation.failed",
+    "name": "Management operation failed",
+    "description": "Check confirmed lifecycle, failover and restore operation outcomes. A later successful operation of the same kind resolves the incident.",
+    "enabled": true,
+    "severity": "critical",
+    "thresholds": {}
+  }
+]

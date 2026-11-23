@@ -10,6 +10,7 @@ func Migrate(ctx context.Context, c *Client) error {
 		{SQL: `CREATE TABLE IF NOT EXISTS monitoring_observations (id TEXT PRIMARY KEY, check_id TEXT NOT NULL, recorded_at TEXT NOT NULL, result_json TEXT NOT NULL)`},
 		{SQL: `CREATE INDEX IF NOT EXISTS idx_monitoring_observations_check ON monitoring_observations(check_id,recorded_at)`},
 		{SQL: `CREATE TABLE IF NOT EXISTS monitoring_executions (id TEXT PRIMARY KEY, state TEXT NOT NULL, active INTEGER NOT NULL, record_json TEXT NOT NULL)`},
+		{SQL: `CREATE TABLE IF NOT EXISTS monitoring_recovery_points (stack_id TEXT NOT NULL, dataset TEXT NOT NULL, source_id TEXT NOT NULL, destination_id TEXT NOT NULL, generation INTEGER NOT NULL, snapshot TEXT NOT NULL, guid TEXT NOT NULL, snapshot_time INTEGER NOT NULL, PRIMARY KEY(stack_id,dataset,source_id,destination_id,generation))`},
 		{SQL: `CREATE TABLE IF NOT EXISTS monitoring_attempts (id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, record_json TEXT NOT NULL)`},
 		{SQL: `CREATE TABLE IF NOT EXISTS monitoring_deliveries (id TEXT PRIMARY KEY, notification_id TEXT NOT NULL, state TEXT NOT NULL, record_json TEXT NOT NULL)`},
 		{SQL: `CREATE TABLE IF NOT EXISTS monitoring_interventions (id TEXT PRIMARY KEY, incident_id TEXT NOT NULL, state TEXT NOT NULL, record_json TEXT NOT NULL)`},
@@ -39,6 +40,7 @@ func Migrate(ctx context.Context, c *Client) error {
 			attempts    INTEGER NOT NULL DEFAULT 0,
 			created_at  DATETIME NOT NULL,
 			updated_at  DATETIME NOT NULL,
+			started_at  DATETIME,
 			locked_by   TEXT,
 			error       TEXT
 		)`},
@@ -211,5 +213,8 @@ func Migrate(ctx context.Context, c *Client) error {
 		{SQL: `CREATE INDEX IF NOT EXISTS idx_snapshots_stack ON stack_snapshots(stack_id, created_at)`},
 		{SQL: `CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_stack_snapshot ON recovery_points(stack_id,snapshot_id)`},
 	}
-	return c.Execute(ctx, stmts)
+	if err := c.Execute(ctx, stmts); err != nil {
+		return err
+	}
+	return AddColumns(ctx, c, "tasks", []string{"started_at DATETIME"})
 }

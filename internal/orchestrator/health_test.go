@@ -31,7 +31,8 @@ func TestDelayedStopEventDoesNotFailHealthyReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := config.NewStore(db)
-	if err := store.CreateStack(ctx, &config.Stack{ID: "stack", Name: "test", PrimaryNodeID: "node"}); err != nil {
+	source := "name: test\nservices:\n  app: {image: alpine}\n  setup: {image: alpine, x-fl-one-shot: true}\n"
+	if err := store.CreateStack(ctx, &config.Stack{ID: "stack", Name: "test", PrimaryNodeID: "node", ComposeYAML: source}); err != nil {
 		t.Fatal(err)
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -72,15 +73,19 @@ func TestDelayedStopEventDoesNotFailHealthyReplacement(t *testing.T) {
 	}
 	orch := New(store, node, pool, db, zap.NewNop())
 	for _, test := range []struct {
-		name, id, state string
-		want            run.State
+		name, id, state, service, health string
+		exitCode                         int
+		want                             run.State
 	}{
-		{"removed old container", "replacement", "running", run.StateRunningPrimary},
-		{"same container restarted", "old", "running", run.StateRunningPrimary},
-		{"current container exited", "old", "exited", run.StateFailed},
+		{"removed old container", "replacement", "running", "app", "none", 0, run.StateRunningPrimary},
+		{"same container restarted", "old", "running", "app", "none", 0, run.StateRunningPrimary},
+		{"current long-running container exited", "old", "exited", "app", "none", 0, run.StateFailed},
+		{"exit could not be confirmed", "old", "exited", "app", "unknown", 0, run.StateRunningPrimary},
+		{"one-shot completed successfully", "old", "exited", "setup", "none", 0, run.StateRunningPrimary},
+		{"one-shot failed", "old", "exited", "setup", "none", 2, run.StateFailed},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			listing.Store(ipc.DockerListResult{Containers: []ipc.ContainerInfo{{ID: test.id, State: test.state, StackID: "stack"}}})
+			listing.Store(ipc.DockerListResult{Containers: []ipc.ContainerInfo{{ID: test.id, State: test.state, StackID: "stack", Service: test.service, Health: test.health, ExitCode: test.exitCode}}})
 			if err := node.Apply(run.StackStateChanged{StackID: "stack", To: run.StateRunningPrimary, Timestamp: time.Now().UTC()}, time.Second); err != nil {
 				t.Fatal(err)
 			}

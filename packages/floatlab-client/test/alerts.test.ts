@@ -3,15 +3,16 @@ import { CommandEngine, createApiClient, type Alert, type AlertRule, type Alerts
 
 const incident = {id:"alert-one", rule_id:"rule-one", severity:"warning", state:"active", message:"Disk full", created_at:"2026-11-01T00:00:00Z"} as Alert;
 const rule = {id:"rule-one", name:"Disk capacity", condition:"disk > 90", severity:"warning", enabled:true, evaluations:[{state:"firing"}]} as AlertRule;
-function fixture(interactive = false) {
+function fixture(interactive = false, configuredRule = rule) {
   const writes: unknown[][] = [];
   const api = {
     listAlerts: async (state?: string) => [incident].filter(alert => !state || alert.state === state),
     getAlert: async () => incident,
     silenceAlert: async (id: string, until: string, key: string) => {writes.push(["mute",id,until,key]);return {...incident,state:"silenced",silenced_until:until} as Alert;},
-    listAlertRules: async () => [rule],
-    getAlertRule: async () => rule,
-    updateAlertRule: async (id: string, changes: object, key: string) => {writes.push(["rule",id,changes,key]);return {...rule,...changes};},
+    listAlertRules: async () => [configuredRule],
+    getAlertRule: async () => configuredRule,
+    updateAlertRule: async (id: string, changes: object, key: string) => {writes.push(["rule",id,changes,key]);return {...configuredRule,...changes};},
+    resetAlertRule: async (id: string, key: string) => {writes.push(["reset",id,key]);return {...configuredRule,overridden:false};},
   } as FloatLabApi & AlertsApi;
   const runtime: CommandRuntime = {interactive,confirm:async()=>true,editCompose:async()=>undefined,present:async()=>undefined};
   return {api,runtime,writes,engine:new CommandEngine(api,runtime)};
@@ -29,9 +30,11 @@ test("alert transport preserves filters, escaping, changes, and idempotency",asy
   await api.listAlertRules();
   await api.getAlertRule("rule/a");
   await api.updateAlertRule("rule/a",{enabled:false},"rule-key");
+  await api.resetAlertRule("rule/a","reset-key");
   expect(requests.map(request=>request.url)).toEqual([
     "http://host/api/v1/alerts?state=active","http://host/api/v1/alerts/alert%2Fa","http://host/api/v1/alerts/alert%2Fa/silence",
     "http://host/api/v1/alert-rules","http://host/api/v1/alert-rules/rule%2Fa","http://host/api/v1/alert-rules/rule%2Fa",
+    "http://host/api/v1/alert-rules/rule%2Fa/reset",
   ]);
   expect(requests[2]!.init.method).toBe("POST");
   expect(JSON.parse(requests[2]!.init.body as string)).toEqual({until:"2026-11-02T00:00:00Z"});
@@ -39,6 +42,8 @@ test("alert transport preserves filters, escaping, changes, and idempotency",asy
   expect(requests[5]!.init.method).toBe("PUT");
   expect(JSON.parse(requests[5]!.init.body as string)).toEqual({enabled:false});
   expect(new Headers(requests[5]!.init.headers).get("authorization")).toBe("Bearer token");
+  expect(requests[6]!.init.method).toBe("POST");
+  expect(new Headers(requests[6]!.init.headers).get("idempotency-key")).toBe("reset-key");
 });
 
 test("lists alerts and rules with incident identity and evaluation status",async()=>{
@@ -71,9 +76,17 @@ test("edits and enables or disables rules with partial updates",async()=>{
   expect(writes.map(write=>write.slice(0,3))).toEqual([["rule","rule-one",{enabled:false}],["rule","rule-one",{enabled:true}],["rule","rule-one",{condition:"disk > 95",for_duration:"5m"}]]);
 });
 
+test("overrides and resets built-in alert rules",async()=>{
+  const {engine,writes}=fixture(false,{...rule,built_in:true});
+  expect((await engine.dispatch(`alert-rules edit rule-one '{"thresholds":{"warning":91}}'`)).code).toBe(0);
+  expect((await engine.dispatch(`alert-rules edit rule-one '{"condition":"disk > 95"}'`)).code).not.toBe(0);
+  expect((await engine.dispatch("alert-rules reset rule-one")).code).toBe(0);
+  expect(writes).toEqual([["rule","rule-one",{thresholds:{warning:91}},expect.any(String)],["reset","rule-one",expect.any(String)]]);
+});
+
 test("invalid commands, resolved alerts, and cancelled changes never mutate",async()=>{
   const {engine,api,writes}=fixture();
-  for(const command of ["alerts list bogus","alerts mute alert-one","alerts mute missing 1h","alerts mute alert-one 0h","alerts mute alert-one -1h","alerts mute alert-one 1s","alerts mute alert-one 999999999999999999999d","alert-rules edit rule-one nope","alert-rules edit rule-one null","alert-rules edit rule-one '[]'","alert-rules edit rule-one '{}'","alert-rules edit rule-one '{\"id\":\"other\"}'","alert-rules disable missing","alert-rules show rule-one extra","alerts --start"]) expect((await engine.dispatch(command)).code).not.toBe(0);
+  for(const command of ["alerts list bogus","alerts mute alert-one","alerts mute missing 1h","alerts mute alert-one 0h","alerts mute alert-one -1h","alerts mute alert-one 1s","alerts mute alert-one 999999999999999999999d","alert-rules edit rule-one nope","alert-rules edit rule-one null","alert-rules edit rule-one '[]'","alert-rules edit rule-one '{}'","alert-rules edit rule-one '{\"id\":\"other\"}'","alert-rules disable missing","alert-rules reset rule-one","alert-rules show rule-one extra","alerts --start"]) expect((await engine.dispatch(command)).code).not.toBe(0);
   api.listAlerts=async()=>[{...incident,state:"resolved"}];
   expect((await engine.dispatch("alerts mute alert-one 1h")).code).not.toBe(0);
   expect(writes).toEqual([]);
@@ -86,7 +99,7 @@ test("invalid commands, resolved alerts, and cancelled changes never mutate",asy
 test("completes alert actions, states, incident IDs, rules, and mute durations",async()=>{
   const {engine}=fixture();
   expect((await engine.complete("alerts ")).map(choice=>choice.value)).toEqual(["list","show","mute"]);
-  expect((await engine.complete("alert-rules ")).map(choice=>choice.value)).toEqual(["list","show","enable","disable","edit"]);
+  expect((await engine.complete("alert-rules ")).map(choice=>choice.value)).toEqual(["list","show","enable","disable","edit","reset"]);
   expect(await engine.complete("alerts list si")).toEqual([{value:"silenced"}]);
   expect((await engine.complete("alerts mute alert-")).map(choice=>choice.value)).toEqual(["alert-one"]);
   expect((await engine.complete("alert-rules edit rule-")).map(choice=>choice.value)).toEqual(["rule-one"]);

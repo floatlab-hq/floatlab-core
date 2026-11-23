@@ -251,14 +251,21 @@ export class CommandEngine {
     if (!api.listAlertRules || !api.getAlertRule || !api.updateAlertRule) throw new CommandError("Alert rule commands are unavailable in this client");
     const action = args[0] ?? "list";
     if (action === "list" && args.length <= 1) return {kind: "table", columns: ["id", "name", "enabled", "severity", "evaluations", "condition"], rows: (await api.listAlertRules()).map(rule => [rule.id, rule.name, String(rule.enabled ?? true), rule.severity, [...new Set((rule.evaluations ?? []).map(evaluation => evaluation.state))].join(", ") || "not evaluated", rule.condition])};
-    if (!["show", "enable", "disable", "edit"].includes(action) || args.length !== (action === "edit" ? 3 : 2)) throw new CommandError("Usage: alert-rules list | alert-rules show|enable|disable <rule> | alert-rules edit <rule> '<JSON changes>'");
+    if (!["show", "enable", "disable", "edit", "reset"].includes(action) || args.length !== (action === "edit" ? 3 : 2)) throw new CommandError("Usage: alert-rules list | alert-rules show|enable|disable|reset <rule> | alert-rules edit <rule> '<JSON changes>'");
     const rule = exactOne(await api.listAlertRules(), args[1]!, "alert rule");
     if (action === "show") return {kind: "text", text: text(await api.getAlertRule(rule.id))};
+    if (action === "reset") {
+      if (!api.resetAlertRule || !rule.built_in) throw new CommandError("Only built-in alert rules can be reset");
+      if (!await this.confirm(`Reset rule ${rule.name} to its shipped settings?`)) return {kind: "text", text: "Rule change cancelled."};
+      return {kind: "text", text: text(await api.resetAlertRule(rule.id, idempotencyKey()))};
+    }
     let changes: AlertRuleUpdate = {enabled: action === "enable"};
     if (action === "edit") {
       try { changes = JSON.parse(args[2]!); } catch { throw new CommandError("Rule changes must be a JSON object"); }
       if (!changes || typeof changes !== "object" || Array.isArray(changes) || !Object.keys(changes).length) throw new CommandError("Rule changes must be a nonempty JSON object");
-      const fields = ["name", "condition", "severity", "for_duration", "freshness_query", "recovery_condition", "recovery_duration", "max_sample_age", "annotations", "enabled"];
+      const fields = rule.built_in
+        ? ["thresholds", "for_duration", "critical_for_duration", "recovery_duration", "enabled"]
+        : ["name", "condition", "severity", "for_duration", "freshness_query", "recovery_condition", "recovery_duration", "max_sample_age", "annotations", "enabled"];
       if (Object.keys(changes).some(key => !fields.includes(key))) throw new CommandError(`Editable rule fields: ${fields.join(", ")}`);
     }
     if (!await this.confirm(`${action} rule ${rule.name}? Changes: ${JSON.stringify(changes)}`)) return {kind: "text", text: "Rule change cancelled."};

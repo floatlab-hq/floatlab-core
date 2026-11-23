@@ -20,6 +20,11 @@ type Rule struct {
 	For, RecoveryFor, MaxAge                                                                   time.Duration
 	Enabled                                                                                    bool
 	Compose                                                                                    bool
+	Paused                                                                                     bool
+	PausedStacks                                                                               map[string]bool
+	ActiveNodes                                                                                map[string]string
+	ExcludedServices                                                                           map[string]map[string]int
+	Bands                                                                                      *Bands
 }
 
 func (r Rule) Validate() error {
@@ -51,6 +56,8 @@ type State struct {
 	Status                                                   string
 	Error                                                    string
 	PendingSince, RecoverySince, LastObserved, LastEvaluated time.Time
+	ResumeAfter                                              time.Time
+	CriticalPendingSince, CriticalRecoverySince              time.Time
 	AlertID, Severity                                        string
 	Value                                                    *float64
 }
@@ -76,7 +83,11 @@ func instanceID(rule Rule, labels map[string]string) string {
 
 func ruleHash(r Rule) string {
 	// Severity/message changes update the same incident; condition changes reset timers.
-	b, _ := json.Marshal([]interface{}{r.Condition, r.RecoveryCondition, r.FreshnessQuery, r.StackID, r.NodeID, r.For, r.RecoveryFor, r.MaxAge})
+	parts := []interface{}{r.Condition, r.RecoveryCondition, r.FreshnessQuery, r.StackID, r.NodeID, r.For, r.RecoveryFor, r.MaxAge}
+	if r.Bands != nil {
+		parts = append(parts, r.Bands)
+	}
+	b, _ := json.Marshal(parts)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
@@ -87,11 +98,11 @@ func advance(r Rule, old State, observation *Observation, now time.Time) State {
 	next.RuleHash = ruleHash(r)
 	next.LastEvaluated = now
 	if old.RuleHash != next.RuleHash || now.Sub(old.LastEvaluated) > 3*Interval {
-		next.PendingSince, next.RecoverySince = time.Time{}, time.Time{}
+		next.resetTimers()
 	}
-	if observation == nil || observation.At.IsZero() || observation.At.After(now) || now.Sub(observation.At) > r.MaxAge || math.IsNaN(observation.Value) || math.IsInf(observation.Value, 0) || observation.Firing == observation.Recovered {
+	if observation == nil || observation.At.IsZero() || observation.At.Before(old.ResumeAfter) || observation.At.After(now) || now.Sub(observation.At) > r.MaxAge || math.IsNaN(observation.Value) || math.IsInf(observation.Value, 0) || observation.Firing == observation.Recovered {
 		next.Status = "unknown"
-		next.PendingSince, next.RecoverySince = time.Time{}, time.Time{}
+		next.resetTimers()
 		return next
 	}
 	next.Labels = observation.Labels
@@ -100,11 +111,14 @@ func advance(r Rule, old State, observation *Observation, now time.Time) State {
 		return next
 	}
 	if !old.LastObserved.IsZero() && observation.At.Sub(old.LastObserved) > r.MaxAge {
-		next.PendingSince, next.RecoverySince = time.Time{}, time.Time{}
+		next.resetTimers()
 	}
 	next.LastObserved = observation.At
 	value := observation.Value
 	next.Value = &value
+	if r.Bands != nil {
+		return advanceBands(*r.Bands, old, next, value, now)
+	}
 	if observation.Firing {
 		next.RecoverySince = time.Time{}
 		if old.AlertID != "" {

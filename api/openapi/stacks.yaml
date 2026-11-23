@@ -197,7 +197,8 @@ components:
           $ref: '#/components/schemas/ContainerStatus'
         health:
           type: string
-          enum: [healthy, unhealthy, starting, none]
+          enum: [healthy, unhealthy, starting, none, unknown]
+          description: Result of the configured container healthcheck. A running container can have no healthcheck or an unknown result.
         node_id:
           type: string
         stack_id:

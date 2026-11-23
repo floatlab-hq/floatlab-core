@@ -22,13 +22,14 @@ var (
 )
 
 type LifecycleSpec struct {
-	Name          string
-	NetworkPool   string
-	HealthTimeout time.Duration
-	Alerts        []LifecycleAlert
-	Mounts        map[string]Mount
-	HasPorts      bool
-	Project       *types.Project
+	Name            string
+	NetworkPool     string
+	HealthTimeout   time.Duration
+	Alerts          []LifecycleAlert
+	Mounts          map[string]Mount
+	HasPorts        bool
+	Project         *types.Project
+	OneShotServices map[string]int
 }
 
 type LifecycleAlert struct {
@@ -95,6 +96,10 @@ func ParseLifecycleAt(source, requestedName, workingDir string) (*LifecycleSpec,
 	if err := validateAlerts(spec.Alerts); err != nil {
 		return nil, err
 	}
+	spec.OneShotServices, err = oneShotServices(project)
+	if err != nil {
+		return nil, err
+	}
 	for serviceName, service := range project.Services {
 		if service.NetworkMode == "host" {
 			return nil, fmt.Errorf("compose: service %s uses forbidden network_mode host", serviceName)
@@ -120,6 +125,41 @@ func ParseLifecycleAt(source, requestedName, workingDir string) (*LifecycleSpec,
 		}
 	}
 	return spec, nil
+}
+
+// ReadOneShotServices reads the readiness policy from a rendered Compose file.
+func ReadOneShotServices(source string) (map[string]int, error) {
+	if source == "" {
+		return nil, nil
+	}
+	project, err := loadProjectAt(source, "floatlab", "/")
+	if err != nil {
+		return nil, err
+	}
+	return oneShotServices(project)
+}
+
+func oneShotServices(project *types.Project) (map[string]int, error) {
+	oneShots := map[string]int{}
+	for name, service := range project.Services {
+		if raw, present := service.Extensions["x-fl-one-shot"]; present {
+			value, ok := raw.(bool)
+			if !ok {
+				return nil, fmt.Errorf("compose: service %s x-fl-one-shot must be a boolean", name)
+			}
+			if replicas := service.GetScale(); value && replicas > 0 {
+				oneShots[name] = replicas
+			}
+		}
+		for dependencyName, dependency := range service.DependsOn {
+			if target, present := project.Services[dependencyName]; present && dependency.Condition == types.ServiceConditionCompletedSuccessfully {
+				if replicas := target.GetScale(); replicas > 0 {
+					oneShots[dependencyName] = replicas
+				}
+			}
+		}
+	}
+	return oneShots, nil
 }
 
 // RuntimeYAML returns a runtime-only Compose model with managed mountpoints and port bindings.

@@ -77,6 +77,7 @@ export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNe
     listAlertRules: () => send('/alert-rules'),
     getAlertRule: id => send(`/alert-rules/${encodeURIComponent(id)}`),
     updateAlertRule: (id, changes, key) => mutation(`/alert-rules/${encodeURIComponent(id)}`, "PUT", key, changes),
+    resetAlertRule: (id, key) => mutation(`/alert-rules/${encodeURIComponent(id)}/reset`, "POST", key),
     listBackups: values => send(`/storage/backups${query(values)}`),
     getBackupConfig: async stack => {
       let response: Response;

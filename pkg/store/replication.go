@@ -6,9 +6,12 @@ import (
 )
 
 type SendResult struct {
-	JobID      string `json:"job_id"`
-	BytesSent  int64  `json:"bytes_sent"`
-	PruneError string `json:"prune_error,omitempty"`
+	JobID               string `json:"job_id"`
+	BytesSent           int64  `json:"bytes_sent"`
+	PruneError          string `json:"prune_error,omitempty"`
+	Snapshot            string `json:"snapshot,omitempty"`
+	GUID                string `json:"guid,omitempty"`
+	SnapshotCreatedUnix int64  `json:"snapshot_created_unix,omitempty"`
 }
 
 // SendReplication requires stable node identities; callers must use Replicate.

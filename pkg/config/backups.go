@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/floatlab/floatlab-core/pkg/compose"
@@ -14,18 +15,42 @@ import (
 var ErrBackupTargetConflict = errors.New("backup target cannot be configured until removal cleanup finishes")
 
 type BackupTarget struct {
-	Generation     int64  `json:"generation"`
-	Revision       string `json:"revision"`
-	Origin         string `json:"origin,omitempty"`
-	StackID        string `json:"stack_id"`
-	Dataset        string `json:"dataset"`
-	NodeID         string `json:"node_id"`
-	SourceNodeID   string `json:"source_node_id"`
-	Schedule       string `json:"schedule"`
-	LocalPolicy    string `json:"local_policy"`
-	Enabled        bool   `json:"enabled"`
-	CleanupPending bool   `json:"cleanup_pending"`
-	Error          string `json:"error,omitempty"`
+	Generation       int64                       `json:"generation"`
+	Revision         string                      `json:"revision"`
+	Origin           string                      `json:"origin,omitempty"`
+	StackID          string                      `json:"stack_id"`
+	Dataset          string                      `json:"dataset"`
+	NodeID           string                      `json:"node_id"`
+	SourceNodeID     string                      `json:"source_node_id"`
+	Schedule         string                      `json:"schedule"`
+	LocalPolicy      string                      `json:"local_policy"`
+	Enabled          bool                        `json:"enabled"`
+	CleanupPending   bool                        `json:"cleanup_pending"`
+	Error            string                      `json:"error,omitempty"`
+	MonitoringPolicy *ProtectionMonitoringPolicy `json:"monitoring_policy,omitempty"`
+}
+
+// Zero values inherit the installation's alert-rule settings.
+type ProtectionMonitoringPolicy struct {
+	StartGraceSeconds       int64 `json:"start_grace_seconds,omitempty"`
+	CompletionBudgetSeconds int64 `json:"completion_budget_seconds,omitempty"`
+	WarningAgeSeconds       int64 `json:"warning_age_seconds,omitempty"`
+	MaxAgeSeconds           int64 `json:"max_age_seconds,omitempty"`
+}
+
+func (p ProtectionMonitoringPolicy) Validate() error {
+	for _, value := range []int64{p.StartGraceSeconds, p.CompletionBudgetSeconds, p.WarningAgeSeconds, p.MaxAgeSeconds} {
+		if value < 0 || value > int64((1<<63-1)/time.Second) {
+			return errors.New("protection monitoring durations must be nonnegative and fit in a time duration")
+		}
+	}
+	if p.WarningAgeSeconds > 0 && p.MaxAgeSeconds > 0 && p.WarningAgeSeconds >= p.MaxAgeSeconds {
+		return errors.New("warning recovery point age must be less than maximum age")
+	}
+	if p.StartGraceSeconds > 0 && p.CompletionBudgetSeconds > 0 && p.StartGraceSeconds >= p.CompletionBudgetSeconds {
+		return errors.New("protection start grace must be less than the completion budget")
+	}
+	return nil
 }
 
 func MountPolicy(m compose.Mount) string {
@@ -37,7 +62,7 @@ func MountPolicy(m compose.Mount) string {
 }
 
 func (s *Store) BackupTargets(ctx context.Context, stackID string) ([]BackupTarget, error) {
-	query := `SELECT stack_id,dataset,node_id,source_node_id,schedule,local_policy,enabled,cleanup_pending,error,origin,updated_at,generation FROM backup_targets`
+	query := `SELECT stack_id,dataset,node_id,source_node_id,schedule,local_policy,enabled,cleanup_pending,error,origin,updated_at,generation,monitoring_policy FROM backup_targets`
 	var params []interface{}
 	if stackID != "" {
 		query += ` WHERE stack_id=?`
@@ -50,12 +75,29 @@ func (s *Store) BackupTargets(ctx context.Context, stackID string) ([]BackupTarg
 	out := []BackupTarget{}
 	for _, r := range rows.Values {
 		generation, _ := strconv.ParseInt(fmt.Sprint(r[11]), 10, 64)
-		out = append(out, BackupTarget{Generation: generation, Revision: fmt.Sprint(r[10]), Origin: fmt.Sprint(r[9]), StackID: fmt.Sprint(r[0]), Dataset: fmt.Sprint(r[1]), NodeID: fmt.Sprint(r[2]), SourceNodeID: fmt.Sprint(r[3]), Schedule: fmt.Sprint(r[4]), LocalPolicy: fmt.Sprint(r[5]), Enabled: fmt.Sprint(r[6]) == "1", CleanupPending: fmt.Sprint(r[7]) == "1", Error: fmt.Sprint(r[8])})
+		target := BackupTarget{Generation: generation, Revision: fmt.Sprint(r[10]), Origin: fmt.Sprint(r[9]), StackID: fmt.Sprint(r[0]), Dataset: fmt.Sprint(r[1]), NodeID: fmt.Sprint(r[2]), SourceNodeID: fmt.Sprint(r[3]), Schedule: fmt.Sprint(r[4]), LocalPolicy: fmt.Sprint(r[5]), Enabled: fmt.Sprint(r[6]) == "1", CleanupPending: fmt.Sprint(r[7]) == "1", Error: fmt.Sprint(r[8])}
+		if data, ok := r[12].(string); ok && data != "{}" {
+			if err := json.Unmarshal([]byte(data), &target.MonitoringPolicy); err != nil {
+				return nil, fmt.Errorf("config: backup monitoring policy: %w", err)
+			}
+		}
+		out = append(out, target)
 	}
 	return out, nil
 }
 
 func (s *Store) PutBackupTarget(ctx context.Context, t BackupTarget) error {
+	var policy any
+	if t.MonitoringPolicy != nil {
+		if err := t.MonitoringPolicy.Validate(); err != nil {
+			return err
+		}
+		data, err := json.Marshal(t.MonitoringPolicy)
+		if err != nil {
+			return err
+		}
+		policy = string(data)
+	}
 	removed, err := s.db.Query(ctx, rqlite.Statement{SQL: `SELECT node_id FROM removed_backup_nodes WHERE node_id=?`, Params: []interface{}{t.NodeID}})
 	if err != nil {
 		return err
@@ -76,7 +118,14 @@ func (s *Store) PutBackupTarget(ctx context.Context, t BackupTarget) error {
 	if t.Origin == "" {
 		t.Origin = "api"
 	}
-	result, err := s.db.Request(ctx, rqlite.Statement{SQL: `INSERT INTO backup_targets(stack_id,dataset,node_id,source_node_id,schedule,local_policy,updated_at,origin) SELECT ?,?,?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM removed_backup_nodes WHERE node_id=?) ON CONFLICT(stack_id,dataset,node_id) DO UPDATE SET generation=backup_targets.generation+CASE WHEN backup_targets.schedule<>excluded.schedule OR backup_targets.source_node_id<>excluded.source_node_id OR backup_targets.enabled=0 THEN 1 ELSE 0 END,source_node_id=excluded.source_node_id,schedule=excluded.schedule,local_policy=excluded.local_policy,origin=excluded.origin,enabled=1,cleanup_pending=0,error='',updated_at=excluded.updated_at WHERE backup_targets.cleanup_pending=0 AND (backup_targets.source_node_id=excluded.source_node_id OR backup_targets.enabled=0)`, Params: []interface{}{t.StackID, t.Dataset, t.NodeID, t.SourceNodeID, t.Schedule, t.LocalPolicy, time.Now().UTC().Format(time.RFC3339Nano), t.Origin, t.NodeID}})
+	result, err := s.db.Request(ctx, rqlite.Statement{SQL: `INSERT INTO backup_targets(stack_id,dataset,node_id,source_node_id,schedule,local_policy,updated_at,origin,monitoring_policy)
+		SELECT ?,?,?,?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM removed_backup_nodes WHERE node_id=?)
+		ON CONFLICT(stack_id,dataset,node_id) DO UPDATE SET
+		generation=backup_targets.generation+CASE WHEN backup_targets.schedule<>excluded.schedule OR backup_targets.source_node_id<>excluded.source_node_id OR backup_targets.enabled=0 THEN 1 ELSE 0 END,
+		source_node_id=excluded.source_node_id,schedule=excluded.schedule,local_policy=excluded.local_policy,origin=excluded.origin,enabled=1,cleanup_pending=0,error='',
+		updated_at=CASE WHEN backup_targets.schedule<>excluded.schedule OR backup_targets.source_node_id<>excluded.source_node_id OR backup_targets.local_policy<>excluded.local_policy OR backup_targets.origin<>excluded.origin OR backup_targets.enabled=0 THEN excluded.updated_at ELSE backup_targets.updated_at END,
+		monitoring_policy=COALESCE(excluded.monitoring_policy,backup_targets.monitoring_policy)
+		WHERE backup_targets.cleanup_pending=0 AND (backup_targets.source_node_id=excluded.source_node_id OR backup_targets.enabled=0)`, Params: []interface{}{t.StackID, t.Dataset, t.NodeID, t.SourceNodeID, t.Schedule, t.LocalPolicy, time.Now().UTC().Format(time.RFC3339Nano), t.Origin, policy, t.NodeID}})
 	if err != nil {
 		return err
 	}

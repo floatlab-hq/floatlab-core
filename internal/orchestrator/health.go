@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/floatlab/floatlab-core/pkg/compose"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
 	"github.com/floatlab/floatlab-core/pkg/operation"
 	"github.com/floatlab/floatlab-core/pkg/run"
@@ -53,10 +54,20 @@ func (o *Orchestrator) handleContainerState(ctx context.Context, ev ipc.Containe
 			}
 			stopped := false
 			for _, container := range current.Containers {
-				if container.ID == ev.ContainerID {
-					stopped = container.State == "exited" || container.State == "dead" || container.State == "stopped"
-					break
+				if container.ID != ev.ContainerID {
+					continue
 				}
+				if container.Health == "unknown" {
+					return
+				}
+				stopped = container.State == "exited" || container.State == "dead" || container.State == "stopped"
+				if container.State == "exited" && container.ExitCode == 0 {
+					spec, err := compose.ParseLifecycle(stack.ComposeYAML, stack.Name)
+					if err == nil && spec.OneShotServices[container.Service] > 0 {
+						return
+					}
+				}
+				break
 			}
 			if !stopped {
 				return
@@ -78,7 +89,8 @@ func (o *Orchestrator) handleContainerState(ctx context.Context, ev ipc.Containe
 // handleContainerHealth reacts to container.health IPC events from hostd.
 // Currently only logs — health-based auto-failover is a Sprint 3 feature.
 func (o *Orchestrator) handleContainerHealth(ctx context.Context, ev ipc.ContainerHealthEvent) {
-	if ev.StackID == "" {
+	instance, found := o.raft.FSM().State(ev.StackID)
+	if !found || (instance.State != run.StateRunningPrimary && instance.State != run.StateRunningBackup) {
 		return
 	}
 	if ev.Health == "unhealthy" {

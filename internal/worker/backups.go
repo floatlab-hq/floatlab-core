@@ -6,9 +6,24 @@ import (
 	"github.com/floatlab/floatlab-core/pkg/config"
 	"github.com/floatlab/floatlab-core/pkg/monitoring"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
+	"github.com/floatlab/floatlab-core/pkg/store"
 	"go.uber.org/zap"
 	"time"
 )
+
+func (w *Worker) saveRecoveryPoint(ctx context.Context, p ReplTriggerPayload, result store.SendResult) error {
+	if result.GUID == "" || !store.IsAutomatedSnapshot(result.Snapshot) || result.SnapshotCreatedUnix <= 0 || p.DestNodeID == "" || p.Generation == 0 {
+		return nil
+	}
+	return w.db.Execute(ctx, []rqlite.Statement{{
+		SQL: `INSERT INTO monitoring_recovery_points(stack_id,dataset,source_id,destination_id,generation,snapshot,guid,snapshot_time)
+		      SELECT ?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM backup_targets WHERE stack_id=? AND dataset=? AND source_node_id=? AND node_id=? AND generation=? AND enabled=1)
+		      ON CONFLICT(stack_id,dataset,source_id,destination_id,generation) DO UPDATE
+		      SET snapshot=excluded.snapshot,guid=excluded.guid,snapshot_time=excluded.snapshot_time
+		      WHERE excluded.snapshot_time>monitoring_recovery_points.snapshot_time`,
+		Params: []any{p.StackID, p.Dataset, p.NodeID, p.DestNodeID, p.Generation, result.Snapshot, result.GUID, result.SnapshotCreatedUnix, p.StackID, p.Dataset, p.NodeID, p.DestNodeID, p.Generation},
+	}})
+}
 
 func (w *Worker) backupActive(ctx context.Context, p ReplTriggerPayload) (bool, error) {
 	targets, err := w.store.BackupTargets(ctx, p.StackID)

@@ -21,6 +21,7 @@ func Migrate(ctx context.Context, db *rqlite.Client) error {
 	if err := db.Execute(ctx, []rqlite.Statement{
 		{SQL: `CREATE TABLE IF NOT EXISTS alert_evaluations (id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, state_json TEXT NOT NULL DEFAULT '{}', version INTEGER NOT NULL DEFAULT 0)`},
 		{SQL: `CREATE INDEX IF NOT EXISTS idx_alert_evaluations_rule ON alert_evaluations(rule_id)`},
+		{SQL: `CREATE TABLE IF NOT EXISTS alert_rule_overrides (id TEXT PRIMARY KEY, overrides TEXT NOT NULL, updated_at TEXT NOT NULL)`},
 	}); err != nil {
 		return err
 	}
@@ -57,13 +58,15 @@ func save(ctx context.Context, db *rqlite.Client, broker *notify.Broker, rule Ru
 	switch next.Status {
 	case "pending":
 		status = "failing"
+	case "paused":
+		status, reason = "paused", "workload stopped"
 	case "inactive", "resolved":
 		status = "healthy"
 	}
 	if next.Status == "firing" {
 		status = "failing"
 		action = "open"
-		if !next.RecoverySince.IsZero() {
+		if !next.RecoverySince.IsZero() && (rule.Bands == nil || next.Severity == old.Severity) {
 			action = "keep"
 			status = "healthy"
 		}
@@ -71,7 +74,7 @@ func save(ctx context.Context, db *rqlite.Client, broker *notify.Broker, rule Ru
 	if next.Status == "resolved" {
 		action = "resolve"
 	}
-	if reason == "rule disabled or removed" {
+	if reason == "rule disabled or removed" || reason == "resource no longer eligible" {
 		status = "disabled"
 		action = "retire"
 	}
@@ -83,11 +86,25 @@ func save(ctx context.Context, db *rqlite.Client, broker *notify.Broker, rule Ru
 		message = reason
 	}
 	severity := rule.Severity
+	if rule.Bands != nil && next.Severity != "" {
+		severity = next.Severity
+	}
 	if severity == "" {
 		severity = old.Severity
 	}
 	if severity == "" {
 		severity = "warning"
+	}
+	evidence := map[string]interface{}{"value": next.Value, "error": next.Error}
+	if rule.Bands != nil && next.Value != nil {
+		band := rule.Bands.Warning
+		if severity == "critical" {
+			band = rule.Bands.Critical
+		}
+		evidence["unit"], evidence["trigger"], evidence["recovery"] = rule.Bands.Unit, band.Trigger, band.Recovery
+		if reason == "" {
+			message += fmt.Sprintf(" Observed %g %s with trigger above %g and recovery below %g.", *next.Value, rule.Bands.Unit, band.Trigger, band.Recovery)
+		}
 	}
 	stackID, nodeID := next.Labels["stack_id"], next.Labels["node_id"]
 	if stackID == "" {
@@ -96,7 +113,7 @@ func save(ctx context.Context, db *rqlite.Client, broker *notify.Broker, rule Ru
 	if nodeID == "" {
 		nodeID = rule.NodeID
 	}
-	result := monitoring.Result{CheckID: "metrics:" + old.ID, Producer: "metrics", Kind: "evaluator", Observer: observer, Resource: monitoring.Resource{HostID: nodeID, WorkloadID: stackID, Pool: next.Labels["pool"], Dataset: next.Labels["dataset"], SourceID: next.Labels["source_node_id"], DestinationID: next.Labels["dest_node_id"]}, Status: status, Reason: reason, ObservedAt: next.LastObserved, EvaluatedAt: now, Labels: next.Labels, Evidence: map[string]interface{}{"value": next.Value, "error": next.Error}}
+	result := monitoring.Result{CheckID: "metrics:" + old.ID, Producer: "metrics", Kind: "evaluator", Observer: observer, Resource: monitoring.Resource{HostID: nodeID, WorkloadID: stackID, Pool: next.Labels["pool"], Dataset: next.Labels["dataset"], SourceID: next.Labels["source_node_id"], DestinationID: next.Labels["dest_node_id"]}, Status: status, Reason: reason, ObservedAt: next.LastObserved, EvaluatedAt: now, Labels: next.Labels, Evidence: evidence}
 	if rule.MaxAge > 0 && !next.LastObserved.IsZero() {
 		result.ExpiresAt = next.LastObserved.Add(rule.MaxAge)
 	}
@@ -112,7 +129,7 @@ func save(ctx context.Context, db *rqlite.Client, broker *notify.Broker, rule Ru
 				next.Severity = severity
 			}
 			if action == "resolve" || action == "retire" {
-				next.PendingSince, next.RecoverySince = time.Time{}, time.Time{}
+				next.resetTimers()
 			}
 			data, err := json.Marshal(next)
 			if err != nil {

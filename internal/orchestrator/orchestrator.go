@@ -456,8 +456,8 @@ func lifecycleVeth(prefix, stackID string) string {
 }
 
 // doStart runs compose.up on the primary node for a stack entering Starting state.
-func (o *Orchestrator) doStart(ctx context.Context, stackID string, generation time.Time) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+func (o *Orchestrator) doStart(parent context.Context, stackID string, generation time.Time) {
+	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
 	defer cancel()
 
 	stack, err := o.store.GetStack(ctx, stackID)
@@ -467,7 +467,8 @@ func (o *Orchestrator) doStart(ctx context.Context, stackID string, generation t
 	}
 
 	composeFile := stack.ComposeYAML
-	if spec, err := compose.ParseLifecycle(stack.ComposeYAML, stack.Name); err == nil {
+	spec, specErr := compose.ParseLifecycle(stack.ComposeYAML, stack.Name)
+	if specErr == nil {
 		stackIP := ""
 		if spec.HasPorts {
 			result, queryErr := o.db.Query(ctx, rqlite.Statement{SQL: `SELECT stack_ip FROM stack_runtime WHERE stack_id=?`, Params: []interface{}{stackID}})
@@ -488,13 +489,27 @@ func (o *Orchestrator) doStart(ctx context.Context, stackID string, generation t
 			return
 		}
 	}
-	// Compose up pulls missing images and respects explicit service pull policies.
-	if _, err := o.pool.Execute(ctx, stack.PrimaryNodeID, "compose.up", ipc.ComposeUpPayload{StackID: stack.ID, DatasetPath: stack.ZFSDataset, ComposeFile: composeFile}); err != nil {
-		o.log.Error("orchestrator: start: compose.up", zap.String("id", stackID), zap.Error(err))
+	checkedStart := spec != nil && hasStartupChecks(spec)
+	startCtx := ctx
+	if checkedStart {
+		var cancelStart context.CancelFunc
+		startCtx, cancelStart = context.WithTimeout(ctx, spec.HealthTimeout)
+		defer cancelStart()
+	}
+	// Compose can wait for dependencies before returning, so it shares the readiness deadline.
+	_, startErr := o.pool.Execute(startCtx, stack.PrimaryNodeID, "compose.up", ipc.ComposeUpPayload{StackID: stack.ID, DatasetPath: stack.ZFSDataset, ComposeFile: composeFile})
+	if startErr == nil && checkedStart {
+		startErr = worker.WaitHealthy(startCtx, o.pool, stack.PrimaryNodeID, stackID, spec.HealthTimeout, spec.OneShotServices)
+	}
+	if startErr != nil {
+		if parent.Err() != nil {
+			return
+		}
+		o.log.Error("orchestrator: start", zap.String("id", stackID), zap.Error(startErr))
 		if _, applied := o.applyEvent(stack.PrimaryNodeID, stackID, run.EventStartFailed, generation); !applied {
 			return
 		}
-		_ = o.ops.FinishForStack(context.Background(), stackID, "start", "failed", err.Error())
+		_ = o.ops.FinishForStack(context.Background(), stackID, "start", "failed", startErr.Error())
 		return
 	}
 
@@ -505,6 +520,18 @@ func (o *Orchestrator) doStart(ctx context.Context, stackID string, generation t
 	actor, operationID := o.activeOperationIdentity(ctx, stackID)
 	_ = o.ops.FinishForStack(context.Background(), stackID, "start", "succeeded", "")
 	_ = operation.RecordEvent(context.Background(), o.db, operation.Event{StackID: stackID, Type: "Start", Outcome: "succeeded", Actor: actor, OperationID: operationID})
+}
+
+func hasStartupChecks(spec *compose.LifecycleSpec) bool {
+	if len(spec.OneShotServices) > 0 {
+		return true
+	}
+	for _, service := range spec.Project.Services {
+		if service.HealthCheck != nil && !service.HealthCheck.Disable {
+			return true
+		}
+	}
+	return false
 }
 
 func (o *Orchestrator) activeOperationIdentity(ctx context.Context, stackID string) (string, string) {
