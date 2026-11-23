@@ -1,5 +1,51 @@
 # Docker Stack Execution API Plan
 
+## Current status — 2026-10-28
+
+Architecture revision, 2026-10-31: the
+[multi-node lab plan](plans/MULTI_NODE_LAB_PLAN.md) moves workload state, tasks,
+operations, local allocations and workload protection metadata into owner-local
+SQLite, asynchronously copied as read-only views to every other node. Rqlite
+retains shared lab configuration. Local workload operations must no longer require
+lab quorum or application Raft. The rqlite-backed implementation described below
+is the current code, not that future storage boundary.
+
+The single-node workload implementation is present: Compose validation/runtime
+rewriting, persistent operations, ZFS mounts, IPv4 allocation, lifecycle,
+terminal/exec, snapshot scheduling/retention, clone/swap restore, upgrade rollback,
+and events. Existing appliance scenarios are in `integration/container_api_test.go`,
+`cli_caddy_test.go`, `recovery_test.go`, and `workload_confidence_test.go`.
+
+The original design below is retained for context. Current OpenAPI takes
+precedence: snapshot recovery uses
+`POST /stacks/{id}/snapshots/{snapshotId}/restore`; `/stacks/{id}/restore` is
+failback. Management dispatches Docker execution through hostd.
+
+Outstanding implementation:
+
+- [ ] Wire actual replication into hostd's `replSend`, `replRecv`, and `replStatus`
+  handlers in `internal/hostd/dispatcher.go`; all three still return stub responses.
+  The separate `pkg/store/replication.go` pipeline is not connected to this path.
+- [ ] Execute scheduled replication and off-node backups; persisted schedule and
+  target fields do not execute jobs.
+- [ ] Consume and acknowledge DNS outbox records to apply DNS changes.
+- [ ] Complete secure inter-node connectivity and cluster orchestration before
+  enabling multi-node replication/failover/failback. Failover currently calls the
+  stub replication path, which does not establish a usable recovery copy.
+
+Outstanding validation:
+
+- [ ] Prove interruption/replay at every destructive workload checkpoint;
+  service-restart tests alone do not cover this requirement.
+- [ ] Run the full two-pass workload suite against the exact release candidate.
+- [ ] Add real multi-node success coverage for replication, failover, failback,
+  abort, and step history; current endpoint coverage explicitly defers these.
+
+Alert evaluation was originally deferred below but is now implemented. Remaining
+catalogue, collector, and delivery work is tracked in
+[the alert catalogue](internal/control/ALERT_RULES.md). IPv6, Layer 3 routing,
+and automatic recovery-point deletion remain deferred.
+
 ## Summary
 
 Build a new `floatlab-api` Go binary in this repository. It will use the official Docker Compose v5 SDK and Docker Engine API through the bind-mounted `/var/run/docker.sock`, while privileged ZFS and host-veth operations remain behind the existing agent Unix socket.

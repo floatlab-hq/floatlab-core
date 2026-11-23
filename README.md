@@ -230,8 +230,8 @@ These paths require an update-capable baseline. Host activation additionally
 requires a qualified source/target Docker transition in its release metadata;
 unqualified transitions are rejected. Real appliance boot, isolation, and
 rollback acceptance remains required before enabling a release for production.
-See the [management update plan](MANAGEMENT_UPDATE_PLAN.md) and
-[host/OS update plan](HOST_OS_UPDATE_PLAN.md) for recovery rules and acceptance
+See the [RFD-0011: Management Stack Self-Updates](rfd/rfd-0011.md) and
+[RFD-0013: Host and OS Self-Updates](rfd/rfd-0013.md) for recovery rules and acceptance
 tests.
 
 ## Development VM

@@ -2,12 +2,27 @@
 
 ## Status
 
-Proposed implementation plan for a shared TypeScript command engine used by:
+Implementation is present as of 2026-10-28. Checked items below indicate code or
+existing tests, not a fresh passing test run. The shared TypeScript engine is used by:
 
 - A native `floatlab` command-line executable compiled with Bun.
 - A Vue command palette opened with <kbd>Alt</kbd>+<kbd>/</kbd> in the FloatLab web interface.
 
 The Go control plane remains the source of truth for authentication, Compose validation, stack lifecycle, container lifecycle, logs, snapshots, and upgrades.
+
+## Remaining acceptance — 2026-10-28
+
+The shared engine is in `packages/floatlab-client/src/engine.ts`, the terminal
+adapter in `cli/src`, and the web adapter in `ui/src/components/CommandConsole.vue`.
+Tests cover parsing, workflows, sessions, and palette interactions. The Caddy
+appliance suite exercises CLI workload operations; it does not establish all
+terminal/browser parity scenarios below.
+
+Remaining tasks are the unchecked acceptance items: browser/terminal integration,
+responsive layouts, standalone OpenAPI lint, and native release-binary smoke tests.
+`.github/workflows/release-manage.yml` builds all four binaries but executes only
+the Linux x64 version check. General CI skips opt-in appliance suites. The original
+first-release non-goals remain deferred.
 
 ## Goals
 
@@ -297,49 +312,51 @@ Regenerate the shared OpenAPI TypeScript schema after all contract changes.
 
 ### Phase 1: API foundation
 
-- [ ] Add `/stacks/validate` to OpenAPI.
-- [ ] Implement Compose validation handler and edit invariants.
-- [ ] Simplify `StackCreate` requirements and deprecate duplicated fields.
-- [ ] Update stack creation to canonicalize, validate, and derive configuration server-side.
-- [ ] Add container start/stop operations to OpenAPI.
-- [ ] Add Docker client start/stop methods.
-- [ ] Add IPC payloads and `docker.start`/`docker.stop` handlers.
-- [ ] Add public container lifecycle handlers with ownership and active-node checks.
-- [ ] Bring logs handlers and response fields into OpenAPI conformance.
-- [ ] Add Go handler, IPC, and Docker tests.
-- [ ] Run OpenAPI lint and regenerate TypeScript schema.
+- [x] Add `/stacks/validate` to OpenAPI.
+- [x] Implement Compose validation handler and edit invariants.
+- [x] Simplify `StackCreate` requirements and deprecate duplicated fields.
+- [x] Update stack creation to canonicalize, validate, and derive configuration server-side.
+- [x] Add container start/stop operations to OpenAPI.
+- [x] Add Docker client start/stop methods.
+- [x] Add IPC payloads and `docker.start`/`docker.stop` handlers.
+- [x] Add public container lifecycle handlers with ownership and active-node checks.
+- [x] Bring logs handlers and response fields into OpenAPI conformance.
+- [x] Add Go handler, IPC, and Docker tests.
+- [x] Regenerate TypeScript schema and add OpenAPI contract tests.
+- [ ] Verify standalone OpenAPI lint against the release candidate.
 
 ### Phase 2: TypeScript workspace and shared engine
 
-- [ ] Add the pnpm workspace and shared package.
-- [ ] Move generated OpenAPI types and API client factory into the shared package.
-- [ ] Implement tokenizer and command/flag parsing.
-- [ ] Implement command registry, aliases, help, and error handling.
-- [ ] Implement resource resolution and completion providers.
-- [ ] Implement shared result types and format-neutral command handlers.
-- [ ] Implement create/edit validation workflows.
-- [ ] Implement lifecycle, logs, info, list, upgrade, and snapshot handlers.
-- [ ] Add shared unit tests using fake API and runtime adapters.
+- [x] Add the pnpm workspace and shared package.
+- [x] Move generated OpenAPI types and API client factory into the shared package.
+- [x] Implement tokenizer and command/flag parsing.
+- [x] Implement command registry, aliases, help, and error handling.
+- [x] Implement resource resolution and completion providers.
+- [x] Implement shared result types and format-neutral command handlers.
+- [x] Implement create/edit validation workflows.
+- [x] Implement lifecycle, logs, info, list, upgrade, and snapshot handlers.
+- [x] Add shared unit tests using fake API and runtime adapters.
 
 ### Phase 3: Bun terminal application
 
-- [ ] Add CLI package, executable entry point, and direct argument execution.
-- [ ] Implement the interactive Inquirer command prompt and history.
-- [ ] Implement URL/session loading, login, expiry, and file permissions.
-- [ ] Implement system editor and validation retry loop.
-- [ ] Implement `less` paging and direct stdout/stderr formatting.
-- [ ] Add terminal adapter and filesystem/process tests.
-- [ ] Add Bun to Nix and CI.
-- [ ] Build and smoke-test all four release targets.
+- [x] Add CLI package, executable entry point, and direct argument execution.
+- [x] Implement the interactive Inquirer command prompt and history.
+- [x] Implement URL/session loading, login, expiry, and file permissions.
+- [x] Implement system editor and validation retry loop.
+- [x] Implement `less` paging and direct stdout/stderr formatting.
+- [x] Add terminal adapter and filesystem/process tests.
+- [x] Add Bun to Nix and CI.
+- [x] Configure all four release builds and Linux x64 version smoke test.
+- [ ] Smoke-test Linux arm64 and both macOS binaries on matching runtimes.
 
 ### Phase 4: Vue command palette
 
-- [ ] Add the global Alt+/ shortcut and palette dialog.
-- [ ] Implement combobox/listbox completion and keyboard behavior.
-- [ ] Connect the palette to the shared command engine and authenticated API client.
-- [ ] Implement confirmation and Compose editor modals.
-- [ ] Implement text, table, log, error, and progress result components.
-- [ ] Add accessibility and keyboard interaction tests.
+- [x] Add the global Alt+/ shortcut and palette dialog.
+- [x] Implement combobox/listbox completion and keyboard behavior.
+- [x] Connect the palette to the shared command engine and authenticated API client.
+- [x] Implement confirmation and Compose editor modals.
+- [x] Implement text, table, log, error, and progress result components.
+- [x] Add accessibility and keyboard interaction tests.
 - [ ] Verify responsive behavior at narrow and wide viewport sizes.
 
 ### Phase 5: Integration and release
@@ -349,8 +366,8 @@ Regenerate the shared OpenAPI TypeScript schema after all contract changes.
 - [ ] Verify create/edit validation prevents every invalid mutation tested.
 - [ ] Verify interactive confirmations and direct non-interactive behavior.
 - [ ] Verify session expiry and login recovery.
-- [ ] Add CLI installation and web shortcut documentation.
-- [ ] Add release artifacts and checksums to the release workflow.
+- [x] Add CLI installation and web shortcut documentation.
+- [x] Add release artifacts and checksums to the release workflow.
 
 ## Test plan
 
