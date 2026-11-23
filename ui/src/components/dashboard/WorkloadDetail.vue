@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { idempotencyKey, type Container, type FloatLabApi, type LogLine, type Stack, type StackMetricSeries } from '@floatlab/client'
+import { isMap, parseDocument } from 'yaml'
 import DetailPanel from '../DetailPanel.vue'
 import UiButton from '../UiButton.vue'
 import UiDropdown from '../UiDropdown.vue'
@@ -37,6 +38,21 @@ const inspectContainer = ref('app')
 const images = ref<Record<string, string>>({})
 const saving = ref(false)
 const message = ref('')
+const imageWarnings = ref<string[]>([])
+const upgradeOptions = [{ value: 'disabled', label: 'Disabled' }, { value: 'patch', label: 'Patch' }, { value: 'minor', label: 'Minor' }, { value: 'major', label: 'Major' }]
+const policyDraft = ref<Record<string, string>>({})
+const policyServices = computed(() => {
+  try {
+    const document = parseDocument(compose.value ?? '', { merge: true })
+    const source = document.toJS() as { services?: Record<string, { image?: string; build?: unknown; 'x-fl-auto-upgrade'?: string; 'x-fl-managed-image'?: string }> } | null
+    return Object.entries(source?.services ?? {}).flatMap(([name, service]) => {
+      if (!service?.image || service.build) return []
+      const fixed = service.image.includes('@') && service['x-fl-managed-image'] !== service.image
+      return [{ name, fixed, policy: fixed ? 'disabled' : service['x-fl-auto-upgrade'] || 'patch', editable: isMap(document.getIn(['services', name], true)) }]
+    })
+  } catch { return [] }
+})
+const policyChanges = computed(() => policyServices.value.filter(service => !service.fixed && service.editable && policyDraft.value[service.name] && policyDraft.value[service.name] !== service.policy))
 const services = computed(() => [...new Map(containers.value.map(container => [container.service ?? container.name, { name: container.service ?? container.name, image: container.image }])).values()])
 const imageChanges = computed(() => Object.fromEntries(services.value.filter(service => images.value[service.name]?.trim() && images.value[service.name]!.trim() !== service.image).map(service => [service.name, images.value[service.name]!.trim()])))
 const containerOptions = computed(() => [{ value: 'all', label: 'All containers' }, ...containers.value.map(container => ({ value: container.id, label: container.service ?? container.name }))])
@@ -69,7 +85,7 @@ async function loadTab() {
     } else if (tab.value === 'metrics') {
       const value = await props.api.getStackStats(props.stack.id, range.value)
       if (active && generation === tabGeneration) metrics.value = value
-    } else if (['compose', 'edit'].includes(tab.value) && compose.value === undefined) {
+    } else if (['compose', 'edit', 'upgrade'].includes(tab.value) && compose.value === undefined) {
       const value = await props.api.getStackConfig(props.stack.id)
       if (active && generation === tabGeneration) { compose.value = value; draft.value = value }
     } else if (tab.value === 'inspect') {
@@ -80,17 +96,30 @@ async function loadTab() {
   finally { if (active && generation === tabGeneration) tabLoading.value = false }
 }
 watch([tab, range, logContainer], () => { void loadTab() }, { immediate: true })
-async function save(kind: 'compose' | 'images') {
+async function save(kind: 'compose' | 'images' | 'policies') {
   if (saving.value || props.stack.replica) return
   if (kind === 'compose' && (!draft.value.trim() || draft.value === compose.value)) return
   if (kind === 'images' && !Object.keys(imageChanges.value).length) return
+  if (kind === 'policies' && !policyChanges.value.length) return
   saving.value = true; tabError.value = ''; message.value = ''
   try {
-    if (kind === 'compose') {
-      const value = draft.value
+    if (kind !== 'images') {
+      const original = compose.value
+      let value = draft.value
+      if (kind === 'policies') {
+        const document = parseDocument(original ?? '')
+        for (const service of policyChanges.value) document.setIn(['services', service.name, 'x-fl-auto-upgrade'], policyDraft.value[service.name])
+        value = document.toString()
+      }
       await props.api.validateCompose({ stack_id: props.stack.id, compose_file: value })
-      await props.api.updateCompose(props.stack.id, value, idempotencyKey())
-      if (active) { compose.value = value; message.value = 'Compose saved.' }
+      const saved = await props.api.updateCompose(props.stack.id, value, idempotencyKey(), original)
+      if (active) {
+        compose.value = saved.compose_file
+        imageWarnings.value = saved.image_warnings ?? []
+        if (kind === 'compose' || draft.value === original) draft.value = saved.compose_file
+        policyDraft.value = {}
+        message.value = kind === 'policies' ? 'Upgrade settings saved.' : 'Compose saved.'
+      }
     } else {
       await props.api.upgradeStack(props.stack.id, imageChanges.value, idempotencyKey())
       if (active) message.value = 'Image upgrade accepted.'
@@ -120,6 +149,9 @@ const containerLabels = { running: 'Running', stopped: 'Stopped', starting: 'Sta
     <UiTabs v-model="tab" :tabs="tabs" label="App detail">
       <p v-if="tabError" role="alert">{{ tabError }} <UiButton v-if="!['edit', 'upgrade'].includes(tab)" variant="plain" @click="loadTab">Retry</UiButton></p>
       <p v-if="message" role="status">{{ message }}</p>
+      <ul v-if="imageWarnings.length && ['edit', 'upgrade'].includes(tab)" aria-label="Image resolution warnings">
+        <li v-for="warning in imageWarnings" :key="warning">{{ warning }}</li>
+      </ul>
       <template v-if="tab === 'containers'">
         <p v-if="error" role="alert">{{ error }}</p>
         <p v-else-if="loading">Loading containers…</p>
@@ -162,11 +194,30 @@ const containerLabels = { running: 'Running', stopped: 'Stopped', starting: 'Sta
         <p>Validate and save the app's Compose configuration.</p><UiButton variant="surface" type="submit" :disabled="saving || compose === undefined || !draft.trim() || draft === compose">{{ saving ? 'Saving…' : 'Save Compose' }}</UiButton>
         <UiButton v-if="compose === undefined && !tabLoading" variant="plain" @click="loadTab">Retry loading Compose</UiButton>
       </form>
-      <form v-else-if="tab === 'upgrade' && !stack.replica" @submit.prevent="save('images')">
-        <p>Set replacement images for the services you want to upgrade.</p><p v-if="error" role="alert">{{ error }}</p><p v-else-if="!services.length">{{ loading ? 'Loading images…' : 'No container images available' }}</p>
-        <label v-for="service in services" :key="service.name" class="image-field">{{ service.name }}<UiInput v-model="images[service.name]" :aria-label="`Image for ${service.name}`" variant="field" required :disabled="saving" /></label>
-        <UiButton variant="surface" type="submit" :disabled="saving || !Object.keys(imageChanges).length">{{ saving ? 'Upgrading…' : 'Upgrade images' }}</UiButton>
-      </form>
+      <template v-else-if="tab === 'upgrade' && !stack.replica">
+        <form aria-label="Manual image upgrade" @submit.prevent="save('images')">
+          <p>Set replacement images for the services you want to upgrade.</p><p v-if="error" role="alert">{{ error }}</p><p v-else-if="!services.length">{{ loading ? 'Loading images…' : 'No container images available' }}</p>
+          <label v-for="service in services" :key="service.name" class="image-field">{{ service.name }}<UiInput v-model="images[service.name]" :aria-label="`Image for ${service.name}`" variant="field" required :disabled="saving" /></label>
+          <UiButton variant="surface" type="submit" :disabled="saving || !Object.keys(imageChanges).length">{{ saving ? 'Upgrading…' : 'Upgrade images' }}</UiButton>
+        </form>
+        <form v-if="policyServices.length" class="upgrade-policy" aria-label="Automatic upgrades" @submit.prevent="save('policies')">
+          <h3>Automatic upgrades</h3>
+          <p>Disabled services alert you when an upgrade is available.</p>
+          <label v-for="service in policyServices" :key="service.name" class="image-field">
+            {{ service.name }}<span v-if="service.fixed">Fixed digest</span>
+            <UiSelect
+              :model-value="policyDraft[service.name] || service.policy"
+              :options="upgradeOptions"
+              :aria-label="`Automatic upgrades for ${service.name}`"
+              :disabled="saving || service.fixed || !service.editable"
+              required
+              @update:model-value="value => { if (typeof value === 'string') policyDraft[service.name] = value }"
+            />
+          </label>
+          <UiButton variant="surface" type="submit" :disabled="saving || !policyChanges.length">Save upgrade settings</UiButton>
+        </form>
+        <UiButton v-if="compose === undefined && !tabLoading" variant="plain" @click="loadTab">Retry loading upgrade settings</UiButton>
+      </template>
     </UiTabs>
   </DetailPanel>
 </template>
@@ -180,6 +231,7 @@ dd { margin: 0; }
 form { display: grid; gap: 12px; }
 form .ui-textarea { min-height: 320px; width: 100%; }
 .image-field { display: grid; gap: 6px; }
+.upgrade-policy { margin-top: 24px; }
 p { overflow-wrap: anywhere; }
 [role="alert"] { color: var(--status-error); }
 </style>

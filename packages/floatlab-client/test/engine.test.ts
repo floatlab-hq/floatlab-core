@@ -100,7 +100,7 @@ test("invalid file creation fails without mutation or prompting", async () => {
 
 for (const retry of [true, false]) test(`invalid interactive Compose asks before retrying (${retry})`, async () => {
   let edits = 0; let saved = ""; const sources: string[] = [];
-  const configured = { ...api, getStackConfig: async () => "original", validateCompose: async (body: { compose_file: string }) => { if (body.compose_file === "rejected") throw new Error("invalid Compose"); }, updateCompose: async (_id: string, source: string) => { saved = source; } } as unknown as FloatLabApi;
+  const configured = { ...api, getStackConfig: async () => "original", validateCompose: async (body: { compose_file: string }) => { if (body.compose_file === "rejected") throw new Error("invalid Compose"); }, updateCompose: async (_id: string, source: string) => { saved = source; return { compose_file: source }; } } as unknown as FloatLabApi;
   const editRuntime = { ...runtime, interactive: true, editCompose: async (source: string) => { sources.push(source); return ++edits === 1 ? "rejected" : "fixed"; }, confirm: async (message: string) => { expect(message).toBe("Edit and try again?"); expect(presented.at(-1)).toMatchObject({ kind: "error", message: "invalid Compose" }); return retry; } };
   expect((await new CommandEngine(configured, editRuntime).dispatch("edit demo")).code).toBe(0);
   expect(sources).toEqual(retry ? ["original", "rejected"] : ["original"]);

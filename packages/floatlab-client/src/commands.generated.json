@@ -5723,6 +5723,29 @@
                 ]
               },
               {
+                "name": "getWorkloadUpgradeSettings",
+                "description": "Get the lab's automatic workload upgrade window",
+                "metadata": [
+                  {
+                    "name": "floatlab",
+                    "value": {
+                      "http": {
+                        "method": "GET",
+                        "path": "/settings/workload-upgrades",
+                        "parameters": [],
+                        "accept": "application/json"
+                      },
+                      "api": [
+                        {
+                          "operationId": "getWorkloadUpgradeSettings",
+                          "inputs": {}
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
                 "name": "listStackAlerts",
                 "description": "List configured alert rules and current states",
                 "options": [
@@ -6407,6 +6430,111 @@
                 ]
               },
               {
+                "name": "setWorkloadUpgradeSettings",
+                "description": "Set the lab's automatic workload upgrade window",
+                "options": [
+                  {
+                    "name": "--header-idempotency-key",
+                    "arguments": [
+                      {
+                        "name": "Idempotency-Key",
+                        "required": true
+                      }
+                    ]
+                  },
+                  {
+                    "name": "--body",
+                    "description": "Request body: JSON for JSON media, literal text otherwise; mutually exclusive with --body-file",
+                    "arguments": [
+                      {
+                        "name": "body",
+                        "required": true
+                      }
+                    ]
+                  },
+                  {
+                    "name": "--body-file",
+                    "description": "Read the request body from a file as raw bytes (CLI only); mutually exclusive with --body",
+                    "arguments": [
+                      {
+                        "name": "path",
+                        "required": true,
+                        "metadata": [
+                          {
+                            "name": "floatlab",
+                            "value": {
+                              "provider": "files"
+                            }
+                          }
+                        ]
+                      }
+                    ],
+                    "metadata": [
+                      {
+                        "name": "floatlab",
+                        "value": {
+                          "capability": "files"
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "metadata": [
+                  {
+                    "name": "floatlab",
+                    "value": {
+                      "http": {
+                        "method": "PUT",
+                        "path": "/settings/workload-upgrades",
+                        "parameters": [
+                          {
+                            "name": "Idempotency-Key",
+                            "in": "header",
+                            "option": "--header-idempotency-key",
+                            "required": true,
+                            "schema": {
+                              "type": "string",
+                              "maxLength": 255
+                            }
+                          }
+                        ],
+                        "requestBody": {
+                          "required": true,
+                          "content": {
+                            "application/json": {
+                              "schema": {
+                                "type": "object",
+                                "required": [
+                                  "window"
+                                ],
+                                "properties": {
+                                  "window": {
+                                    "type": "string",
+                                    "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]-([01][0-9]|2[0-3]):[0-5][0-9]$",
+                                    "description": "Daily start window in the primary appliance timezone. The end is exclusive.",
+                                    "example": "02:30-03:30"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "accept": "application/json"
+                      },
+                      "api": [
+                        {
+                          "operationId": "setWorkloadUpgradeSettings",
+                          "inputs": {
+                            "header/Idempotency-Key": "option:--header-idempotency-key",
+                            "body": "option:--body"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
                 "name": "startStack",
                 "description": "Create or update and start a stack",
                 "options": [
@@ -6529,7 +6657,8 @@
                               }
                             }
                           }
-                        }
+                        },
+                        "accept": "application/json"
                       },
                       "api": [
                         {
@@ -7153,6 +7282,10 @@
                                 "properties": {
                                   "compose_file": {
                                     "type": "string"
+                                  },
+                                  "expected_compose_file": {
+                                    "type": "string",
+                                    "description": "Previously loaded Compose source. A save conflicts when that source has since changed."
                                   }
                                 }
                               }

@@ -27,6 +27,16 @@ Direct API commands accept `--body` for inline JSON or text and `--body-file` fo
 
 The web interface exposes the same commands through the command palette: press <kbd>Alt</kbd>+<kbd>/</kbd>.
 
+## Workload image upgrades
+
+Choose an automatic upgrade policy for each service in the workload's **Upgrade images** tab. Use `x-fl-auto-upgrade: disabled`, `patch`, `minor`, or `major` under a service in Compose. Patch is the default. Disabled services report available updates without applying them.
+
+Saving Compose resolves `latest` and partial version tags to the most specific equivalent version available and pins the image digest. Named tags such as `stable` keep their channel and can follow digest changes. Services running on these tags show a warning. Digests entered explicitly remain fixed.
+
+FloatLab starts automatic upgrades from 2:30 to 3:30 AM in the primary appliance's local timezone. To change the window across the lab, run `lab api stacks setWorkloadUpgradeSettings --body '{"window":"03:00-04:00"}'`.
+
+Each automatic upgrade uses one pre-upgrade ZFS snapshot per stack. If deployment fails, FloatLab alerts and rolls back. Rollback restores the data as of the snapshot. A failed candidate stays blocked for automatic upgrades until a new version is available.
+
 ## Installer development
 
 See the [installer developer guide](floatlab-appliance-image/DEVELOPMENT.md) for

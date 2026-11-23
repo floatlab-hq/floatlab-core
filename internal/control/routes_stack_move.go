@@ -28,16 +28,17 @@ type stackMoveRequest struct {
 }
 
 type stackMove struct {
-	OperationID   string                     `json:"operation_id"`
-	StackID       string                     `json:"stack_id"`
-	Stack         config.Stack               `json:"stack"`
-	Destination   string                     `json:"destination"`
-	NetworkPool   string                     `json:"network_pool,omitempty"`
-	Generation    int64                      `json:"generation"`
-	Datasets      []ipc.DatasetCreatePayload `json:"datasets"`
-	Targets       []config.BackupTarget      `json:"targets"`
-	SeedSnapshot  string                     `json:"seed_snapshot,omitempty"`
-	FinalSnapshot string                     `json:"final_snapshot,omitempty"`
+	OperationID    string                     `json:"operation_id"`
+	StackID        string                     `json:"stack_id"`
+	Stack          config.Stack               `json:"stack"`
+	Destination    string                     `json:"destination"`
+	NetworkPool    string                     `json:"network_pool,omitempty"`
+	Generation     int64                      `json:"generation"`
+	Datasets       []ipc.DatasetCreatePayload `json:"datasets"`
+	Targets        []config.BackupTarget      `json:"targets"`
+	SeedSnapshot   string                     `json:"seed_snapshot,omitempty"`
+	FinalSnapshot  string                     `json:"final_snapshot,omitempty"`
+	FailedUpgrades []string                   `json:"failed_upgrades,omitempty"`
 }
 
 func (s *Server) handleStackMove(w http.ResponseWriter, r *http.Request) {
@@ -128,8 +129,13 @@ func (s *Server) handleStackMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	generation = max(generation, owner.generation)
+	failedUpgrades, err := failedWorkloadUpgrades(ctx, s.db, id)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
 	move := stackMove{OperationID: opID, StackID: id, Stack: *st, Destination: req.DestinationNodeID,
-		NetworkPool: req.NetworkPool, Generation: generation + 1, Datasets: datasets, Targets: targets}
+		NetworkPool: req.NetworkPool, Generation: generation + 1, Datasets: datasets, Targets: targets, FailedUpgrades: failedUpgrades}
 	var prepared struct {
 		NetworkPool string `json:"network_pool"`
 	}

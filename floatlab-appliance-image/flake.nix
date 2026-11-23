@@ -52,7 +52,7 @@
         preBuild = pkgs.lib.optionalString instrument ''
           export GOFLAGS="$GOFLAGS -cover -coverpkg=./... -covermode=atomic"
         '';
-        vendorHash = "sha256-bW6mEKlDsR1oGYSAZj1OXj3atsuMbLzwQpSiwtkOHlg=";
+        vendorHash = "sha256-4eeoretC4FUReBqLP+sXAYP+zhuHSnwUAcB8UehD/8I=";
       };
       floatlab-binaries = buildBinaries "floatlab-host" hostVersion [ "cmd/floatlab-hostd" ];
       floatlab-manage-binaries = buildBinaries "floatlab-manage" "0.1.0-dev" [ "cmd/floatlab-control" ];

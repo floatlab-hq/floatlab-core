@@ -334,6 +334,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/settings/workload-upgrades": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the lab's automatic workload upgrade window */
+        get: operations["getWorkloadUpgradeSettings"];
+        /** Set the lab's automatic workload upgrade window */
+        put: operations["setWorkloadUpgradeSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/stacks/{id}/start": {
         parameters: {
             query?: never;
@@ -2070,6 +2088,8 @@ export interface components {
             secondary_node?: string | null;
             /** @description Raw docker-compose.yml content (includes x-fl-* extensions). */
             compose_file: string;
+            /** @description Image references that could not be fully resolved when saving this Compose configuration. */
+            image_warnings?: string[];
             /**
              * @description ZFS dataset path — e.g. floatlab/plex
              * @example floatlab/plex
@@ -2127,6 +2147,15 @@ export interface components {
         };
         ComposeUpdate: {
             compose_file: string;
+            /** @description Previously loaded Compose source. A save conflicts when that source has since changed. */
+            expected_compose_file?: string;
+        };
+        WorkloadUpgradeSettings: {
+            /**
+             * @description Daily start window in the primary appliance timezone. The end is exclusive.
+             * @example 02:30-03:30
+             */
+            window: string;
         };
         StackUpgrade: {
             /** @description Compose service names mapped to replacement image references. */
@@ -3928,6 +3957,71 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            /** @description The saved Compose source changed or another workload operation is active. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getWorkloadUpgradeSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current workload upgrade settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkloadUpgradeSettings"];
+                };
+            };
+        };
+    };
+    setWorkloadUpgradeSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Unique key used to safely retry this mutation. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkloadUpgradeSettings"];
+            };
+        };
+        responses: {
+            /** @description Workload upgrade settings updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkloadUpgradeSettings"];
+                };
+            };
+            /** @description Invalid upgrade window. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     startStack: {
@@ -3955,7 +4049,16 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        operation_id?: string;
+                        stack_id?: string;
+                        state?: string;
+                        status?: string;
+                        /** @description Warnings from resolving image references in the submitted Compose project. */
+                        image_warnings?: string;
+                    };
+                };
             };
             /** @description Stack is not in a startable state. */
             409: {

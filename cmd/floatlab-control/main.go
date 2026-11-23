@@ -13,6 +13,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -140,6 +141,7 @@ func run(cmd *cobra.Command, args []string) error {
 		NodeID    string `json:"node_id"`
 		NodeName  string `json:"node_name"`
 		JWTSecret string `json:"jwt_secret"`
+		Timezone  string `json:"timezone"`
 	}
 	if applianceConfig != "" {
 		if err := credentials.ReadPrivate(applianceConfig, &identity); err != nil {
@@ -149,6 +151,14 @@ func run(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("invalid appliance identity")
 		}
 		raftNodeID, hostNodeID, jwtSecret = identity.NodeID, identity.NodeID, identity.JWTSecret
+	}
+	upgradeTimezone := time.Local
+	if identity.Timezone != "" {
+		zone, err := time.LoadLocation(identity.Timezone)
+		if err != nil {
+			return fmt.Errorf("workload upgrade timezone: %w", err)
+		}
+		upgradeTimezone = zone
 	}
 	var credentialKey []byte
 	if credentialKeyFile != "" {
@@ -306,9 +316,11 @@ func run(cmd *cobra.Command, args []string) error {
 
 		// Snapshot scheduler: minute-tick loop that enqueues snapshot tasks.
 		launch(func() { orchestrator.RunScheduler(ctx, orch, db, log) })
+		launch(func() { srv.RunWorkloadUpgrades(ctx, upgradeTimezone) })
 
 		// Task worker: polls rqlite tasks table and dispatches IPC to hostd.
 		w := worker.New(db, store, hosts, raftNode, log)
+		w.SetNotificationBroker(broker)
 		w.SetBackupRestorePreparer(srv.PrepareBackupRestore)
 		w.SetBackupRestoreOwner(srv.CommitReplicaTakeover)
 		w.SetWorkloadOwnerCheck(srv.IsLocalWorkloadOwner)

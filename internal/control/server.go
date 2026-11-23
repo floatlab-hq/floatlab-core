@@ -138,6 +138,12 @@ func (s *Server) buildRouter() *chi.Mux {
 		registerHealthRoutes(r, s)
 		r.Group(func(r chi.Router) { r.Use(s.requireAdminJWT); r.Use(s.idempotency); registerNodeRoutes(r, s) })
 		registerStackRoutes(r, s)
+		r.Group(func(r chi.Router) {
+			r.Use(s.requireAdminJWT)
+			r.Use(s.idempotency)
+			r.Get("/settings/workload-upgrades", s.handleGetWorkloadUpgradeSettings)
+			r.Put("/settings/workload-upgrades", s.labMutation(func(target *Server) http.HandlerFunc { return target.handleSetWorkloadUpgradeSettings }))
+		})
 		registerStorageRoutes(r, s)
 		registerFailoverRoutes(r, s)
 		registerNetworkRoutes(r, s)

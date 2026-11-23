@@ -96,6 +96,11 @@ func ParseLifecycleAt(source, requestedName, workingDir string) (*LifecycleSpec,
 		return nil, err
 	}
 	for serviceName, service := range project.Services {
+		policy, set := service.Extensions[UpgradePolicyKey]
+		value, _ := policy.(string)
+		if set && !validUpgradePolicy(value) {
+			return nil, fmt.Errorf("compose: service %s: %s must be disabled, patch, minor, or major", serviceName, UpgradePolicyKey)
+		}
 		if service.NetworkMode == "host" {
 			return nil, fmt.Errorf("compose: service %s uses forbidden network_mode host", serviceName)
 		}
@@ -134,6 +139,8 @@ func RuntimeYAML(source, requestedName, stackIP string) (string, error) {
 	project := spec.Project
 
 	for name, service := range project.Services {
+		delete(service.Extensions, UpgradePolicyKey)
+		delete(service.Extensions, ManagedImageKey)
 		for i, volume := range service.Volumes {
 			if volume.ReadOnly || volume.Type == "tmpfs" {
 				continue

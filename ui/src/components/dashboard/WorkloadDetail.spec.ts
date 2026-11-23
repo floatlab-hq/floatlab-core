@@ -34,7 +34,7 @@ describe('Workload detail', () => {
     await wrapper.get('textarea').setValue('services:\n  web:\n    image: nginx:stable')
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(validate).toHaveBeenCalledWith({ stack_id: stack.id, compose_file: 'services:\n  web:\n    image: nginx:stable' })
-    expect(update).toHaveBeenCalledWith(stack.id, expect.stringContaining('nginx:stable'), expect.any(String))
+    expect(update).toHaveBeenCalledWith(stack.id, expect.stringContaining('nginx:stable'), expect.any(String), stack.compose_file)
     await select('Upgrade images')
     await wrapper.get('[aria-label="Image for web"]').setValue('nginx:latest')
     await wrapper.get('form').trigger('submit'); await flushPromises()
@@ -136,6 +136,25 @@ describe('Workload detail', () => {
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('Registry unavailable')
     expect(wrapper.emitted('updated')).toBeUndefined()
+  })
+  it('saves per-service upgrade policies and uses the saved image reference and warnings', async () => {
+    const digest = `sha256:${'a'.repeat(64)}`
+    const configured = { ...stack, state: 'Idle' as const, compose_file: `services:\n  web:\n    image: nginx:1.29.0\n  database:\n    image: postgres@${digest}\n` }
+    const api = interactiveFixtureApi([configured])
+    const saved = configured.compose_file.replace('nginx:1.29.0', `nginx:1.29.0@${digest}\n    x-fl-managed-image: nginx:1.29.0@${digest}`).replace('  database:', '    x-fl-auto-upgrade: minor\n  database:')
+    const update = vi.spyOn(api, 'updateCompose').mockResolvedValue({ ...configured, compose_file: saved, image_warnings: ['a registry was unavailable'] })
+    const wrapper = mount(WorkloadDetail, { props: { stack: configured, api, initialTab: 'upgrade' } })
+    await flushPromises()
+    const policy = wrapper.get<HTMLSelectElement>('[aria-label="Automatic upgrades for web"]')
+    expect(policy.element.value).toBe('patch')
+    expect(wrapper.get<HTMLSelectElement>('[aria-label="Automatic upgrades for database"]').element.disabled).toBe(true)
+    await policy.setValue('minor')
+    await wrapper.get('form[aria-label="Automatic upgrades"]').trigger('submit'); await flushPromises()
+    expect(update).toHaveBeenCalledWith(stack.id, expect.stringContaining('x-fl-auto-upgrade: minor'), expect.any(String), configured.compose_file)
+    expect(policy.element.value).toBe('minor')
+    expect(wrapper.get('[aria-label="Image resolution warnings"]').text()).toContain('a registry was unavailable')
+    await wrapper.findAll('[role="tab"]').find(tab => tab.text() === 'Compose')!.trigger('click'); await flushPromises()
+    expect(wrapper.get('pre').text()).toBe(saved.trim())
   })
   it('ignores stale tab responses after navigation or unmount', async () => {
     let finish!: (value: string) => void

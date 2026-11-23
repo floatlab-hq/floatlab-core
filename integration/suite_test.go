@@ -189,7 +189,7 @@ var _ = Describe("Single-node workflows", Ordered, Serial, Label("single-node"),
 		DeferCleanup(func() {
 			if evidence != nil {
 				config, _ := GinkgoConfiguration()
-				evidence.report(integrationT(), filepath.Join(fixture.report, "endpoints.json"), len(evidence.completed) == 8 && GinkgoLabelFilter() == "" && len(config.FocusStrings) == 0 && len(config.SkipStrings) == 0 && len(config.FocusFiles) == 0 && len(config.SkipFiles) == 0)
+				evidence.report(integrationT(), filepath.Join(fixture.report, "endpoints.json"), len(evidence.completed) == 9 && GinkgoLabelFilter() == "" && len(config.FocusStrings) == 0 && len(config.SkipStrings) == 0 && len(config.FocusFiles) == 0 && len(config.SkipFiles) == 0)
 			}
 		})
 	})
@@ -206,6 +206,8 @@ var _ = Describe("Single-node workflows", Ordered, Serial, Label("single-node"),
 		{"persistence-recovery-rollback", func(_ testT, c *apiClient) { c.assertRecoveryWorkload() }},
 		{"network-settings", func(_ testT, c *apiClient) { c.assertHostNetworkTransactions() }},
 		{"management-update", func(_ testT, c *apiClient) { c.assertManagementUpdateAppliance() }},
+		// Run last because this stage advances the disposable guest's clock.
+		{"automatic-upgrade-rollback", runAutomaticUpgradeRollback},
 	}
 	for _, stage := range stages {
 		It(stage.name, Label(stage.name), func(ctx SpecContext) {

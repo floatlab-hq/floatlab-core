@@ -15,6 +15,8 @@ import (
 	"github.com/floatlab/floatlab-core/pkg/config"
 	"github.com/floatlab/floatlab-core/pkg/hostclient"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
+	"github.com/floatlab/floatlab-core/pkg/monitoring"
+	"github.com/floatlab/floatlab-core/pkg/notify"
 	"github.com/floatlab/floatlab-core/pkg/operation"
 	raftpkg "github.com/floatlab/floatlab-core/pkg/raft"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
@@ -49,6 +51,7 @@ type Worker struct {
 	log                  *zap.Logger
 	raft                 *raftpkg.Node
 	ops                  *operation.Store
+	broker               *notify.Broker
 	prepareBackupRestore func(context.Context, ipc.BackupRestorePreparePayload) (ipc.BackupRestorePrepareResult, error)
 	commitBackupOwner    func(context.Context, BackupRestorePayload) error
 	isLocalWorkloadOwner func(context.Context, string) (bool, error)
@@ -57,6 +60,8 @@ type Worker struct {
 func (w *Worker) SetWorkloadOwnerCheck(check func(context.Context, string) (bool, error)) {
 	w.isLocalWorkloadOwner = check
 }
+
+func (w *Worker) SetNotificationBroker(broker *notify.Broker) { w.broker = broker }
 
 func New(db *rqlite.Client, cfgStore *config.Store, pool *hostclient.Pool, raft *raftpkg.Node, log *zap.Logger) *Worker {
 	h, _ := os.Hostname()
@@ -143,11 +148,23 @@ func (w *Worker) handleStackUpgrade(ctx context.Context, raw json.RawMessage) er
 	if err != nil {
 		return err
 	}
+	if p.Candidate != "" && p.Lifecycle.Event == run.EventUpdateStack && op.State == "pending" {
+		instance, ok := w.raft.FSM().State(p.StackID)
+		started := ok && instance.State == p.Lifecycle.To && instance.UpdatedAt.Equal(p.Lifecycle.Timestamp)
+		if !started && (stack.ComposeYAML != p.OldCompose || p.StartBefore == nil || !time.Now().Before(*p.StartBefore) ||
+			!ok || instance.State != p.Lifecycle.From || !instance.UpdatedAt.Equal(p.Lifecycle.ExpectedUpdatedAt)) {
+			return w.ops.Update(ctx, p.OperationID, "succeeded", "deferred", "")
+		}
+	}
 	newRuntime, err := w.runtimeCompose(ctx, p.StackID, stack.Name, p.NewCompose)
 	if err != nil {
 		return err
 	}
-	oldRuntime, err := w.runtimeCompose(ctx, p.StackID, stack.Name, p.OldCompose)
+	rollbackCompose := p.OldCompose
+	if p.RollbackCompose != "" {
+		rollbackCompose = p.RollbackCompose
+	}
+	oldRuntime, err := w.runtimeCompose(ctx, p.StackID, stack.Name, rollbackCompose)
 	if err != nil {
 		return err
 	}
@@ -156,6 +173,9 @@ func (w *Worker) handleStackUpgrade(ctx context.Context, raw json.RawMessage) er
 		return err
 	}
 	rollback := func() error {
+		if p.Candidate != "" && !p.SnapshotCreated {
+			return nil // The old workload is still serving, so there's nothing to restore.
+		}
 		if p.SnapshotCreated {
 			if _, err := w.pool.Execute(ctx, p.NodeID, "compose.down", ipc.ComposeDownPayload{StackID: p.StackID, DatasetPath: p.DatasetPath}); err != nil {
 				return err
@@ -164,10 +184,10 @@ func (w *Worker) handleStackUpgrade(ctx context.Context, raw json.RawMessage) er
 				return err
 			}
 		}
-		if err := w.store.UpdateStackCompose(ctx, p.StackID, p.OldCompose); err != nil {
+		if err := w.store.UpdateStackCompose(ctx, p.StackID, rollbackCompose); err != nil {
 			return err
 		}
-		if _, err := w.pool.Execute(ctx, p.NodeID, "compose.source.write", ipc.ComposeSourcePayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: p.OldCompose}); err != nil {
+		if _, err := w.pool.Execute(ctx, p.NodeID, "compose.source.write", ipc.ComposeSourcePayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: rollbackCompose}); err != nil {
 			return err
 		}
 		if _, err := w.pool.Execute(ctx, p.NodeID, "compose.up", ipc.ComposeUpPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: oldRuntime}); err != nil {
@@ -215,7 +235,7 @@ func (w *Worker) handleStackUpgrade(ctx context.Context, raw json.RawMessage) er
 	now := time.Now().UTC()
 	_ = w.db.Execute(ctx, []rqlite.Statement{
 		{SQL: `INSERT OR IGNORE INTO stack_snapshots(id,stack_id,operation_id,zfs_name,kind,created_at) VALUES(?,?,?,?,?,?)`, Params: []interface{}{uuid.NewString(), p.StackID, p.OperationID, snapshot, "pre-upgrade", now}},
-		{SQL: `INSERT OR IGNORE INTO recovery_points(id,stack_id,snapshot_id,dataset_path,compose_yaml,created_at) VALUES(?,?,?,?,?,?)`, Params: []interface{}{uuid.NewString(), p.StackID, snapshot, p.DatasetPath, p.OldCompose, now}},
+		{SQL: `INSERT OR IGNORE INTO recovery_points(id,stack_id,snapshot_id,dataset_path,compose_yaml,created_at) VALUES(?,?,?,?,?,?)`, Params: []interface{}{uuid.NewString(), p.StackID, snapshot, p.DatasetPath, rollbackCompose, now}},
 	})
 	_ = w.ops.Update(ctx, p.OperationID, "running", "updating-source", "")
 	if err := w.store.UpdateStackCompose(ctx, p.StackID, p.NewCompose); err != nil {
@@ -629,7 +649,33 @@ func (w *Worker) finishUpgrade(ctx context.Context, p StackUpgradePayload) error
 	if err := operation.RecordEvent(ctx, w.db, operation.Event{StackID: p.StackID, Type: "Upgrade", Outcome: outcome, OperationID: p.OperationID, Actor: p.Actor, Error: p.Failure}); err != nil {
 		return err
 	}
+	if state == "failed" {
+		if err := w.reportUpgradeFailure(ctx, p, checkpoint, p.Failure); err != nil {
+			return err
+		}
+	}
 	return w.ops.Update(ctx, p.OperationID, state, checkpoint, p.Failure)
+}
+
+func (w *Worker) reportUpgradeFailure(ctx context.Context, p StackUpgradePayload, checkpoint, message string) error {
+	now := time.Now().UTC()
+	id := "workload-upgrade-failed:" + p.OperationID
+	severity := "warning"
+	if checkpoint == "rollback-failed" {
+		severity = "critical"
+	}
+	transition := monitoring.Transition{
+		Result: monitoring.Result{CheckID: id, Producer: "workload-upgrade", Kind: "failure", Status: "failing", ObservedAt: now, EvaluatedAt: now,
+			Resource: monitoring.Resource{WorkloadID: p.StackID, HostID: p.NodeID}, Labels: map[string]string{"operation_id": p.OperationID}},
+		RuleID: id, Title: "Workload image upgrade failed", Message: message, Severity: severity, Action: "open", Notify: true,
+	}
+	if p.Candidate != "" {
+		transition.Extra = func(_ string, guard string, params []interface{}) ([]rqlite.Statement, error) {
+			return []rqlite.Statement{{SQL: `INSERT OR IGNORE INTO failed_workload_upgrades(stack_id,candidate) SELECT ?,? WHERE ` + guard,
+				Params: append([]any{p.StackID, p.Candidate}, params...)}}, nil
+		}
+	}
+	return monitoring.Record(ctx, w.db, w.broker, transition)
 }
 
 func (w *Worker) poll(ctx context.Context) error {
@@ -717,6 +763,15 @@ func (w *Worker) poll(ctx context.Context) error {
 		}
 		if fenced || int(attempts)+1 >= maxAttempts {
 			terminal := []rqlite.Statement{{SQL: `UPDATE tasks SET state='failed',attempts=attempts+1,error=?,updated_at=datetime('now'),locked_by=NULL WHERE id=?`, Params: []interface{}{execErr.Error(), taskID}}}
+			if taskType == TaskStackUpgrade {
+				var upgrade StackUpgradePayload
+				if json.Unmarshal([]byte(payloadStr), &upgrade) == nil && upgrade.OperationID != "" {
+					if err := w.reportUpgradeFailure(ctx, upgrade, "failed", execErr.Error()); err != nil {
+						return w.db.Execute(ctx, []rqlite.Statement{{SQL: `UPDATE tasks SET state='pending',attempts=?,error=?,updated_at=datetime('now'),locked_by=NULL WHERE id=?`, Params: []any{maxAttempts - 1, err.Error(), taskID}}})
+					}
+					terminal = append(terminal, rqlite.Statement{SQL: `UPDATE operations SET state='failed',checkpoint='failed',error=?,updated_at=? WHERE id=? AND state IN ('pending','running')`, Params: []any{execErr.Error(), time.Now().UTC(), upgrade.OperationID}})
+				}
+			}
 			if taskType == TaskBackupRestore {
 				var restore BackupRestorePayload
 				if json.Unmarshal([]byte(payloadStr), &restore) == nil && restore.OwnerGeneration != 0 {

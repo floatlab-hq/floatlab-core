@@ -76,6 +76,10 @@ components:
         compose_file:
           type: string
           description: Raw docker-compose.yml content (includes x-fl-* extensions).
+        image_warnings:
+          type: array
+          description: Image references that could not be fully resolved when saving this Compose configuration.
+          items: {type: string}
         dataset_path:
           type: string
           description: ZFS dataset path — e.g. floatlab/plex
@@ -139,6 +143,19 @@ components:
       properties:
         compose_file:
           type: string
+        expected_compose_file:
+          type: string
+          description: Previously loaded Compose source. A save conflicts when that source has since changed.
+
+    WorkloadUpgradeSettings:
+      type: object
+      required: [window]
+      properties:
+        window:
+          type: string
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]-([01][0-9]|2[0-3]):[0-5][0-9]$'
+          description: Daily start window in the primary appliance timezone. The end is exclusive.
+          example: '02:30-03:30'
 
     StackUpgrade:
       type: object
@@ -387,6 +404,50 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '409':
+          description: The saved Compose source changed or another workload operation is active.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /settings/workload-upgrades:
+    get:
+      summary: Get the lab's automatic workload upgrade window
+      operationId: getWorkloadUpgradeSettings
+      tags: [stacks]
+      responses:
+        '200':
+          description: Current workload upgrade settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkloadUpgradeSettings'
+    put:
+      summary: Set the lab's automatic workload upgrade window
+      operationId: setWorkloadUpgradeSettings
+      tags: [stacks]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkloadUpgradeSettings'
+      responses:
+        '200':
+          description: Workload upgrade settings updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkloadUpgradeSettings'
+        '400':
+          description: Invalid upgrade window.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /stacks/{id}/start:
     parameters:
@@ -414,6 +475,18 @@ paths:
       responses:
         '202':
           description: Start accepted; state transitions asynchronously.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  operation_id: {type: string}
+                  stack_id: {type: string}
+                  state: {type: string}
+                  status: {type: string}
+                  image_warnings:
+                    type: string
+                    description: Warnings from resolving image references in the submitted Compose project.
         '409':
           description: Stack is not in a startable state.
           content:

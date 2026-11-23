@@ -96,6 +96,43 @@ func TestDockerIntegration(t *testing.T) {
 	ginkgo.RunSpecs(t, "TestDockerIntegration", config, reporter)
 }
 
+func runTestComposeRunningImages(t ginkgo.GinkgoTInterface) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	const image = "rqlite/rqlite:8.26.0@sha256:b81e945809e1fcc92f3d72c07d7f8726252dfb5ed406db6faaf6879159193fe9"
+	project := fmt.Sprintf("floatlab-running-images-%d", time.Now().UnixNano())
+	path := filepath.Join(t.TempDir(), "compose.yaml")
+	const source = "services:\n  database:\n    image: " + image + "\n    entrypoint: [/bin/rqlited]\n    command: [/tmp/rqlite]\n"
+	if err := os.WriteFile(path, []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	client, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		defer client.Close()
+		if err := client.ComposeDown(context.Background(), project, path, true); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := client.ComposeUp(ctx, project, path); err != nil {
+		t.Fatal(err)
+	}
+	result, err := client.RunningImages(ctx, project, path)
+	if err != nil || !result.Matches || result.Images["database"].Reference != image || len(result.Images["database"].Digests) != 1 {
+		t.Fatalf("expected matching running image, got %+v (%v)", result, err)
+	}
+	if err := os.WriteFile(path, []byte(source+"    environment: {UNAPPLIED: 'yes'}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result, err = client.RunningImages(ctx, project, path)
+	if err != nil || result.Matches {
+		t.Fatalf("expected unapplied config to block the upgrade, got %+v (%v)", result, err)
+	}
+}
+
 var _ = ginkgo.Describe("TestDockerIntegration", ginkgo.Serial, func() {
 	ginkgo.It("TestComposeCachedStartAndExplicitPull", func() { runTestComposeCachedStartAndExplicitPull(ginkgo.GinkgoT()) })
+	ginkgo.It("verifies running image digests and unapplied changes", func() { runTestComposeRunningImages(ginkgo.GinkgoT()) })
 })

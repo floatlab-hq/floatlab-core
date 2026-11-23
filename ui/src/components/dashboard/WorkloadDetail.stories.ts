@@ -20,4 +20,4 @@ export const Metrics: StoryObj<typeof meta> = { args: { initialTab: 'metrics', a
 export const Compose: StoryObj<typeof meta> = { args: { initialTab: 'compose' } }
 export const Inspect: StoryObj<typeof meta> = { args: { initialTab: 'inspect' } }
 export const EditCompose: StoryObj<typeof meta> = { args: { initialTab: 'edit' } }
-export const UpgradeImages: StoryObj<typeof meta> = { args: { initialTab: 'upgrade' } }
+export const UpgradeImages: StoryObj<typeof meta> = { args: { initialTab: 'upgrade', api: interactiveFixtureApi([{ ...stack, compose_file: 'services:\n  web:\n    image: nginx:1.29.0\n  database:\n    image: postgres:18.1\n    x-fl-auto-upgrade: disabled\n' }]) } }

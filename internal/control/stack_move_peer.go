@@ -381,12 +381,13 @@ func (s *Server) adoptStackMove(ctx context.Context, move stackMove, stack *conf
 	if len(rows.Values) != 1 {
 		return fmt.Errorf("destination move reservation is missing")
 	}
-	return s.db.Execute(ctx, []rqlite.Statement{
+	statements := []rqlite.Statement{
 		config.StackInsert(stack),
 		move.ownerStatement(),
 		{SQL: `INSERT INTO workload_move_receipts(operation_id,stack_id,phase) VALUES(?,?,'pending')`, Params: []any{move.OperationID, move.StackID}},
 		{SQL: `DELETE FROM workload_move_reservations WHERE operation_id=?`, Params: []any{move.OperationID}},
-	})
+	}
+	return s.db.Execute(ctx, appendFailedWorkloadUpgrades(statements, move.StackID, move.FailedUpgrades))
 }
 
 func (s *Server) activateMoveNetwork(ctx context.Context, move stackMove) error {
