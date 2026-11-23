@@ -116,6 +116,14 @@ func TestComposeDownMissingSource(t *testing.T) {
 	}
 }
 
+func TestComposeDownByProjectLabel(t *testing.T) {
+	service := &downCompose{loadErr: errors.New("invalid compose")}
+	client := &Client{compose: service}
+	if err := client.ComposeDown(context.Background(), "stack", "", false); err != nil || !service.called {
+		t.Fatalf("stop by project label: called=%v error=%v", service.called, err)
+	}
+}
+
 type downCompose struct {
 	composeapi.Compose
 	loadErr error

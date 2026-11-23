@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/floatlab/floatlab-core/internal/hostnetwork"
+	"github.com/floatlab/floatlab-core/internal/update"
 	"github.com/floatlab/floatlab-core/pkg/compose"
 	"github.com/floatlab/floatlab-core/pkg/docker"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
@@ -58,6 +59,7 @@ func (d *Dispatcher) register() {
 	d.handle("compose.up", d.composeUp)
 	d.handle("compose.down", d.composeDown)
 	d.handle("compose.pull", d.composePull)
+	d.srv.Handle("compose.source.read", d.composeSourceRead)
 	d.handle("compose.source.write", d.composeSourceWrite)
 	d.handle("compose.running-images", d.composeRunningImages)
 	d.handle("docker.image.lookup", d.lookupImage)
@@ -222,7 +224,7 @@ func (d *Dispatcher) composeUp(ctx context.Context, raw json.RawMessage) (any, e
 	if err := d.docker.ComposeUp(ctx, p.StackID, runtimePath); err != nil {
 		return nil, fmt.Errorf("compose.up: %w", err)
 	}
-	if err := writeFile(appliedComposePath(composePath), []byte(composeFingerprint(p.ComposeFile)), 0600); err != nil {
+	if err := update.ReplaceFile(appliedComposePath(composePath), []byte(composeFingerprint(p.ComposeFile)), 0600); err != nil {
 		d.log.Warn("could not record applied Compose configuration", zap.Error(err))
 	}
 	d.log.Info("compose.up", zap.String("stack", p.StackID))
@@ -240,6 +242,9 @@ func (d *Dispatcher) composeDown(ctx context.Context, raw json.RawMessage) (any,
 	}
 	if d.docker == nil {
 		return nil, fmt.Errorf("docker client not available")
+	}
+	if p.ProjectOnly {
+		composePath = ""
 	}
 	err = d.docker.ComposeDown(ctx, p.StackID, composePath, p.RemoveVolumes)
 	return map[string]string{"status": "down"}, err
@@ -266,7 +271,7 @@ func (d *Dispatcher) composePull(ctx context.Context, raw json.RawMessage) (any,
 	return map[string]string{"status": "pulled"}, err
 }
 
-func (d *Dispatcher) composeSourceWrite(_ context.Context, raw json.RawMessage) (any, error) {
+func (d *Dispatcher) composeSourceWrite(ctx context.Context, raw json.RawMessage) (any, error) {
 	var p ipc.ComposeSourcePayload
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, err
@@ -275,7 +280,32 @@ func (d *Dispatcher) composeSourceWrite(_ context.Context, raw json.RawMessage) 
 	if err != nil {
 		return nil, err
 	}
-	return map[string]string{"path": composePath}, writeFile(composePath, []byte(p.ComposeFile), 0644)
+	if err := publishComposeSource(ctx, composePath, p.StackID, []byte(p.ComposeFile)); err != nil {
+		return nil, err
+	}
+	return map[string]string{"path": composePath}, nil
+}
+
+func (d *Dispatcher) composeSourceRead(_ context.Context, raw json.RawMessage) (any, error) {
+	var p ipc.ComposeSourceReadPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, err
+	}
+	_, path, err := composeArgs(p.StackID, p.DatasetPath)
+	if err != nil {
+		return nil, err
+	}
+	if p.Snapshot != "" {
+		if !validSnapshot(p.DatasetPath + "@" + p.Snapshot) {
+			return nil, fmt.Errorf("invalid Compose snapshot name")
+		}
+		path = filepath.Join(filepath.Dir(path), ".zfs", "snapshot", p.Snapshot, filepath.Base(path))
+	}
+	content, err := compose.ReadProjectSource(path)
+	if err != nil {
+		return nil, err
+	}
+	return ipc.ComposeSourceReadResult{ComposeFile: content}, nil
 }
 
 func (d *Dispatcher) lookupImage(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -1018,25 +1048,12 @@ func composeArgs(stackID, dataset string, action ...string) ([]string, string, e
 	if !composeProject.MatchString(stackID) {
 		return nil, "", fmt.Errorf("invalid stack ID")
 	}
-	parts := strings.Split(dataset, "/")
-	for _, part := range parts {
-		if !datasetPart.MatchString(part) {
-			return nil, "", fmt.Errorf("invalid dataset path")
-		}
+	path, err := compose.ProjectSourcePath(dataset)
+	if err != nil {
+		return nil, "", err
 	}
-	path := filepath.Join(append([]string{"/"}, append(parts, "docker-compose.yml")...)...)
 	args := []string{"compose", "-p", stackID, "-f", path}
 	return append(args, action...), path, nil
-}
-
-func writeFile(path string, data []byte, perm uint32) error {
-	f, err := openFile(path, perm)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.Write(data)
-	return err
 }
 
 func (d *Dispatcher) snapshotRollback(ctx context.Context, raw json.RawMessage) (any, error) {

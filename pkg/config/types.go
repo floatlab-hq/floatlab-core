@@ -30,6 +30,7 @@ type Stack struct {
 	PrimaryNodeID       string    `json:"primary_node_id"`
 	BackupNodeID        string    `json:"backup_node_id,omitempty"`
 	ComposeYAML         string    `json:"compose_yaml"`
+	ComposeFile         bool      `json:"-"`
 	ZFSDataset          string    `json:"zfs_dataset"`
 	SnapshotSchedule    string    `json:"snapshot_schedule,omitempty"`
 	ReplicationSchedule string    `json:"replication_schedule,omitempty"`

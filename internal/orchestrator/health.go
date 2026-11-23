@@ -35,7 +35,7 @@ func (o *Orchestrator) handleContainerState(ctx context.Context, ev ipc.Containe
 			}
 			// Docker events may arrive after a restart operation has completed.
 			// Confirm this container still exists and is stopped before failing the stack.
-			stack, err := o.store.GetStack(ctx, ev.StackID)
+			stack, err := o.store.CatalogStack(ctx, ev.StackID)
 			if err != nil {
 				return
 			}

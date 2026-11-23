@@ -247,7 +247,7 @@ func lifecycleMount(stack, workingDir string, volume types.ServiceVolumeConfig) 
 		return Mount{}, fmt.Errorf("unsupported writable mount type %q", volume.Type)
 	}
 	base := filepath.Base(filepath.Clean(volume.Source))
-	if base == "." || base == "" || base == string(filepath.Separator) {
+	if base == "." || base == "" || base == string(filepath.Separator) || base == ProjectStateDir {
 		return Mount{}, fmt.Errorf("invalid mount source")
 	}
 	m := Mount{Dataset: "floatlab/" + stack + "/" + base, Source: volume.Source, Target: volume.Target, Type: volume.Type, RecordSize: "32K", Compression: "lz4"}

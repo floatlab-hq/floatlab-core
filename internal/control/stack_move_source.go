@@ -150,7 +150,7 @@ func (s *Server) advanceStackMove(ctx context.Context, move *stackMove, phase *s
 				return err
 			}
 		}
-		if _, err := s.hosts.Execute(ctx, source, "compose.down", ipc.ComposeDownPayload{StackID: move.StackID, DatasetPath: move.Stack.ZFSDataset}); err != nil {
+		if _, err := s.hosts.Execute(ctx, source, "compose.down", ipc.ComposeDownPayload{StackID: move.StackID, DatasetPath: move.Stack.ZFSDataset, ProjectOnly: s.store.ProjectComposeEnabled()}); err != nil {
 			return err
 		}
 		if err := s.waitMoveSourceStopped(ctx, *move); err != nil {

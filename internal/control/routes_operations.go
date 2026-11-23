@@ -11,6 +11,7 @@ import (
 
 	"github.com/floatlab/floatlab-core/internal/worker"
 	"github.com/floatlab/floatlab-core/pkg/compose"
+	"github.com/floatlab/floatlab-core/pkg/ipc"
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
 	"github.com/floatlab/floatlab-core/pkg/run"
 )
@@ -114,18 +115,19 @@ func (s *Server) handleRestartStack(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRestoreSnapshot(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	stack, err := s.store.GetStack(r.Context(), id)
+	stack, err := s.store.CatalogStack(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	snapshotID := chi.URLParam(r, "snapshotId")
-	recovery, err := s.db.Query(r.Context(), rqlite.Statement{SQL: `SELECT compose_yaml FROM recovery_points WHERE stack_id=? AND snapshot_id=? AND deleted_at IS NULL`, Params: []interface{}{id, snapshotID}})
+	recovery, err := s.db.Query(r.Context(), rqlite.Statement{SQL: `SELECT dataset_path,compose_yaml FROM recovery_points WHERE stack_id=? AND snapshot_id=? AND deleted_at IS NULL`, Params: []interface{}{id, snapshotID}})
 	if err != nil || len(recovery.Values) == 0 {
 		writeError(w, http.StatusNotFound, "snapshot recovery metadata not found")
 		return
 	}
-	restoredCompose, _ := recovery.Values[0][0].(string)
+	dataset, _ := recovery.Values[0][0].(string)
+	restoredCompose, _ := recovery.Values[0][1].(string)
 	instance, ok := s.raft.FSM().State(id)
 	if !ok || (instance.State != run.StateIdle && instance.State != run.StateRunningPrimary && instance.State != run.StateRunningBackup) {
 		writeError(w, http.StatusConflict, "stack must be idle or running before snapshot recovery")
@@ -135,6 +137,20 @@ func (s *Server) handleRestoreSnapshot(w http.ResponseWriter, r *http.Request) {
 	nodeID := stack.PrimaryNodeID
 	if instance.State == run.StateRunningBackup {
 		nodeID = stack.BackupNodeID
+	}
+	if restoredCompose == "" {
+		// A legacy snapshot may contain a stale mirror of its saved config.
+		raw, err := s.hosts.Execute(r.Context(), nodeID, "compose.source.read", ipc.ComposeSourceReadPayload{StackID: id, DatasetPath: dataset, Snapshot: snapshotID})
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "read snapshot configuration: "+err.Error())
+			return
+		}
+		var captured ipc.ComposeSourceReadResult
+		if err := json.Unmarshal(raw, &captured); err != nil {
+			writeError(w, http.StatusBadGateway, "read snapshot configuration: "+err.Error())
+			return
+		}
+		restoredCompose = captured.ComposeFile
 	}
 	spec, err := compose.ParseLifecycle(restoredCompose, stack.Name)
 	if err != nil {

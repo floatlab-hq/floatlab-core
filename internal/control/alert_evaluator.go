@@ -80,7 +80,7 @@ func (s *Server) alertRules(ctx context.Context) ([]alerts.Rule, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err = s.db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT r.id,r.name,r.metric,COALESCE(r.selector,''),r.comparator,r.threshold,r.duration,r.severity,r.message,r.stack_id,r.active,s.zfs_dataset,COALESCE(rt.active_node_id,s.primary_node_id),s.compose_yaml,s.name FROM stack_alert_rules r JOIN stacks s ON s.id=r.stack_id LEFT JOIN stack_runtime rt ON rt.stack_id=s.id WHERE rt.deleted_at IS NULL`})
+	rows, err = s.db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT r.id,r.name,r.metric,COALESCE(r.selector,''),r.comparator,r.threshold,r.duration,r.severity,r.message,r.stack_id,r.active,s.zfs_dataset,COALESCE(rt.active_node_id,s.primary_node_id) FROM stack_alert_rules r JOIN stacks s ON s.id=r.stack_id LEFT JOIN stack_runtime rt ON rt.stack_id=s.id WHERE rt.deleted_at IS NULL`})
 	if err != nil {
 		return nil, err
 	}
@@ -98,8 +98,10 @@ func (s *Server) alertRules(ctx context.Context) ([]alerts.Rule, error) {
 		}
 		dataset := str(row[11])
 		if strings.HasPrefix(metric, "managed_volume_") {
-			var err error
-			dataset, err = managedAlertDatasets(str(row[13]), str(row[14]), selector)
+			stack, err := s.store.GetStack(ctx, rule.StackID)
+			if err == nil {
+				dataset, err = managedAlertDatasets(stack.ComposeYAML, stack.Name, selector)
+			}
 			if err != nil {
 				rules = append(rules, rule)
 				continue
@@ -138,7 +140,7 @@ func (s *Server) alertRules(ctx context.Context) ([]alerts.Rule, error) {
 }
 
 func (s *Server) workloadAlertResources(ctx context.Context) (map[string]string, map[string]bool, map[string]map[string]int, error) {
-	rows, err := s.db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT s.id,COALESCE(rt.active_node_id,s.primary_node_id),s.compose_yaml
+	rows, err := s.db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT s.id,COALESCE(rt.active_node_id,s.primary_node_id)
 		FROM stacks s LEFT JOIN stack_runtime rt ON rt.stack_id=s.id WHERE rt.deleted_at IS NULL`})
 	if err != nil {
 		return nil, nil, nil, err
@@ -147,7 +149,7 @@ func (s *Server) workloadAlertResources(ctx context.Context) (map[string]string,
 	paused := map[string]bool{}
 	oneShots := map[string]map[string]int{}
 	for _, row := range rows.Values {
-		stackID, nodeID, source := str(row[0]), str(row[1]), str(row[2])
+		stackID, nodeID := str(row[0]), str(row[1])
 		activeNodes[stackID] = nodeID
 		if s.raft != nil {
 			if instance, ok := s.raft.FSM().State(stackID); ok {
@@ -157,17 +159,22 @@ func (s *Server) workloadAlertResources(ctx context.Context) (map[string]string,
 				}
 			}
 		}
-		if strings.Contains(source, "service_completed_successfully") || strings.Contains(source, "x-fl-one-shot") {
-			services, err := compose.ReadOneShotServices(source)
-			if err != nil {
-				activeNodes[stackID] = ""
-				if s.log != nil {
-					s.log.Warn("built-in alert workload policy unavailable", zap.String("stack_id", stackID), zap.Error(err))
-				}
+		source, err := s.store.ReadStackCompose(ctx, stackID)
+		var services map[string]int
+		if err == nil {
+			if !strings.Contains(source, "service_completed_successfully") && !strings.Contains(source, "x-fl-one-shot") {
 				continue
 			}
-			oneShots[stackID] = services
+			services, err = compose.ReadOneShotServices(source)
 		}
+		if err != nil {
+			activeNodes[stackID] = ""
+			if s.log != nil {
+				s.log.Warn("built-in alert workload policy unavailable", zap.String("stack_id", stackID), zap.Error(err))
+			}
+			continue
+		}
+		oneShots[stackID] = services
 	}
 	return activeNodes, paused, oneShots, nil
 }

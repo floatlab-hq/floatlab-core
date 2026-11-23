@@ -22,13 +22,16 @@ func TestLoadBothRuleStores(t *testing.T) {
 	}
 	if err := db.Execute(ctx, []rqlite.Statement{
 		{SQL: `INSERT INTO alert_rules(id,name,type,condition,severity,recovery_condition,freshness_query) VALUES('global','RAM','metrics','used > 90','warning','used < 85','timestamp(used)')`},
-		{SQL: `INSERT INTO stacks(id,name,primary_node_id,zfs_dataset,created_at,updated_at) VALUES('stack','web','primary','floatlab/web','','')`},
+		{SQL: `INSERT INTO stacks(id,name,primary_node_id,zfs_dataset,created_at,updated_at,compose_file) VALUES('stack','web','primary','floatlab/web','','',1)`},
 		{SQL: `INSERT INTO stack_runtime(stack_id,active_node_id,updated_at) VALUES('stack','backup','')`},
 		{SQL: `INSERT INTO stack_alert_rules(id,stack_id,name,metric,selector,comparator,threshold,duration,severity,message) VALUES('compose','stack','CPU','container_cpu_percent','app','gt',95.5,'30s','warning','CPU high')`},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	s := Server{db: db}
+	store := config.NewProjectStore(db, nil, func(context.Context, *config.Stack) (string, error) {
+		return "name: web\nservices:\n  app: {image: busybox}\n  setup: {image: busybox, x-fl-one-shot: true}\n", nil
+	}, nil)
+	s := Server{db: db, store: store}
 	rules, err := s.alertRules(ctx)
 	if err != nil || len(rules) < 3 {
 		t.Fatalf("%+v %v", rules, err)
@@ -38,6 +41,9 @@ func TestLoadBothRuleStores(t *testing.T) {
 	}
 	if !strings.Contains(rules[1].Condition, `node_id="backup"`) || !strings.Contains(rules[1].Condition, "> 95.5") || !strings.Contains(rules[1].RecoveryCondition, "<= 95.5") || rules[1].FreshnessQuery == "" {
 		t.Fatal(rules[1])
+	}
+	if rules[1].ExcludedServices["stack"]["setup"] != 1 {
+		t.Fatalf("published one-shot policy was not loaded: %v", rules[1].ExcludedServices)
 	}
 	found := false
 	for _, rule := range rules[2:] {

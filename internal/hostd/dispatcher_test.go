@@ -2,13 +2,19 @@ package hostd
 
 import (
 	"context"
+	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
-	"github.com/floatlab/floatlab-core/pkg/ipc"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/floatlab/floatlab-core/pkg/compose"
+	"github.com/floatlab/floatlab-core/pkg/ipc"
 )
 
 func TestComposeArgs(t *testing.T) {
@@ -22,6 +28,91 @@ func TestComposeArgs(t *testing.T) {
 	}
 	if _, _, err := composeArgs("stack-123", "floatlab/../etc", "down"); err == nil {
 		t.Fatal("composeArgs accepted traversal")
+	}
+}
+
+func TestComposeSourceWritePublishesCompleteFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "docker-compose.yml")
+	const old = "name: old\nservices: {}\n"
+	const next = "name: next\nservices: {}\n"
+	if err := os.WriteFile(path, []byte(old), 0600); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	payload, err := json.Marshal(ipc.ComposeSourcePayload{StackID: "test", DatasetPath: strings.TrimPrefix(dir, "/"), ComposeFile: next})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = (&Dispatcher{}).composeSourceWrite(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	if prior, err := io.ReadAll(reader); err != nil || string(prior) != old {
+		t.Fatalf("existing reader got %q, %v", prior, err)
+	}
+	if current, err := os.ReadFile(path); err != nil || string(current) != next {
+		t.Fatalf("new reader got %q, %v", current, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("compose mode is %o, want 0600", info.Mode().Perm())
+	}
+	state, err := sql.Open("sqlite", filepath.Join(dir, compose.ProjectStateDir, stackStateFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	// Model an interruption after the file rename and before the tracking commit.
+	if _, err := state.Exec(`DELETE FROM compose_source`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&Dispatcher{}).composeSourceWrite(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	var stackID, digest string
+	if err := state.QueryRow(`SELECT stack_id,sha256 FROM compose_source`).Scan(&stackID, &digest); err != nil {
+		t.Fatal(err)
+	}
+	if stackID != "test" || digest != fmt.Sprintf("%x", sha256.Sum256([]byte(next))) {
+		t.Fatalf("recorded unexpected Compose publication: %s %s", stackID, digest)
+	}
+	if retried, err := os.Stat(path); err != nil || !os.SameFile(info, retried) {
+		t.Fatalf("retry rewrote an already published file: %v", err)
+	}
+}
+
+func TestComposeSourceReadUsesRequestedSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	snapshot := filepath.Join(dir, ".zfs", "snapshot", "saved")
+	if err := os.MkdirAll(snapshot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	const saved = "services: {web: {image: nginx:1}}\n"
+	if err := os.WriteFile(filepath.Join(snapshot, "docker-compose.yml"), []byte(saved), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dataset := strings.TrimPrefix(dir, "/")
+	payload := func(name string) json.RawMessage {
+		data, err := json.Marshal(ipc.ComposeSourceReadPayload{StackID: "test", DatasetPath: dataset, Snapshot: name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	d := &Dispatcher{}
+	result, err := d.composeSourceRead(t.Context(), payload("saved"))
+	if err != nil || result != (ipc.ComposeSourceReadResult{ComposeFile: saved}) {
+		t.Fatalf("snapshot Compose = %#v, %v", result, err)
+	}
+	if _, err := d.composeSourceRead(t.Context(), payload("../saved")); err == nil {
+		t.Fatal("snapshot accepted a path outside its managed name")
 	}
 }
 

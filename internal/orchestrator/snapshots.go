@@ -43,7 +43,7 @@ func RunScheduler(ctx context.Context, orch *Orchestrator, db *rqlite.Client, lo
 }
 
 func scheduleTick(ctx context.Context, orch *Orchestrator, db *rqlite.Client, now time.Time, log *zap.Logger) {
-	stacks, err := orch.store.ListStacks(ctx)
+	stacks, err := orch.store.ListStackCatalog(ctx)
 	if err != nil {
 		log.Error("snapshot scheduler: list stacks", zap.Error(err))
 		return
@@ -70,6 +70,13 @@ func scheduleTick(ctx context.Context, orch *Orchestrator, db *rqlite.Client, no
 		}
 		if !scheduledProtectionState(inst, stack.PrimaryNodeID) {
 			continue
+		}
+		if stack.ComposeFile {
+			stack, err = orch.store.GetStack(ctx, stack.ID)
+			if err != nil {
+				log.Warn("snapshot scheduler: read Compose", zap.Error(err))
+				continue
+			}
 		}
 
 		lifecycle, lifecycleErr := compose.ParseLifecycle(stack.ComposeYAML, stack.Name)

@@ -38,6 +38,11 @@ func WriteFile(path string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
+	return ReplaceFile(path, data, mode)
+}
+
+// ReplaceFile atomically publishes a file in an existing directory.
+func ReplaceFile(path string, data []byte, mode os.FileMode) error {
 	f, err := os.CreateTemp(filepath.Dir(path), ".update-*")
 	if err != nil {
 		return err

@@ -96,6 +96,39 @@ func upgradeFixture(t *testing.T, pullError ...error) (*Worker, StackUpgradePayl
 	return w, p, calls
 }
 
+func TestAutomaticUpgradeReadsPublishedCompose(t *testing.T) {
+	w, p, _ := upgradeFixture(t)
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "docker-compose.yml")
+	w.store = config.NewProjectStore(w.db, nil, func(context.Context, *config.Stack) (string, error) {
+		data, err := os.ReadFile(path)
+		return string(data), err
+	}, func(_ context.Context, stack *config.Stack) error {
+		return os.WriteFile(path, []byte(stack.ComposeYAML), 0600)
+	})
+	stack, err := w.store.CatalogStack(ctx, p.StackID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.store.PublishStackCompose(ctx, stack); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Hour)
+	p.Candidate, p.StartBefore = "candidate-version", &deadline
+	if err := w.db.Execute(ctx, []rqlite.Statement{{SQL: `UPDATE operations SET state='pending' WHERE id=?`, Params: []any{p.OperationID}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.saveUpgrade(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if source, err := w.store.ReadStackCompose(ctx, p.StackID); err != nil || source != p.NewCompose {
+		t.Fatalf("automatic upgrade did not publish the candidate: %q, %v", source, err)
+	}
+}
+
 func TestFailedAutomaticUpgradeAlertsAndPersistsCandidate(t *testing.T) {
 	w, p, calls := upgradeFixture(t, errors.New("registry refused candidate"))
 	p.Candidate = "candidate-version"

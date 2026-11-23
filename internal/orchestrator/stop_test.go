@@ -56,11 +56,16 @@ func stopFixture(t *testing.T) (*Orchestrator, time.Time) {
 
 func stopHost(t *testing.T, orch *Orchestrator, handler ipc.Handler) context.CancelFunc {
 	t.Helper()
+	return stackHost(t, orch, "compose.down", handler)
+}
+
+func stackHost(t *testing.T, orch *Orchestrator, method string, handler ipc.Handler) context.CancelFunc {
+	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	socket := filepath.Join(t.TempDir(), "host.sock")
 	server := ipc.NewServer(socket, zap.NewNop())
-	server.Handle("compose.down", handler)
+	server.Handle(method, handler)
 	server.Handle("probe", func(context.Context, json.RawMessage) (any, error) { return nil, nil })
 	go func() { _ = server.Run(ctx) }()
 	orch.pool.Register("node", socket)

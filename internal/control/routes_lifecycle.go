@@ -18,18 +18,18 @@ import (
 )
 
 func (s *Server) handleStackConfig(w http.ResponseWriter, r *http.Request) {
-	stack, err := s.store.GetStack(r.Context(), chi.URLParam(r, "id"))
+	source, err := s.store.ReadStackCompose(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/yaml")
-	_, _ = w.Write([]byte(stack.ComposeYAML))
+	_, _ = w.Write([]byte(source))
 }
 
 func (s *Server) handleStackStatus(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	stack, err := s.store.GetStack(r.Context(), id)
+	stack, err := s.store.CatalogStack(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -95,7 +95,7 @@ func (s *Server) handleStackAlerts(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStackSnapshots(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	stack, err := s.store.GetStack(r.Context(), id)
+	stack, err := s.store.CatalogStack(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -130,7 +130,7 @@ func (s *Server) handleCreateStackSnapshot(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	payload := worker.SnapshotCreatePayload{Dataset: stack.ZFSDataset, NodeID: stack.PrimaryNodeID, SnapType: "user", Recursive: true, OperationID: opID, StackID: id, Name: name, Actor: actor(r)}
+	payload := worker.SnapshotCreatePayload{Dataset: stack.ZFSDataset, NodeID: stack.PrimaryNodeID, SnapType: "user", Recursive: true, OperationID: opID, StackID: id, Name: name, Actor: actor(r), ProjectSource: stack.ComposeFile}
 	if err := worker.EnqueueTask(r.Context(), s.db, "snapshot-"+opID, worker.TaskSnapshotCreate, id, payload); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -140,7 +140,7 @@ func (s *Server) handleCreateStackSnapshot(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) handleDeleteStackSnapshot(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	stack, err := s.store.GetStack(r.Context(), id)
+	stack, err := s.store.CatalogStack(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return

@@ -34,11 +34,7 @@ func superviseControllers(ctx context.Context, start func(context.Context), log 
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		blocked := false
-		if dir != "" {
-			_, err := os.Stat(filepath.Join(dir, "blocked"))
-			blocked = err == nil || !os.IsNotExist(err)
-		}
+		blocked := controllerActivationBlocked(dir)
 		if blocked && cancel != nil {
 			cancel()
 			select {
@@ -69,6 +65,14 @@ func superviseControllers(ctx context.Context, start func(context.Context), log 
 		case <-ticker.C:
 		}
 	}
+}
+
+func controllerActivationBlocked(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(dir, "blocked"))
+	return !os.IsNotExist(err)
 }
 
 func serveRuntimeChecks(ctx context.Context, node *floatraft.Node) error {

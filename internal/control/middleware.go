@@ -125,35 +125,10 @@ func (s *Server) idempotency(next http.Handler) http.Handler {
 		hash := hex.EncodeToString(digest.Sum(nil))
 		actor, _ := r.Context().Value(keyActor).(string)
 
-		existing, err := s.db.Query(r.Context(), rqlite.Statement{
-			SQL:    `SELECT method, path, request_hash, operation_id, status, response FROM idempotency_keys WHERE actor=? AND key=?`,
-			Params: []interface{}{actor, key},
-		})
-		if err != nil {
+		if replayed, err := s.replayIdempotency(w, r, actor, key, hash); err != nil {
 			writeError(w, http.StatusServiceUnavailable, err.Error())
 			return
-		}
-		if len(existing.Values) > 0 {
-			row := existing.Values[0]
-			method, _ := row[0].(string)
-			path, _ := row[1].(string)
-			oldHash, _ := row[2].(string)
-			if method != r.Method || path != r.URL.Path || oldHash != hash {
-				writeError(w, http.StatusConflict, "idempotency key was used for a different request")
-				return
-			}
-			status := number(row[4])
-			if status == 0 {
-				status = http.StatusAccepted
-			}
-			if response, ok := row[5].(string); ok && response != "" {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(status)
-				_, _ = io.WriteString(w, response)
-				return
-			}
-			opID, _ := row[3].(string)
-			writeJSON(w, status, map[string]string{"operation_id": opID, "status": "running"})
+		} else if replayed {
 			return
 		}
 
@@ -170,7 +145,18 @@ func (s *Server) idempotency(next http.Handler) http.Handler {
 			{SQL: `INSERT INTO operations(id, stack_id, action, actor, state, checkpoint, payload, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, Params: []interface{}{op.ID, op.StackID, op.Action, op.Actor, op.State, op.Checkpoint, op.Payload, now, now}},
 			{SQL: `INSERT INTO idempotency_keys(actor,key,method,path,request_hash,operation_id,created_at) VALUES(?,?,?,?,?,?,?)`, Params: []interface{}{actor, key, r.Method, r.URL.Path, hash, op.ID, now}},
 		}); err != nil {
-			writeError(w, http.StatusConflict, "idempotency key already in use")
+			// Another request may have reserved the key after the initial lookup.
+			replayed, lookupErr := s.replayIdempotency(w, r, actor, key, hash)
+			if replayed {
+				return
+			}
+			if lookupErr == nil && op.StackID != "" {
+				if active, err := s.ops.ActiveForStack(r.Context(), op.StackID); err == nil && active != nil {
+					writeError(w, http.StatusConflict, "stack already has an active operation")
+					return
+				}
+			}
+			writeError(w, http.StatusServiceUnavailable, "could not reserve operation")
 			return
 		}
 
@@ -206,6 +192,34 @@ func (s *Server) idempotency(next http.Handler) http.Handler {
 		w.WriteHeader(recorder.status)
 		_, _ = w.Write(response)
 	})
+}
+
+func (s *Server) replayIdempotency(w http.ResponseWriter, r *http.Request, actor, key, hash string) (bool, error) {
+	existing, err := s.db.Query(r.Context(), rqlite.Statement{
+		SQL:    `SELECT method, path, request_hash, operation_id, status, response FROM idempotency_keys WHERE actor=? AND key=?`,
+		Params: []interface{}{actor, key},
+	})
+	if err != nil || len(existing.Values) == 0 {
+		return false, err
+	}
+	row := existing.Values[0]
+	if row[0] != r.Method || row[1] != r.URL.Path || row[2] != hash {
+		writeError(w, http.StatusConflict, "idempotency key was used for a different request")
+		return true, nil
+	}
+	status := number(row[4])
+	if status == 0 {
+		status = http.StatusAccepted
+	}
+	if response, ok := row[5].(string); ok && response != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, response)
+	} else {
+		opID, _ := row[3].(string)
+		writeJSON(w, status, map[string]string{"operation_id": opID, "status": "running"})
+	}
+	return true, nil
 }
 
 type bufferedResponse struct {

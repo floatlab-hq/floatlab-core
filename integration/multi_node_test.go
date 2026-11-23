@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -642,6 +643,15 @@ func assertLabCaughtUp(t testT, nodes ...*labGuest) {
 	t.Helper()
 	const metadata = "SELECT node_id,generation,revision FROM workload_identity WHERE singleton=1"
 	const content = "SELECT * FROM stacks ORDER BY id"
+	readStacks := func(node *labGuest, path string) ([]map[string]any, error) {
+		raw, err := node.sql(path, content)
+		if err != nil || strings.TrimSpace(raw) == "" {
+			return nil, err
+		}
+		var stacks []map[string]any
+		err = json.Unmarshal([]byte(raw), &stacks)
+		return stacks, err
+	}
 	for _, source := range nodes {
 		raw, err := source.sql("/floatlab/system/workloads/local.sqlite", metadata)
 		if err != nil {
@@ -655,17 +665,25 @@ func assertLabCaughtUp(t testT, nodes ...*labGuest) {
 		if err := json.Unmarshal([]byte(raw), &expected); err != nil || len(expected) != 1 {
 			t.Fatalf("source metadata %s: %v", raw, err)
 		}
-		rows, err := source.sql("/floatlab/system/workloads/local.sqlite", content)
+		stacks, err := readStacks(source, "/floatlab/system/workloads/local.sqlite")
 		if err != nil {
 			t.Fatal(err)
 		}
-		var stacks []struct {
-			ID string `json:"id"`
-		}
-		if strings.TrimSpace(rows) != "" {
-			if err := json.Unmarshal([]byte(rows), &stacks); err != nil {
+		for _, stack := range stacks {
+			dataset, _ := stack["zfs_dataset"].(string)
+			file, err := compose.ProjectSourcePath(dataset)
+			if err != nil {
 				t.Fatal(err)
 			}
+			if stack["compose_file"] != float64(1) || stack["compose_yaml"] != "" {
+				t.Fatalf("owner catalog retains the active Compose source for stack %v", stack["id"])
+			}
+			config, err := source.guest("cat " + shellQuote(file))
+			if err != nil || config == "" {
+				t.Fatalf("read authoritative Compose for stack %v: %v", stack["id"], err)
+			}
+			// The replica embeds the owner's Compose file so it remains readable offline.
+			stack["compose_file"], stack["compose_yaml"] = float64(0), config
 		}
 		related := make(map[string]string)
 		for _, query := range []string{
@@ -702,9 +720,9 @@ func assertLabCaughtUp(t testT, nodes ...*labGuest) {
 				if got[0].NodeID != expected[0].NodeID || got[0].Generation != expected[0].Generation || got[0].Revision < expected[0].Revision {
 					return fmt.Errorf("%s replica %+v behind %+v", target.name, got[0], expected[0])
 				}
-				actualRows, err := target.sql(path, content)
-				if err != nil || strings.TrimSpace(actualRows) != strings.TrimSpace(rows) {
-					return fmt.Errorf("replica stack content mismatch: %s vs %s: %v", actualRows, rows, err)
+				replica, err := readStacks(target, path)
+				if err != nil || !reflect.DeepEqual(replica, stacks) {
+					return fmt.Errorf("replica stack content mismatch: %+v vs %+v: %v", replica, stacks, err)
 				}
 				for query, expectedRows := range related {
 					actualRows, err := target.sql(path, query)
@@ -715,9 +733,10 @@ func assertLabCaughtUp(t testT, nodes ...*labGuest) {
 				return nil
 			})
 			for _, stack := range stacks {
-				out, err := target.guest("docker ps -aq --filter label=com.docker.compose.project=" + shellQuote(stack.ID))
+				id, _ := stack["id"].(string)
+				out, err := target.guest("docker ps -aq --filter label=com.docker.compose.project=" + shellQuote(id))
 				if err != nil || strings.TrimSpace(out) != "" {
-					t.Fatalf("%s executed peer %s stack %s: %q %v", target.name, source.name, stack.ID, out, err)
+					t.Fatalf("%s executed peer %s stack %s: %q %v", target.name, source.name, id, out, err)
 				}
 			}
 		}

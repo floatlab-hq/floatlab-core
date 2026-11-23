@@ -36,5 +36,6 @@ func buildComposeDown(stack *config.Stack) ipc.ComposeDownPayload {
 		StackID:       stack.ID,
 		DatasetPath:   stack.ZFSDataset,
 		RemoveVolumes: false,
+		ProjectOnly:   stack.ComposeFile,
 	}
 }

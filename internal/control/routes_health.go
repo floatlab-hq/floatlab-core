@@ -161,7 +161,7 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "node not found")
 		return
 	}
-	stacks, err := s.store.ListStacks(r.Context())
+	stacks, err := s.store.ListStackCatalog(r.Context())
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return

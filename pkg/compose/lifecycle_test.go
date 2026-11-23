@@ -74,6 +74,24 @@ func TestExtractProjectRejectsTraversal(t *testing.T) {
 	}
 }
 
+func TestProjectStateDirectoryIsReserved(t *testing.T) {
+	var data bytes.Buffer
+	w := tar.NewWriter(&data)
+	if err := w.WriteHeader(&tar.Header{Name: ProjectStateDir + "/state.sqlite", Mode: 0600}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := ExtractProject(&data, t.TempDir()); err == nil {
+		t.Fatal("project archive can replace FloatLab's state database")
+	}
+	source := "services:\n  web:\n    image: nginx\n    volumes: [\"./" + ProjectStateDir + ":/data\"]\n"
+	if _, err := ParseLifecycle(source, "demo"); err == nil {
+		t.Fatal("managed mount can replace FloatLab's state directory")
+	}
+}
+
 func TestRuntimeYAMLRewritesMountAndPort(t *testing.T) {
 	source := "name: demo\nservices:\n  web:\n    image: nginx\n    ports: [\"8080:80\"]\n    volumes: [\"./data:/data\"]\n"
 	runtime, err := RuntimeYAML(source, "demo", "192.0.2.10")

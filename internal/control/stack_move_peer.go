@@ -302,7 +302,12 @@ func (s *Server) acceptStackMove(ctx context.Context, move stackMove) error {
 		}); err != nil {
 			return err
 		}
-		if _, err := s.hosts.Execute(ctx, move.Destination, "compose.source.write", ipc.ComposeSourcePayload{StackID: stack.ID, DatasetPath: stack.ZFSDataset, ComposeFile: stack.ComposeYAML}); err != nil {
+		if s.store.ProjectComposeEnabled() {
+			err = s.store.PublishStackCompose(ctx, &stack)
+		} else {
+			_, err = s.hosts.Execute(ctx, move.Destination, "compose.source.write", ipc.ComposeSourcePayload{StackID: stack.ID, DatasetPath: stack.ZFSDataset, ComposeFile: stack.ComposeYAML})
+		}
+		if err != nil {
 			return err
 		}
 		if spec.HasPorts {

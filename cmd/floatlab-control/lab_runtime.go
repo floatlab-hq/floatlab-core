@@ -66,7 +66,7 @@ func addReplicaCommand(root *cobra.Command) {
 	root.AddCommand(command)
 }
 
-func startLab(ctx context.Context, srv *control.Server, labDB, local *rqlite.Client, hosts *hostclient.Pool, log *zap.Logger) error {
+func startLab(ctx context.Context, srv *control.Server, labDB, local *rqlite.Client, stackStore *config.Store, hosts *hostclient.Pool, log *zap.Logger) error {
 	if labPeerURL == "" {
 		return nil
 	}
@@ -101,6 +101,9 @@ func startLab(ctx context.Context, srv *control.Server, labDB, local *rqlite.Cli
 	var configMu sync.Mutex
 	var lastTrust string
 	replicator := &rqlite.Replicator{DB: local, StateDir: filepath.Join(filepath.Dir(workloadDBPath), "replication"), Transfer: (rqlite.SQLiteRsync{Executable: "/usr/local/bin/sqlite3_rsync", Version: sqliteRsyncVersion}).Transfer}
+	replicator.Export = func(ctx context.Context) (string, func(), error) {
+		return local.ExportReplica(ctx, replicator.StateDir, projectReplicaStatements)
+	}
 	apply := func(mode string) func(context.Context, lab.JoinBundle) error {
 		return func(ctx context.Context, b lab.JoinBundle) error {
 			_, err := hosts.Execute(ctx, hostNodeID, "lab.configure", map[string]any{"mode": mode, "bundle": b})
@@ -116,7 +119,7 @@ func startLab(ctx context.Context, srv *control.Server, labDB, local *rqlite.Cli
 	}
 	cfg := lab.Config{NodeID: hostNodeID, PeerURL: labPeerURL, RaftAddress: labRaftAddress, RQLiteAddress: labRQLiteAddress, DataDir: labDataDir, RQLiteURL: "https://rqlite:4001", DB: labDB, HTTPClient: client, SSHHostKey: hostKey.PublicKey, SSHReplicationKey: pub,
 		RequireEmpty: func(ctx context.Context) error {
-			stacks, err := config.NewStore(local).ListStacks(ctx)
+			stacks, err := stackStore.ListStackCatalog(ctx)
 			if err != nil {
 				return err
 			}

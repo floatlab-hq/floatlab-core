@@ -300,6 +300,17 @@ This is the main API that is by the Web UI SPA to manage your FloatLab.
 
 ### FloatLab Compose  - docker-compose file reader/writer
 
+FloatLab reads each published stack's desired configuration from its project
+dataset at `/floatlab/<stack>/docker-compose.yml`. The API writes that file, and
+start uses it for the next deployment. Use the stack move operation for placement
+changes. The stack's `.floatlab/state.sqlite` tracks managed file publication.
+
+On migration, a project file that differs from the previously authoritative
+database copy is preserved in `.floatlab/compose-before-cutover-*.yml`. After
+publication clears the old copy, management binaries that predate file authority
+reject the updated workload schema. Lab peers continue to receive compatible
+read-only copies for offline recovery.
+
 Contains extended docker-compose file format support, extensions include:
 
 - ZFS Management

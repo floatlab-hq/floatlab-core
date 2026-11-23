@@ -32,6 +32,7 @@ type Replicator struct {
 	StateDir string
 	Peers    func(context.Context) ([]ReplicaPeer, error)
 	Transfer func(context.Context, ReplicaPeer, string) (LocalIdentity, error)
+	Export   func(context.Context) (path string, cleanup func(), err error)
 	mu       sync.Mutex
 	wake     chan struct{}
 }
@@ -195,7 +196,16 @@ func (r *Replicator) synchronizePeer(ctx context.Context, peer ReplicaPeer) erro
 	if status.Generation == id.Generation && status.Revision >= id.Revision && status.Error == "" {
 		return nil
 	}
-	received, transferErr := r.Transfer(ctx, peer, r.DB.LocalPath())
+	source := r.DB.LocalPath()
+	if r.Export != nil {
+		var cleanup func()
+		source, cleanup, err = r.Export(ctx)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+	}
+	received, transferErr := r.Transfer(ctx, peer, source)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}

@@ -299,7 +299,12 @@ func (o *Orchestrator) doProvision(ctx context.Context, stackID string, generati
 			return
 		}
 	}
-	if _, err := o.pool.Execute(ctx, stack.PrimaryNodeID, "compose.source.write", ipc.ComposeSourcePayload{StackID: stack.ID, DatasetPath: stack.ZFSDataset, ComposeFile: stack.ComposeYAML}); err != nil {
+	if o.store.ProjectComposeEnabled() {
+		err = o.store.PublishStackCompose(ctx, stack)
+	} else {
+		_, err = o.pool.Execute(ctx, stack.PrimaryNodeID, "compose.source.write", ipc.ComposeSourcePayload{StackID: stack.ID, DatasetPath: stack.ZFSDataset, ComposeFile: stack.ComposeYAML})
+	}
+	if err != nil {
 		log.Error("orchestrator: provision: write compose source", zap.Error(err))
 		if _, applied := o.applyEvent(stack.PrimaryNodeID, stackID, run.EventFailStack, generation); !applied {
 			return
@@ -459,34 +464,58 @@ func lifecycleVeth(prefix, stackID string) string {
 func (o *Orchestrator) doStart(parent context.Context, stackID string, generation time.Time) {
 	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
 	defer cancel()
+	fail := func(nodeID string, cause error) {
+		o.log.Error("orchestrator: start", zap.String("id", stackID), zap.Error(cause))
+		if parent.Err() == nil {
+			if _, applied := o.applyEvent(nodeID, stackID, run.EventStartFailed, generation); applied {
+				_ = o.ops.FinishForStack(context.Background(), stackID, "start", "failed", cause.Error())
+			}
+		}
+	}
 
 	stack, err := o.store.GetStack(ctx, stackID)
 	if err != nil {
-		o.log.Error("orchestrator: start: get stack", zap.String("id", stackID), zap.Error(err))
+		// A source edit can race admission. Preserve the catalog owner when failing the start.
+		var nodeID string
+		if current, ok := o.raft.FSM().State(stackID); ok {
+			nodeID = current.NodeID
+		}
+		fail(nodeID, err)
 		return
 	}
 
 	composeFile := stack.ComposeYAML
 	spec, specErr := compose.ParseLifecycle(stack.ComposeYAML, stack.Name)
+	if specErr != nil && stack.ComposeFile {
+		fail(stack.PrimaryNodeID, specErr)
+		return
+	}
 	if specErr == nil {
 		stackIP := ""
 		if spec.HasPorts {
 			result, queryErr := o.db.Query(ctx, rqlite.Statement{SQL: `SELECT stack_ip FROM stack_runtime WHERE stack_id=?`, Params: []interface{}{stackID}})
-			if queryErr != nil || len(result.Values) == 0 {
-				if _, applied := o.applyEvent(stack.PrimaryNodeID, stackID, run.EventStartFailed, generation); !applied {
-					return
-				}
+			if queryErr != nil {
+				fail(stack.PrimaryNodeID, queryErr)
+				return
+			}
+			if len(result.Values) == 0 {
+				fail(stack.PrimaryNodeID, fmt.Errorf("stack has no assigned IP for published ports"))
 				return
 			}
 			stackIP, _ = result.Values[0][0].(string)
 		}
-		if runtime, runtimeErr := compose.RuntimeYAML(stack.ComposeYAML, stack.Name, stackIP); runtimeErr == nil {
-			composeFile = runtime
-		} else {
-			if _, applied := o.applyEvent(stack.PrimaryNodeID, stackID, run.EventStartFailed, generation); !applied {
-				return
-			}
+		composeFile, err = compose.RuntimeYAML(stack.ComposeYAML, stack.Name, stackIP)
+		if err != nil {
+			fail(stack.PrimaryNodeID, err)
 			return
+		}
+		if stack.ComposeFile {
+			if err := o.store.SyncBackupTargets(ctx, stack); err != nil {
+				o.log.Warn("orchestrator: start: sync backup targets", zap.Error(err))
+			}
+			if err := SyncStackAlerts(ctx, o.db, stack.ID, spec.Alerts); err != nil {
+				o.log.Warn("orchestrator: start: sync alerts", zap.Error(err))
+			}
 		}
 	}
 	checkedStart := spec != nil && hasStartupChecks(spec)
@@ -502,14 +531,7 @@ func (o *Orchestrator) doStart(parent context.Context, stackID string, generatio
 		startErr = worker.WaitHealthy(startCtx, o.pool, stack.PrimaryNodeID, stackID, spec.HealthTimeout, spec.OneShotServices)
 	}
 	if startErr != nil {
-		if parent.Err() != nil {
-			return
-		}
-		o.log.Error("orchestrator: start", zap.String("id", stackID), zap.Error(startErr))
-		if _, applied := o.applyEvent(stack.PrimaryNodeID, stackID, run.EventStartFailed, generation); !applied {
-			return
-		}
-		_ = o.ops.FinishForStack(context.Background(), stackID, "start", "failed", startErr.Error())
+		fail(stack.PrimaryNodeID, startErr)
 		return
 	}
 
@@ -559,7 +581,7 @@ func (o *Orchestrator) doStop(ctx context.Context, stackID string, generation ti
 		}
 	}
 
-	stack, err := o.store.GetStack(ctx, stackID)
+	stack, err := o.store.CatalogStack(ctx, stackID)
 	if err != nil {
 		o.log.Error("orchestrator: stop: get stack", zap.String("id", stackID), zap.Error(err))
 		fail(err)

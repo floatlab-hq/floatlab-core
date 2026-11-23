@@ -22,6 +22,7 @@ type LocalIdentity struct {
 }
 
 const LocalSchemaVersion = 1
+const ProjectLocalSchemaVersion = 2
 
 type localDB struct {
 	db      *sql.DB
@@ -57,11 +58,13 @@ func OpenLocal(path, nodeID string) (*Client, error) {
 	if err = db.QueryRow(`PRAGMA user_version`).Scan(&schema); err != nil {
 		return fail(err)
 	}
-	if schema > LocalSchemaVersion {
+	if schema > ProjectLocalSchemaVersion {
 		return fail(fmt.Errorf("workload schema %d requires newer software", schema))
 	}
-	if _, err = db.Exec(fmt.Sprintf(`PRAGMA user_version=%d`, LocalSchemaVersion)); err != nil {
-		return fail(err)
+	if schema == 0 {
+		if _, err = db.Exec(fmt.Sprintf(`PRAGMA user_version=%d`, LocalSchemaVersion)); err != nil {
+			return fail(err)
+		}
 	}
 	if _, err = db.Exec(`CREATE TABLE IF NOT EXISTS local_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS workload_identity (singleton INTEGER PRIMARY KEY CHECK(singleton=1), node_id TEXT NOT NULL, generation TEXT NOT NULL, revision INTEGER NOT NULL); INSERT OR IGNORE INTO workload_identity VALUES (1, ?, ?, 0)`, nodeID, uuid.NewString()); err != nil {
 		return fail(err)

@@ -223,7 +223,6 @@ func run(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	}
-	store := config.NewSplitStore(db, labDB)
 	if err = importLifecycle(ctx, db, log); err != nil {
 		return err
 	}
@@ -237,6 +236,16 @@ func run(cmd *cobra.Command, args []string) error {
 	hosts := hostclient.NewPool(log)
 	hosts.Register(hostNodeID, hostSocket)
 	defer hosts.Close()
+	stackStore := config.NewSplitStore(db, labDB)
+	migrationDeferred := controllerActivationBlocked(os.Getenv("FLOATLAB_ACTIVATION_DIR"))
+	if !preflight {
+		stackStore = projectStackStore(db, labDB, hosts)
+		if !migrationDeferred {
+			if err := migrateProjectSources(ctx, stackStore, hostNodeID); err != nil {
+				log.Error("migrate Compose authority", zap.Error(err))
+			}
+		}
+	}
 	if err := serveRuntimeChecks(ctx, raftNode); err != nil {
 		return err
 	}
@@ -247,12 +256,18 @@ func run(cmd *cobra.Command, args []string) error {
 		}
 	}
 	broker := notify.NewBroker()
-	seq := failover.NewSequence(db, store, raftNode, hosts, broker, log)
+	seq := failover.NewSequence(db, stackStore, raftNode, hosts, broker, log)
 	var srv *control.Server
 	startControllers := func(controllerCtx context.Context) {
 		ctx := controllerCtx
 		var controllers sync.WaitGroup
 		launch := func(fn func()) { controllers.Add(1); go func() { defer controllers.Done(); fn() }() }
+		if migrationDeferred {
+			if err := migrateProjectSources(ctx, stackStore, hostNodeID); err != nil {
+				log.Error("migrate Compose authority", zap.Error(err))
+			}
+			migrationDeferred = false
+		}
 
 		if err := ipam.MigratePools(ctx, db, hosts); err != nil {
 			log.Warn("network pool migration incomplete", zap.Error(err))
@@ -306,7 +321,7 @@ func run(cmd *cobra.Command, args []string) error {
 		// Cross-node failover is explicit; loss of reachability never grants ownership.
 
 		// Orchestrator: drives stack state machine from Raft + IPC events.
-		orch := orchestrator.New(store, raftNode, hosts, db, log)
+		orch := orchestrator.New(stackStore, raftNode, hosts, db, log)
 		orch.SetWorkloadOwnerCheck(srv.IsLocalWorkloadOwner)
 		launch(func() {
 			if err := orch.Run(ctx); err != nil && err != context.Canceled {
@@ -319,7 +334,7 @@ func run(cmd *cobra.Command, args []string) error {
 		launch(func() { srv.RunWorkloadUpgrades(ctx, upgradeTimezone) })
 
 		// Task worker: polls rqlite tasks table and dispatches IPC to hostd.
-		w := worker.New(db, store, hosts, raftNode, log)
+		w := worker.New(db, stackStore, hosts, raftNode, log)
 		w.SetNotificationBroker(broker)
 		w.SetBackupRestorePreparer(srv.PrepareBackupRestore)
 		w.SetBackupRestoreOwner(srv.CommitReplicaTakeover)
@@ -347,7 +362,7 @@ func run(cmd *cobra.Command, args []string) error {
 		LabDB:         labDB,
 		LocalNodeID:   hostNodeID,
 		RefreshLab:    func(ctx context.Context) error { return cacheLab(ctx, labDB, db) },
-	}, db, store, raftNode, hosts, broker, seq, log)
+	}, db, stackStore, raftNode, hosts, broker, seq, log)
 
 	if !preflight {
 		if err := srv.EnableWorkloadStartup(ctx); err != nil {
@@ -357,7 +372,7 @@ func run(cmd *cobra.Command, args []string) error {
 			log.Warn("workload startup protection unavailable", zap.Error(err))
 		}
 		hosts.SetWorkloadStartCheck(srv.CheckWorkloadStart)
-		if err := startLab(ctx, srv, labDB, db, hosts, log); err != nil {
+		if err := startLab(ctx, srv, labDB, db, stackStore, hosts, log); err != nil {
 			return err
 		}
 		go superviseControllers(ctx, startControllers, log)

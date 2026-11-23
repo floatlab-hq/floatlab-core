@@ -99,7 +99,7 @@ func (s *Server) RestoreWorkloadsOnStartup(ctx context.Context) error {
 			}
 		}
 	}
-	stacks, err := s.store.ListStacks(ctx)
+	stacks, err := s.store.ListStackCatalog(ctx)
 	if err != nil {
 		return err
 	}
@@ -154,7 +154,12 @@ func (s *Server) restoreWorkloadOnStartup(ctx context.Context, stack *config.Sta
 	if err != nil {
 		return err
 	}
-	spec, err := compose.ParseLifecycle(stack.ComposeYAML, stack.Name)
+	current, err := s.store.GetStack(ctx, id)
+	if err != nil {
+		return err
+	}
+	source := current.ComposeYAML
+	spec, err := compose.ParseLifecycle(source, stack.Name)
 	if err != nil {
 		return err
 	}
@@ -195,7 +200,7 @@ func (s *Server) restoreWorkloadOnStartup(ctx context.Context, stack *config.Sta
 	}
 	if err == nil && !existing {
 		address, _, _ := strings.Cut(service.Address, "/")
-		runtime, parseErr := compose.RuntimeYAML(stack.ComposeYAML, stack.Name, address)
+		runtime, parseErr := compose.RuntimeYAML(source, stack.Name, address)
 		err = parseErr
 		if err == nil {
 			_, err = s.hosts.Execute(ctx, node, "compose.up", ipc.ComposeUpPayload{StackID: id, DatasetPath: stack.ZFSDataset, ComposeFile: runtime})
@@ -247,7 +252,7 @@ func (s *Server) stopFormerWorkload(ctx context.Context, stack *config.Stack, ow
 	if err != nil || !running {
 		return err
 	}
-	_, err = s.hosts.Execute(ctx, s.cfg.LocalNodeID, "compose.down", ipc.ComposeDownPayload{StackID: id, DatasetPath: stack.ZFSDataset})
+	_, err = s.hosts.Execute(ctx, s.cfg.LocalNodeID, "compose.down", ipc.ComposeDownPayload{StackID: id, DatasetPath: stack.ZFSDataset, ProjectOnly: stack.ComposeFile})
 	return err
 }
 

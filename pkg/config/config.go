@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -14,10 +15,13 @@ import (
 // Store provides CRUD operations for all FloatLab configuration entities,
 // backed by rqlite. It also maintains a change watch channel for reactive updates.
 type Store struct {
-	db      *rqlite.Client
-	lab     *rqlite.Client
-	mu      sync.RWMutex
-	watches []chan ChangeEvent
+	db           *rqlite.Client
+	lab          *rqlite.Client
+	mu           sync.RWMutex
+	watches      []chan ChangeEvent
+	composeMu    sync.Mutex
+	readCompose  func(context.Context, *Stack) (string, error)
+	writeCompose func(context.Context, *Stack) error
 }
 
 func NewStore(db *rqlite.Client) *Store {
@@ -26,6 +30,14 @@ func NewStore(db *rqlite.Client) *Store {
 
 // NewSplitStore reads the committed local cache, but changes lab entities through consensus.
 func NewSplitStore(local, lab *rqlite.Client) *Store { return &Store{db: local, lab: lab} }
+
+// NewProjectStore uses the stack dataset for the source of published Compose projects.
+func NewProjectStore(local, lab *rqlite.Client, read func(context.Context, *Stack) (string, error), write func(context.Context, *Stack) error) *Store {
+	return &Store{db: local, lab: lab, readCompose: read, writeCompose: write}
+}
+
+// ProjectComposeEnabled reports whether the store can publish a project source.
+func (s *Store) ProjectComposeEnabled() bool { return s.readCompose != nil && s.writeCompose != nil }
 
 func (s *Store) labWriter() *rqlite.Client {
 	if s.lab != nil {
@@ -150,6 +162,8 @@ func (s *Store) DeleteNode(ctx context.Context, id string) error {
 
 // ---- Stacks ----
 
+var ErrStackNotFound = errors.New("stack not found")
+
 func (s *Store) CreateStack(ctx context.Context, stack *Stack) error {
 	if stack.ID == "" {
 		stack.ID = uuid.New().String()
@@ -183,27 +197,70 @@ func StackInsert(stack *Stack) rqlite.Statement {
 }
 
 func (s *Store) GetStack(ctx context.Context, id string) (*Stack, error) {
+	stack, err := s.CatalogStack(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.loadStackCompose(ctx, stack); err != nil {
+		return nil, err
+	}
+	return stack, nil
+}
+
+const catalogStackColumns = `id, name, icon, primary_node_id, backup_node_id, compose_yaml,
+	zfs_dataset, snapshot_schedule, replication_schedule, backup_schedule, backup_target,
+	failover_mode, auto_trigger_after, created_at, updated_at`
+
+func (s *Store) stackColumns() string {
+	if s.readCompose != nil {
+		return catalogStackColumns + ", compose_file"
+	}
+	return catalogStackColumns
+}
+
+// CatalogStack reads the placement and operation metadata without opening the project file.
+func (s *Store) CatalogStack(ctx context.Context, id string) (*Stack, error) {
 	res, err := s.db.Query(ctx, rqlite.Statement{
-		SQL: `SELECT id, name, icon, primary_node_id, backup_node_id, compose_yaml,
-		      zfs_dataset, snapshot_schedule, replication_schedule, backup_schedule, backup_target,
-		      failover_mode, auto_trigger_after, created_at, updated_at FROM stacks WHERE id=?`,
+		SQL:    `SELECT ` + s.stackColumns() + ` FROM stacks WHERE id=?`,
 		Params: []interface{}{id},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("config: get stack: %w", err)
 	}
 	if len(res.Values) == 0 {
-		return nil, fmt.Errorf("config: stack %s not found", id)
+		return nil, fmt.Errorf("config: %w: %s", ErrStackNotFound, id)
 	}
 	return scanStack(res.Values[0])
 }
 
 func (s *Store) ListStacks(ctx context.Context) ([]*Stack, error) {
-	res, err := s.db.Query(ctx, rqlite.Statement{
-		SQL: `SELECT id, name, icon, primary_node_id, backup_node_id, compose_yaml,
-		      zfs_dataset, snapshot_schedule, replication_schedule, backup_schedule, backup_target,
-		      failover_mode, auto_trigger_after, created_at, updated_at FROM stacks ORDER BY name`,
-	})
+	stacks, err := s.ListStackCatalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, stack := range stacks {
+		if err := s.loadStackCompose(ctx, stack); err != nil {
+			return nil, err
+		}
+	}
+	return stacks, nil
+}
+
+// ListStackCatalog reads stack identities and placement without opening project files.
+func (s *Store) ListStackCatalog(ctx context.Context) ([]*Stack, error) {
+	return s.listStackCatalog(ctx, "")
+}
+
+// PendingStackCompose lists migration and provisioning sources held until the project exists.
+func (s *Store) PendingStackCompose(ctx context.Context) ([]*Stack, error) {
+	if s.readCompose == nil {
+		return nil, errors.New("config: project Compose is disabled")
+	}
+	return s.listStackCatalog(ctx, ` WHERE compose_file=0`)
+}
+
+func (s *Store) listStackCatalog(ctx context.Context, filter string) ([]*Stack, error) {
+	res, err := s.db.Query(ctx, rqlite.Statement{SQL: `SELECT ` + s.stackColumns() + ` FROM stacks` + filter + ` ORDER BY name`})
 	if err != nil {
 		return nil, fmt.Errorf("config: list stacks: %w", err)
 	}
@@ -219,26 +276,59 @@ func (s *Store) ListStacks(ctx context.Context) ([]*Stack, error) {
 }
 
 func (s *Store) UpdateStackCompose(ctx context.Context, id, composeYAML string) error {
-	err := s.db.Execute(ctx, []rqlite.Statement{{
+	if s.readCompose != nil && !s.ProjectComposeEnabled() {
+		return errors.New("config: project Compose is read-only")
+	}
+	s.composeMu.Lock()
+	defer s.composeMu.Unlock()
+	stack, err := s.CatalogStack(ctx, id)
+	if err != nil {
+		return err
+	}
+	stack.ComposeYAML = composeYAML
+	if stack.ComposeFile {
+		return s.publishStackCompose(ctx, stack, true)
+	}
+	if err := s.db.Execute(ctx, []rqlite.Statement{{
 		SQL:    `UPDATE stacks SET compose_yaml=?, updated_at=? WHERE id=?`,
 		Params: []interface{}{composeYAML, time.Now().UTC(), id},
-	}})
-	if err != nil {
+	}}); err != nil {
 		return fmt.Errorf("config: update stack compose: %w", err)
 	}
 	return s.stackComposeUpdated(ctx, id)
 }
 
 func (s *Store) UpdateStackComposeAndSecondary(ctx context.Context, id, source, secondary string) error {
-	result, err := s.db.Request(ctx, rqlite.Statement{
+	s.composeMu.Lock()
+	defer s.composeMu.Unlock()
+	stack, err := s.CatalogStack(ctx, id)
+	if err != nil {
+		return err
+	}
+	stmt := rqlite.Statement{
 		SQL:    `UPDATE stacks SET compose_yaml=?,backup_node_id=?,updated_at=? WHERE id=? AND COALESCE(backup_node_id,'') IN ('',?)`,
 		Params: []any{source, secondary, time.Now().UTC(), id, secondary},
-	})
+	}
+	if stack.ComposeFile {
+		stack.ComposeYAML, stack.BackupNodeID = source, secondary
+		if err := stack.readComposePolicy(); err != nil {
+			return err
+		}
+		// Reserve placement before publishing so the old file is still readable after interruption.
+		stmt = rqlite.Statement{
+			SQL:    `UPDATE stacks SET backup_node_id=? WHERE id=? AND COALESCE(backup_node_id,'') IN ('',?)`,
+			Params: []any{secondary, id, secondary},
+		}
+	}
+	result, err := s.db.Request(ctx, stmt)
 	if err != nil {
 		return fmt.Errorf("config: update stack secondary: %w", err)
 	}
 	if result.RowsAffected != 1 {
 		return fmt.Errorf("config: stack secondary assignment changed")
+	}
+	if stack.ComposeFile {
+		return s.publishStackCompose(ctx, stack, true)
 	}
 	return s.stackComposeUpdated(ctx, id)
 }
@@ -322,6 +412,9 @@ func scanStack(row []interface{}) (*Stack, error) {
 	}
 	if t, ok := row[14].(string); ok {
 		st.UpdatedAt, _ = time.Parse(time.RFC3339, t)
+	}
+	if len(row) > 15 {
+		st.ComposeFile = fmt.Sprint(row[15]) == "1"
 	}
 	return st, nil
 }

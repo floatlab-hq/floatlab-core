@@ -53,17 +53,18 @@ type BackupRestorePayload struct {
 
 // SnapshotCreatePayload is stored in tasks.payload for snapshot.create tasks.
 type SnapshotCreatePayload struct {
-	Dataset     string `json:"dataset"`
-	NodeID      string `json:"node_id"`
-	SnapType    string `json:"snap_type"` // "hourly", "daily", "weekly", "monthly", "user"
-	Label       string `json:"label,omitempty"`
-	Keep        int    `json:"keep"`
-	Recursive   bool   `json:"recursive,omitempty"`
-	OperationID string `json:"operation_id,omitempty"`
-	StackID     string `json:"stack_id,omitempty"`
-	Name        string `json:"name,omitempty"`
-	Actor       string `json:"actor,omitempty"`
-	Policy      string `json:"policy,omitempty"`
+	Dataset       string `json:"dataset"`
+	NodeID        string `json:"node_id"`
+	SnapType      string `json:"snap_type"` // "hourly", "daily", "weekly", "monthly", "user"
+	Label         string `json:"label,omitempty"`
+	Keep          int    `json:"keep"`
+	Recursive     bool   `json:"recursive,omitempty"`
+	OperationID   string `json:"operation_id,omitempty"`
+	StackID       string `json:"stack_id,omitempty"`
+	Name          string `json:"name,omitempty"`
+	Actor         string `json:"actor,omitempty"`
+	Policy        string `json:"policy,omitempty"`
+	ProjectSource bool   `json:"project_source,omitempty"`
 }
 
 // SnapshotDeletePayload is stored in tasks.payload for snapshot.delete tasks.

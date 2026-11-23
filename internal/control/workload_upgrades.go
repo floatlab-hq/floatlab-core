@@ -128,7 +128,7 @@ func (s *Server) checkWorkloadUpgrades(ctx context.Context, window WorkloadUpgra
 	if slot == "" && !warn {
 		return
 	}
-	stacks, err := s.store.ListStacks(ctx)
+	stacks, err := s.store.ListStackCatalog(ctx)
 	if err != nil {
 		s.log.Warn("could not list workloads for image updates", zap.Error(err))
 		return
@@ -140,6 +140,14 @@ func (s *Server) checkWorkloadUpgrades(ctx context.Context, window WorkloadUpgra
 	for _, stack := range stacks {
 		if stack.PrimaryNodeID != s.cfg.LocalNodeID || ctx.Err() != nil {
 			continue
+		}
+		if stack.ComposeFile {
+			current, err := s.store.GetStack(ctx, stack.ID)
+			if err != nil {
+				s.log.Warn("could not read Compose for image updates", zap.String("stack", stack.ID), zap.Error(err))
+				continue
+			}
+			stack = current
 		}
 		if err := s.checkStackImageUpgrades(ctx, stack, slot, deadline, warn); err != nil {
 			s.log.Warn("workload image check failed", zap.String("stack", stack.ID), zap.Error(err))

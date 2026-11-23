@@ -233,17 +233,26 @@ func protectionOutcome(runs []monitoring.Execution) (monitoring.Execution, int) 
 }
 
 func (s *Server) hasSnapshotSchedule(ctx context.Context, resource monitoring.Resource) (bool, error) {
-	rows, err := s.db.QueryStrong(ctx, rqlite.Statement{SQL: `SELECT name,compose_yaml,zfs_dataset FROM stacks WHERE id=? AND primary_node_id=?`, Params: []any{resource.WorkloadID, resource.HostID}})
-	if err != nil || len(rows.Values) == 0 {
+	stack, err := s.store.CatalogStack(ctx, resource.WorkloadID)
+	if errors.Is(err, config.ErrStackNotFound) {
+		return false, nil
+	}
+	if err != nil {
 		return false, err
 	}
-	row := rows.Values[0]
-	spec, err := compose.ParseLifecycle(str(row[1]), str(row[0]))
+	if stack.PrimaryNodeID != resource.HostID {
+		return false, nil
+	}
+	source, err := s.store.ReadStackCompose(ctx, stack.ID)
+	if err != nil {
+		return false, err
+	}
+	spec, err := compose.ParseLifecycle(source, stack.Name)
 	if err == nil {
 		return len(spec.Mounts[resource.Dataset].Snapshots) > 0, nil
 	}
-	legacy, err := compose.Parse(ctx, str(row[1]), str(row[0]))
-	if err != nil || resource.Dataset != str(row[2]) {
+	legacy, err := compose.Parse(ctx, source, stack.Name)
+	if err != nil || resource.Dataset != stack.ZFSDataset {
 		return false, nil
 	}
 	schedule := legacy.Extension.Snapshots.Schedule

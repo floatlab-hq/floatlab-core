@@ -9,6 +9,9 @@ import (
 	"strings"
 )
 
+// ProjectStateDir is reserved for FloatLab's own stack tracking files.
+const ProjectStateDir = ".floatlab"
+
 // ExtractProject extracts a tar stream without following links or allowing entries to escape dest.
 func ExtractProject(stream io.Reader, dest string) error {
 	seen := map[string]bool{}
@@ -24,6 +27,9 @@ func ExtractProject(stream io.Reader, dest string) error {
 		name := filepath.Clean(filepath.FromSlash(header.Name))
 		if name == "." || filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
 			return fmt.Errorf("compose: unsafe archive path %q", header.Name)
+		}
+		if first, _, _ := strings.Cut(name, string(filepath.Separator)); first == ProjectStateDir {
+			return fmt.Errorf("compose: reserved archive path %q", header.Name)
 		}
 		if seen[name] {
 			return fmt.Errorf("compose: duplicate archive path %q", header.Name)

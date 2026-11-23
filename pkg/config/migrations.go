@@ -40,6 +40,7 @@ func Migrate(ctx context.Context, db *rqlite.Client) error {
 			primary_node_id      TEXT NOT NULL,
 			backup_node_id       TEXT,
 			compose_yaml         TEXT NOT NULL DEFAULT '',
+			compose_file         INTEGER NOT NULL DEFAULT 0 CHECK(compose_file IN (0,1)),
 			zfs_dataset          TEXT NOT NULL DEFAULT '',
 			snapshot_schedule    TEXT,
 			replication_schedule TEXT,
@@ -96,6 +97,7 @@ func Migrate(ctx context.Context, db *rqlite.Client) error {
 		"nodes":                {"hostname TEXT NOT NULL DEFAULT ''", "role TEXT NOT NULL DEFAULT 'secondary'", "zfs_pool TEXT NOT NULL DEFAULT 'floatlab'"},
 		"networks":             {"stack_id TEXT", "created_at TEXT NOT NULL DEFAULT ''"},
 		"alert_rules":          {"severity TEXT NOT NULL DEFAULT 'warning'", "stack_id TEXT", "node_id TEXT", "for_duration TEXT NOT NULL DEFAULT ''", "annotations TEXT NOT NULL DEFAULT '{}'", "enabled INTEGER NOT NULL DEFAULT 1", "created_at TEXT NOT NULL DEFAULT ''", "updated_at TEXT NOT NULL DEFAULT ''"},
+		"stacks":               {"compose_file INTEGER NOT NULL DEFAULT 0 CHECK(compose_file IN (0,1))"},
 	} {
 		if err := rqlite.AddColumns(ctx, db, table, columns); err != nil {
 			return err

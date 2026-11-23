@@ -124,12 +124,17 @@ func (s *Server) handleListStacks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) stackViews(ctx context.Context) ([]stackResponse, error) {
-	stacks, err := s.store.ListStacks(ctx)
+	stacks, err := s.store.ListStackCatalog(ctx)
 	if err != nil {
 		return nil, err
 	}
 	result := make([]stackResponse, 0, len(stacks))
 	for _, st := range stacks {
+		if st.ComposeFile {
+			if project, err := s.store.GetStack(ctx, st.ID); err == nil {
+				st = project
+			}
+		}
 		var state string
 		if s.raft != nil {
 			if inst, ok := s.raft.FSM().State(st.ID); ok {
@@ -221,7 +226,7 @@ func (s *Server) handleValidateStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.StackID != "" {
-		st, err := s.store.GetStack(r.Context(), req.StackID)
+		st, err := s.store.CatalogStack(r.Context(), req.StackID)
 		if err != nil {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
@@ -360,7 +365,7 @@ func (s *Server) handleCreateStack(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUpdateStackCompose(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	st, err := s.store.GetStack(r.Context(), id)
+	st, err := s.store.CatalogStack(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -408,9 +413,11 @@ func (s *Server) handleUpdateStackCompose(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	st.ComposeYAML = canonical
-	st.BackupNodeID = parsed.Extension.SecondaryNode
-	st.UpdatedAt = time.Now().UTC()
+	st, err = s.store.GetStack(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	var state string
 	if inst, ok := s.raft.FSM().State(id); ok {
 		state = string(inst.State)
@@ -430,10 +437,20 @@ func (s *Server) handleStartStack(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "backup restore data is incomplete; wait for recovery or remove the failed restored stack")
 		return
 	}
-	st, err := s.store.GetStack(r.Context(), id)
-	if err != nil {
+	st, err := s.store.CatalogStack(r.Context(), id)
+	if errors.Is(err, config.ErrStackNotFound) {
 		s.handleCreateAndStartStack(w, r, id)
 		return
+	}
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if r.ContentLength == 0 {
+		if _, err := s.store.GetStack(r.Context(), id); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 	}
 	if r.ContentLength != 0 {
 		var source, staging string
@@ -473,7 +490,12 @@ func (s *Server) handleStartStack(w http.ResponseWriter, r *http.Request) {
 		}
 		canonical, warnings = s.pinStackImages(r.Context(), st.PrimaryNodeID, canonical, spec)
 		if staging != "" {
-			if err := compose.CopyProject(staging, filepath.Join("/floatlab", st.Name)); err != nil {
+			projectPath, err := compose.ProjectSourcePath(st.ZFSDataset)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if err := copyProjectAssets(staging, filepath.Dir(projectPath)); err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
@@ -621,7 +643,7 @@ func (s *Server) handleCreateAndStartStack(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
-		if err := compose.CopyProject(staging, filepath.Join("/floatlab", name)); err != nil {
+		if err := copyProjectAssets(staging, filepath.Join("/floatlab", name)); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -643,9 +665,17 @@ func (s *Server) handleCreateAndStartStack(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusAccepted, response)
 }
 
+func copyProjectAssets(staging, destination string) error {
+	// The source file is published by hostd, under the project write lock.
+	if err := os.Remove(filepath.Join(staging, "docker-compose.yml")); err != nil {
+		return err
+	}
+	return compose.CopyProject(staging, destination)
+}
+
 func (s *Server) handleStopStack(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	st, err := s.store.GetStack(r.Context(), id)
+	st, err := s.store.CatalogStack(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -704,7 +734,7 @@ func (s *Server) handleStopStack(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteStack(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	stack, err := s.store.GetStack(r.Context(), id)
+	stack, err := s.store.CatalogStack(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return

@@ -3,6 +3,7 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -65,6 +67,10 @@ func runContainerManagementAPI(t testT, c *apiClient) {
 	restarted := c.mutate(http.MethodPost, "/api/v1/stacks/"+stackID+"/restart", nil, "application/json")
 	c.waitOperation(restarted.OperationID)
 	c.waitStackState(stackID, "RunningPrimary")
+	containerID = c.assertContainerAPIs(stackID)
+	if revision := strings.TrimSpace(c.execInContainer(stackID, containerID, []string{"cat", "/data/revision.txt"})); revision != "from-disk" {
+		c.t.Fatalf("restart used revision %q, want from-disk", revision)
+	}
 
 	stopped := c.mutate(http.MethodPost, "/api/v1/stacks/"+stackID+"/stop", nil, "application/json")
 	c.waitOperation(stopped.OperationID)
@@ -401,6 +407,7 @@ func (c *apiClient) assertStorageAPIs(stackID string) {
 	if created.TaskID == "" || !strings.HasSuffix(created.Snapshot, snapshotName) {
 		c.t.Fatalf("unexpected storage snapshot create response: %+v", created)
 	}
+	c.waitOperation(created.OperationID)
 	waitFor(c.t, 90*time.Second, func() error {
 		if findSnapshot(c, "/api/v1/storage/datasets/"+stackID+"/snapshots", snapshotName) != "" {
 			return nil
@@ -409,7 +416,8 @@ func (c *apiClient) assertStorageAPIs(stackID string) {
 	})
 	actualName := findSnapshot(c, "/api/v1/storage/datasets/"+stackID+"/snapshots", snapshotName)
 	if actualName != "" {
-		_ = c.mutate(http.MethodDelete, "/api/v1/storage/datasets/"+stackID+"/snapshots/"+actualName, nil, "")
+		deleted := c.mutate(http.MethodDelete, "/api/v1/storage/datasets/"+stackID+"/snapshots/"+actualName, nil, "")
+		c.waitOperation(deleted.OperationID)
 	}
 }
 
@@ -582,6 +590,34 @@ func (c *apiClient) assertComposeUpdate(stackID, stackName, marker string) {
 	}
 	if resp.StatusCode != http.StatusBadRequest {
 		c.t.Fatalf("node-changing compose update: got %s body=%s", resp.Status, bytes.TrimSpace(body))
+	}
+
+	projectDir := filepath.Join("/floatlab", stackName)
+	file := shellQuote(filepath.Join(projectDir, "docker-compose.yml"))
+	published, err := guestCommand(c.vm, "cat "+file)
+	if err != nil || strings.TrimSpace(published) != strings.TrimSpace(stack.ComposeFile) {
+		c.t.Fatalf("API update did not publish the stack's Compose file: %v\n%s", err, published)
+	}
+	quotedID := "'" + strings.ReplaceAll(stackID, "'", "''") + "'"
+	checkStorage := "set -eu; sqlite3 -readonly /floatlab/system/workloads/local.sqlite " + shellQuote("SELECT count(*) FROM stacks WHERE id = "+quotedID+" AND coalesce(compose_yaml, '') = ''") +
+		"; sqlite3 -readonly " + shellQuote(filepath.Join(projectDir, ".floatlab", "state.sqlite")) + " " + shellQuote("SELECT sha256 FROM compose_source WHERE stack_id = "+quotedID)
+	if out, err := guestCommand(c.vm, checkStorage); err != nil || strings.TrimSpace(out) != fmt.Sprintf("1\n%x", sha256.Sum256([]byte(published))) {
+		c.t.Fatalf("expected an empty catalog copy and the published file's tracked digest: %v\n%s", err, out)
+	}
+	directEdit := strings.Replace(published, "from-update", "from-disk", 1)
+	if directEdit == published {
+		c.t.Fatal("published Compose file has no revision to edit")
+	}
+	script := `set -eu; file=` + file + `; tmp=$(mktemp "$file.XXXXXX"); printf %s ` + shellQuote(directEdit) + ` > "$tmp"; chmod --reference="$file" "$tmp"; mv "$tmp" "$file"`
+	if out, err := guestCommand(c.vm, script); err != nil {
+		c.t.Fatalf("edit Compose file directly: %v\n%s", err, out)
+	}
+	resp, body, err = c.request(http.MethodGet, "/api/v1/stacks/"+stackID+"/config", c.token, "", "", nil)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || strings.TrimSpace(string(body)) != strings.TrimSpace(directEdit) {
+		c.t.Fatalf("GET did not return the directly edited Compose file: %s\n%s", resp.Status, body)
 	}
 }
 

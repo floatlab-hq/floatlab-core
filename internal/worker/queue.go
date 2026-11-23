@@ -147,16 +147,22 @@ func (w *Worker) handleStackUpgrade(ctx context.Context, raw json.RawMessage) er
 		}
 		return w.finishUpgrade(ctx, p)
 	}
-	stack, err := w.store.GetStack(ctx, p.StackID)
+	stack, err := w.store.CatalogStack(ctx, p.StackID)
 	if err != nil {
 		return err
 	}
 	if p.Candidate != "" && p.Lifecycle.Event == run.EventUpdateStack && op.State == "pending" {
 		instance, ok := w.raft.FSM().State(p.StackID)
 		started := ok && instance.State == p.Lifecycle.To && instance.UpdatedAt.Equal(p.Lifecycle.Timestamp)
-		if !started && (stack.ComposeYAML != p.OldCompose || p.StartBefore == nil || !time.Now().Before(*p.StartBefore) ||
-			!ok || instance.State != p.Lifecycle.From || !instance.UpdatedAt.Equal(p.Lifecycle.ExpectedUpdatedAt)) {
-			return w.ops.Update(ctx, p.OperationID, "succeeded", "deferred", "")
+		if !started {
+			source, err := w.store.ReadStackCompose(ctx, p.StackID)
+			if err != nil {
+				return err
+			}
+			if source != p.OldCompose || p.StartBefore == nil || !time.Now().Before(*p.StartBefore) ||
+				!ok || instance.State != p.Lifecycle.From || !instance.UpdatedAt.Equal(p.Lifecycle.ExpectedUpdatedAt) {
+				return w.ops.Update(ctx, p.OperationID, "succeeded", "deferred", "")
+			}
 		}
 	}
 	newRuntime, err := w.runtimeCompose(ctx, p.StackID, stack.Name, p.NewCompose)
@@ -180,17 +186,14 @@ func (w *Worker) handleStackUpgrade(ctx context.Context, raw json.RawMessage) er
 			return nil // The old workload is still serving, so there's nothing to restore.
 		}
 		if p.SnapshotCreated {
-			if _, err := w.pool.Execute(ctx, p.NodeID, "compose.down", ipc.ComposeDownPayload{StackID: p.StackID, DatasetPath: p.DatasetPath}); err != nil {
+			if _, err := w.pool.Execute(ctx, p.NodeID, "compose.down", ipc.ComposeDownPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ProjectOnly: w.store.ProjectComposeEnabled()}); err != nil {
 				return err
 			}
 			if err := w.restoreDatasets(ctx, p.NodeID, p.DatasetPath, snapshot, p.OperationID); err != nil {
 				return err
 			}
 		}
-		if err := w.store.UpdateStackCompose(ctx, p.StackID, rollbackCompose); err != nil {
-			return err
-		}
-		if _, err := w.pool.Execute(ctx, p.NodeID, "compose.source.write", ipc.ComposeSourcePayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: rollbackCompose}); err != nil {
+		if err := w.publishCompose(ctx, p.StackID, p.NodeID, p.DatasetPath, rollbackCompose); err != nil {
 			return err
 		}
 		if _, err := w.pool.Execute(ctx, p.NodeID, "compose.up", ipc.ComposeUpPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: oldRuntime}); err != nil {
@@ -241,10 +244,7 @@ func (w *Worker) handleStackUpgrade(ctx context.Context, raw json.RawMessage) er
 		{SQL: `INSERT OR IGNORE INTO recovery_points(id,stack_id,snapshot_id,dataset_path,compose_yaml,created_at) VALUES(?,?,?,?,?,?)`, Params: []interface{}{uuid.NewString(), p.StackID, snapshot, p.DatasetPath, rollbackCompose, now}},
 	})
 	_ = w.ops.Update(ctx, p.OperationID, "running", "updating-source", "")
-	if err := w.store.UpdateStackCompose(ctx, p.StackID, p.NewCompose); err != nil {
-		return fail(err)
-	}
-	if _, err := w.pool.Execute(ctx, p.NodeID, "compose.source.write", ipc.ComposeSourcePayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: p.NewCompose}); err != nil {
+	if err := w.publishCompose(ctx, p.StackID, p.NodeID, p.DatasetPath, p.NewCompose); err != nil {
 		return fail(err)
 	}
 	_ = w.ops.Update(ctx, p.OperationID, "running", "reconciling", "")
@@ -269,7 +269,7 @@ func (w *Worker) handleStackRestart(ctx context.Context, raw json.RawMessage) er
 		return nil
 	}
 	_ = w.ops.Update(ctx, p.OperationID, "running", "stopping", "")
-	if _, err := w.pool.Execute(ctx, p.NodeID, "compose.down", ipc.ComposeDownPayload{StackID: p.StackID, DatasetPath: p.DatasetPath}); err != nil {
+	if _, err := w.pool.Execute(ctx, p.NodeID, "compose.down", ipc.ComposeDownPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ProjectOnly: w.store.ProjectComposeEnabled()}); err != nil {
 		return err
 	}
 	_ = w.ops.Update(ctx, p.OperationID, "running", "starting", "")
@@ -292,7 +292,7 @@ func (w *Worker) handleStackDelete(ctx context.Context, raw json.RawMessage) err
 		return nil
 	}
 	_ = w.ops.Update(ctx, p.OperationID, "running", "compose-down", "")
-	if _, err := w.pool.Execute(ctx, p.NodeID, "compose.down", ipc.ComposeDownPayload{StackID: p.StackID, DatasetPath: p.DatasetPath}); err != nil {
+	if _, err := w.pool.Execute(ctx, p.NodeID, "compose.down", ipc.ComposeDownPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ProjectOnly: w.store.ProjectComposeEnabled()}); err != nil {
 		return err
 	}
 	_ = w.ops.Update(ctx, p.OperationID, "running", "network-release", "")
@@ -353,6 +353,28 @@ func (w *Worker) handleStackDelete(ctx context.Context, raw json.RawMessage) err
 	return w.ops.Update(ctx, p.OperationID, "succeeded", "succeeded", "")
 }
 
+func (w *Worker) publishCompose(ctx context.Context, stackID, nodeID, dataset, source string) error {
+	if w.store.ProjectComposeEnabled() {
+		stack, err := w.store.CatalogStack(ctx, stackID)
+		if err != nil {
+			return err
+		}
+		if !stack.ComposeFile && stack.ComposeYAML != source {
+			// Older operations may have entered their swap before the cutover mounted the project.
+			if err := w.store.UpdateStackCompose(ctx, stackID, source); err != nil {
+				return err
+			}
+		}
+		stack.ComposeYAML = source
+		return w.store.PublishStackCompose(ctx, stack)
+	}
+	if err := w.store.UpdateStackCompose(ctx, stackID, source); err != nil {
+		return err
+	}
+	_, err := w.pool.Execute(ctx, nodeID, "compose.source.write", ipc.ComposeSourcePayload{StackID: stackID, DatasetPath: dataset, ComposeFile: source})
+	return err
+}
+
 func (w *Worker) handleStackRestore(ctx context.Context, raw json.RawMessage) error {
 	var p StackRestorePayload
 	if err := json.Unmarshal(raw, &p); err != nil {
@@ -366,15 +388,11 @@ func (w *Worker) handleStackRestore(ctx context.Context, raw json.RawMessage) er
 		return err
 	}
 	swapStarted := op.Checkpoint == "activating-snapshot" || op.Checkpoint == "starting"
-	currentCompose := ""
-	if current, err := w.store.GetStack(ctx, p.StackID); err == nil {
-		currentCompose = current.ComposeYAML
-	}
 	if p.WasRunning && op.Checkpoint != "activating-snapshot" {
 		if !swapStarted {
 			_ = w.ops.Update(ctx, p.OperationID, "running", "stopping", "")
 		}
-		if _, err := w.pool.Execute(ctx, p.NodeID, "compose.down", ipc.ComposeDownPayload{StackID: p.StackID, DatasetPath: p.DatasetPath}); err != nil {
+		if _, err := w.pool.Execute(ctx, p.NodeID, "compose.down", ipc.ComposeDownPayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ProjectOnly: w.store.ProjectComposeEnabled()}); err != nil {
 			return err
 		}
 	}
@@ -383,9 +401,19 @@ func (w *Worker) handleStackRestore(ctx context.Context, raw json.RawMessage) er
 		return err
 	}
 	if !swapStarted {
+		currentCompose, err := w.store.ReadStackCompose(ctx, p.StackID)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 		_ = w.ops.Update(ctx, p.OperationID, "running", "preserving-current", "")
 		if _, err := w.pool.Execute(ctx, p.NodeID, "fs.snapshot.create", ipc.SnapshotCreatePayload{Dataset: p.DatasetPath, Name: restoreSnapshot, Recursive: true, Properties: map[string]string{"floatlab:operation-id": p.OperationID, "floatlab:purpose": "restore"}}); err != nil {
 			return err
+		}
+		// The original file can move out of the active dataset during the swap.
+		if currentCompose != "" {
+			if err := w.db.Execute(ctx, []rqlite.Statement{{SQL: `INSERT OR IGNORE INTO recovery_points(id,stack_id,snapshot_id,dataset_path,compose_yaml,created_at) VALUES(?,?,?,?,?,?)`, Params: []interface{}{uuid.NewString(), p.StackID, restoreSnapshot, p.DatasetPath + "-recovery-" + p.OperationID, currentCompose, time.Now().UTC()}}}); err != nil {
+				return err
+			}
 		}
 	}
 	if err := w.ops.Update(ctx, p.OperationID, "running", "activating-snapshot", ""); err != nil {
@@ -394,11 +422,7 @@ func (w *Worker) handleStackRestore(ctx context.Context, raw json.RawMessage) er
 	if err := w.restoreDatasets(ctx, p.NodeID, p.DatasetPath, p.Snapshot, p.OperationID); err != nil {
 		return err
 	}
-	if err := w.store.UpdateStackCompose(ctx, p.StackID, p.SourceCompose); err != nil {
-		return err
-	}
-	_ = w.db.Execute(ctx, []rqlite.Statement{{SQL: `INSERT OR IGNORE INTO recovery_points(id,stack_id,snapshot_id,dataset_path,compose_yaml,created_at) VALUES(?,?,?,?,?,?)`, Params: []interface{}{uuid.NewString(), p.StackID, restoreSnapshot, p.DatasetPath + "-recovery-" + p.OperationID, currentCompose, time.Now().UTC()}}})
-	if _, err := w.pool.Execute(ctx, p.NodeID, "compose.source.write", ipc.ComposeSourcePayload{StackID: p.StackID, DatasetPath: p.DatasetPath, ComposeFile: p.SourceCompose}); err != nil {
+	if err := w.publishCompose(ctx, p.StackID, p.NodeID, p.DatasetPath, p.SourceCompose); err != nil {
 		return err
 	}
 	if p.WasRunning {
@@ -833,6 +857,16 @@ func (w *Worker) handleSnapshotCreate(ctx context.Context, raw json.RawMessage) 
 		}
 	}
 	if p.OperationID != "" && p.SnapType == "user" {
+		if p.ProjectSource {
+			// Retain saved sources for older hostd builds that cannot read ZFS snapshots.
+			raw, err := w.pool.Execute(ctx, p.NodeID, "compose.source.read", ipc.ComposeSourceReadPayload{StackID: p.StackID, DatasetPath: p.Dataset, Snapshot: name})
+			var captured ipc.ComposeSourceReadResult
+			if err == nil && json.Unmarshal(raw, &captured) == nil && captured.ComposeFile != "" {
+				if err := w.db.Execute(ctx, []rqlite.Statement{{SQL: `UPDATE recovery_points SET compose_yaml='' WHERE stack_id=? AND snapshot_id=?`, Params: []any{p.StackID, name}}}); err != nil {
+					return err
+				}
+			}
+		}
 		_ = operation.RecordEvent(ctx, w.db, operation.Event{StackID: p.StackID, Type: "Snapshot", Outcome: "succeeded", OperationID: p.OperationID, Actor: p.Actor})
 		return w.ops.Update(ctx, p.OperationID, "succeeded", "succeeded", "")
 	}

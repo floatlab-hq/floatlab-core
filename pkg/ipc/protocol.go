@@ -59,6 +59,7 @@ type ComposeDownPayload struct {
 	StackID       string `json:"stack_id"`
 	DatasetPath   string `json:"dataset_path"`
 	RemoveVolumes bool   `json:"remove_volumes"`
+	ProjectOnly   bool   `json:"project_only,omitempty"`
 }
 
 type ComposePullPayload struct {
@@ -71,6 +72,16 @@ type ComposePullPayload struct {
 type ComposeSourcePayload struct {
 	StackID     string `json:"stack_id"`
 	DatasetPath string `json:"dataset_path"`
+	ComposeFile string `json:"compose_file"`
+}
+
+type ComposeSourceReadPayload struct {
+	StackID     string `json:"stack_id"`
+	DatasetPath string `json:"dataset_path"`
+	Snapshot    string `json:"snapshot,omitempty"`
+}
+
+type ComposeSourceReadResult struct {
 	ComposeFile string `json:"compose_file"`
 }
 

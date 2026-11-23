@@ -178,6 +178,10 @@ func (s *Server) dispatch(ctx context.Context, c *Conn, id string, cmd Command) 
 	}
 
 	result, err := h(ctx, cmd.Payload)
+	if ConnectionContext(ctx).Err() != nil {
+		// A daemon shutdown makes the outcome uncertain even if the command returns first.
+		return
+	}
 	var resp Message
 	resp.ID = id
 	resp.Type = TypeResponse
