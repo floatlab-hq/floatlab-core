@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.4.0
+
+- Move a running stack to another lab host from the dashboard, CLI, or API. Seed the destination while the source runs, then stop the source for the final sync. The former primary becomes a backup target, and published services get an address from the destination pool.
+- Manually fail over replicated stacks after fencing the primary. Recover from the latest verified snapshot common to all writable mounts. Labs with at least three active members can transfer ownership through quorum. Two-node labs can recover under a separate stack name.
+- Configure automatic image upgrades per service in the workload's **Upgrade images** tab. Patch updates are enabled by default in a configurable overnight window. A failed deployment rolls back to a pre-upgrade snapshot, including the workload data, and blocks the failed candidate from automatic retry.
+- Add built-in alerts for peer reachability and network quality, Docker health and memory limits, failed operations and protection jobs, and aging recovery points. Expose ZFS scrub status through the storage API.
+- Retry guarded startup after interrupted operations and prevent concurrent lifecycle, backup, and recovery operations from racing over the same workload.
+- Use the project dataset's `docker-compose.yml` as the source of truth. Migration saves conflicting files under `.floatlab/compose-before-cutover-*.yml` and preserves read-only peer views. Older management binaries reject the migrated workload database.
+- Recognize the 0.4.x host series. Upgrade management first, then move to host 0.4.0 for Compose writes, image upgrades, and guarded startup.
+- Fix release checksum generation for the renamed `lab` binaries and allow retrying management publication from an existing tag.
+
 ## 0.3.0
 
 - Complete the OpenAPI command contracts and publish standalone `lab` binaries for Linux and macOS on x64 and ARM64, with autocomplete installation for five shells.

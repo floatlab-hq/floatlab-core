@@ -123,6 +123,7 @@ func TestNodeEventsSurviveReconnect(t *testing.T) {
 		t.Fatal("stopped orchestrator retained event followers")
 	}
 	runCtx, stopRun = context.WithCancel(ctx)
+	defer stopRun()
 	go func() { done <- orch.Run(runCtx) }()
 	checkDelivery(first)
 	// Restart the host at the same registered address, without an RPC or config

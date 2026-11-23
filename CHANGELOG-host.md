@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.4.0
+
+- Check the appliance ZFS pool daily and after boot. Start a scrub when no full scrub has completed in the last 30 days, leaving active or paused scans alone. Report scrub state, progress, repaired bytes, and errors to management.
+- Hand workload startup over from Docker to the control plane so it can check ownership, peer containers, and LAN addresses before resuming workloads. Pair this host with management 0.4.0 for guarded startup and manual failover.
+- Add host operations for moving stacks between lab nodes, inspecting registry image updates, and publishing managed Compose files atomically in project datasets.
+- Retry network configuration after hotplug failures and detect dropped replication SSH sessions sooner with keepalives.
+
 ## 0.3.0
 
 - Keep appliances available when idle or with the lid closed by disabling suspend, hibernation, and automatic sleep actions.
