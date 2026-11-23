@@ -2,6 +2,7 @@ package worker
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/floatlab/floatlab-core/pkg/config"
 	"github.com/floatlab/floatlab-core/pkg/run"
@@ -45,6 +46,7 @@ type BackupRestorePayload struct {
 	ExpectedGUIDs     map[string]string             `json:"expected_guids,omitempty"`
 	OwnerGeneration   int64                         `json:"owner_generation,omitempty"`
 	TakeoverStack     *config.Stack                 `json:"takeover_stack,omitempty"`
+	FailedUpgrades    []string                      `json:"failed_upgrades,omitempty"`
 	Prepared          map[string]BackupRestoreMount `json:"prepared,omitempty"`
 	Actor             string                        `json:"actor"`
 }
@@ -105,6 +107,9 @@ type StackUpgradePayload struct {
 	Services        []string              `json:"services"`
 	HealthTimeout   string                `json:"health_timeout"`
 	Actor           string                `json:"actor,omitempty"`
+	Candidate       string                `json:"candidate,omitempty"`
+	RollbackCompose string                `json:"rollback_compose,omitempty"`
+	StartBefore     *time.Time            `json:"start_before,omitempty"`
 }
 
 type StackRestartPayload struct {

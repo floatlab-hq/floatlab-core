@@ -194,6 +194,15 @@ func Migrate(ctx context.Context, c *Client) error {
 			last_run_at DATETIME,
 			PRIMARY KEY(stack_id,tier)
 		)`},
+		{SQL: `CREATE TABLE IF NOT EXISTS failed_workload_upgrades (
+			stack_id TEXT NOT NULL,
+			candidate TEXT NOT NULL,
+			PRIMARY KEY(stack_id,candidate)
+		)`},
+		{SQL: `CREATE TABLE IF NOT EXISTS workload_upgrade_settings (
+			id INTEGER PRIMARY KEY CHECK(id=1),
+			window TEXT NOT NULL
+		)`},
 		{SQL: `CREATE TABLE IF NOT EXISTS dns_outbox (
 			id          TEXT PRIMARY KEY,
 			stack_id    TEXT NOT NULL,

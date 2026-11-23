@@ -292,11 +292,12 @@ export class CommandEngine {
     }
     if (compose === undefined) return { kind: "text", text: "Create cancelled." };
     const created = await this.api.createStack({ name, compose_file: compose }, idempotencyKey()); this.changed();
-    if (!flags.start) return { kind: "text", text: `Created ${created.name}.` };
+    const warnings = (created.image_warnings ?? []).map(warning => `Warning: ${warning}`);
+    if (!flags.start) return { kind: "text", text: [`Created ${created.name}.`, ...warnings].join("\n") };
     try { await this.waitForIdle(created.id); } catch (error) { if (error instanceof CommandError && error.code === 130) throw error; return { kind: "error", message: `Created ${created.name}, but could not start it: ${error instanceof Error ? error.message : "provisioning failed"}` }; }
-    if (!await this.confirm(`Start ${created.name}?`)) return { kind: "text", text: `Created ${created.name}; left stopped.` };
+    if (!await this.confirm(`Start ${created.name}?`)) return { kind: "text", text: [`Created ${created.name}; left stopped.`, ...warnings].join("\n") };
     try { await this.api.startStack(created.id, idempotencyKey()); } catch (error) { return { kind: "error", message: `Created ${created.name}, but could not start it: ${error instanceof Error ? error.message : "start failed"}` }; }
-    this.changed(); return { kind: "operation", action: "start", state: "accepted", text: `Created ${created.name}; start requested.` };
+    this.changed(); return { kind: "operation", action: "start", state: "accepted", text: [`Created ${created.name}; start requested.`, ...warnings].join("\n") };
   }
 
   private async edit(args: string[]): Promise<CommandResult> {
@@ -306,7 +307,8 @@ export class CommandEngine {
     const compose = await this.editValidated(original, { stack_id: stack.id });
     if (compose === undefined) return { kind: "text", text: "Edit cancelled." };
     if (compose === original) return { kind: "text", text: "Compose unchanged." };
-    await this.api.updateCompose(stack.id, compose, idempotencyKey()); this.changed(); return { kind: "text", text: `Updated ${stack.name}.` };
+    const saved = await this.api.updateCompose(stack.id, compose, idempotencyKey(), original);
+    this.changed(); return { kind: "text", text: [`Updated ${stack.name}.`, ...(saved.image_warnings ?? []).map(warning => `Warning: ${warning}`)].join("\n") };
   }
 
   private async editValidated(initial: string, validation: { name?: string; stack_id?: string }): Promise<string | undefined> {

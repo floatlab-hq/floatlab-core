@@ -49,6 +49,7 @@ type replicaFailoverPreview struct {
 	guids             map[string]string
 	sourceAddress     string
 	currentPool       string
+	failedUpgrades    []string
 }
 
 func (s *Server) routeFailoverDestination(next http.Handler) http.Handler {
@@ -197,7 +198,7 @@ func (s *Server) handleReplicaFailover(w http.ResponseWriter, r *http.Request, i
 		writeError(w, 409, err.Error())
 		return
 	}
-	payload := worker.BackupRestorePayload{SourceNodeID: preview.SourceNodeID, BackupNodeID: stack.PrimaryNodeID, Snapshots: preview.Datasets, ExpectedGUIDs: preview.guids, OwnerGeneration: preview.ownerGeneration}
+	payload := worker.BackupRestorePayload{SourceNodeID: preview.SourceNodeID, BackupNodeID: stack.PrimaryNodeID, Snapshots: preview.Datasets, ExpectedGUIDs: preview.guids, OwnerGeneration: preview.ownerGeneration, FailedUpgrades: preview.failedUpgrades}
 	s.queueBackupRestore(w, r, &stack, payload)
 }
 
@@ -286,6 +287,16 @@ func (s *Server) previewReplicaFailover(ctx context.Context, id string) (replica
 			sourceGuard, err = db.LocalMigrationDone(ctx, workloadStartupMigration)
 			if err != nil {
 				return err
+			}
+			tables, err := db.Query(ctx, rqlite.Statement{SQL: `SELECT 1 FROM sqlite_master WHERE name='failed_workload_upgrades' AND type='table'`})
+			if err != nil {
+				return err
+			}
+			if len(tables.Values) > 0 {
+				preview.failedUpgrades, err = failedWorkloadUpgrades(ctx, db, id)
+				if err != nil {
+					return err
+				}
 			}
 		}
 		rows, err := db.Query(ctx, rqlite.Statement{SQL: `SELECT stack_ip FROM stack_runtime WHERE stack_id=? AND deleted_at IS NULL`, Params: []any{id}})

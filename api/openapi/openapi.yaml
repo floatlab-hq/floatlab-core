@@ -102,6 +102,8 @@ paths:
     $ref: './stacks.yaml#/paths/~1stacks~1{id}'
   /stacks/{id}/compose:
     $ref: './stacks.yaml#/paths/~1stacks~1{id}~1compose'
+  /settings/workload-upgrades:
+    $ref: './stacks.yaml#/paths/~1settings~1workload-upgrades'
   /stacks/{id}/start:
     $ref: './stacks.yaml#/paths/~1stacks~1{id}~1start'
   /stacks/{id}/stop:

@@ -37,6 +37,7 @@ type stackResponse struct {
 	PrimaryNode        string     `json:"primary_node"`
 	SecondaryNode      string     `json:"secondary_node"`
 	ComposeFile        string     `json:"compose_file"`
+	ImageWarnings      []string   `json:"image_warnings,omitempty"`
 	DatasetPath        string     `json:"dataset_path"`
 	FailoverMode       string     `json:"failover_mode"`
 	AutoTriggerAfter   string     `json:"auto_trigger_after"`
@@ -314,6 +315,12 @@ func (s *Server) handleCreateStack(w http.ResponseWriter, r *http.Request) {
 
 	pool := parsed.Extension.Storage.Pool
 	dataset := compose.DatasetPath(pool, name)
+	spec, err := compose.ParseLifecycle(canonical, name)
+	if err != nil {
+		writeComposeValidationError(w, err)
+		return
+	}
+	canonical, warnings := s.pinStackImages(r.Context(), parsed.Extension.PrimaryNode, canonical, spec)
 
 	st := &config.Stack{
 		ID:               uuid.New().String(),
@@ -346,7 +353,9 @@ func (s *Server) handleCreateStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, toStackResponse(st, string(run.StateProvisioning)))
+	response := toStackResponse(st, string(run.StateProvisioning))
+	response.ImageWarnings = warnings
+	writeJSON(w, http.StatusCreated, response)
 }
 
 func (s *Server) handleUpdateStackCompose(w http.ResponseWriter, r *http.Request) {
@@ -358,7 +367,8 @@ func (s *Server) handleUpdateStackCompose(w http.ResponseWriter, r *http.Request
 	}
 
 	var body struct {
-		ComposeFile string `json:"compose_file"`
+		ComposeFile         string  `json:"compose_file"`
+		ExpectedComposeFile *string `json:"expected_compose_file,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
@@ -366,6 +376,10 @@ func (s *Server) handleUpdateStackCompose(w http.ResponseWriter, r *http.Request
 	}
 	if body.ComposeFile == "" {
 		writeError(w, http.StatusBadRequest, "compose_file is required")
+		return
+	}
+	if body.ExpectedComposeFile != nil && *body.ExpectedComposeFile != st.ComposeYAML {
+		writeErrorCode(w, http.StatusConflict, "compose_changed", "the saved Compose configuration changed; reload it before saving")
 		return
 	}
 
@@ -378,6 +392,12 @@ func (s *Server) handleUpdateStackCompose(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	spec, err := compose.ParseLifecycle(canonical, st.Name)
+	if err != nil {
+		writeComposeValidationError(w, err)
+		return
+	}
+	canonical, warnings := s.pinStackImages(r.Context(), st.PrimaryNodeID, canonical, spec)
 
 	if parsed.Extension.SecondaryNode != st.BackupNodeID {
 		err = s.store.UpdateStackComposeAndSecondary(r.Context(), id, canonical, parsed.Extension.SecondaryNode)
@@ -395,11 +415,14 @@ func (s *Server) handleUpdateStackCompose(w http.ResponseWriter, r *http.Request
 	if inst, ok := s.raft.FSM().State(id); ok {
 		state = string(inst.State)
 	}
-	writeJSON(w, http.StatusOK, toStackResponse(st, state))
+	response := toStackResponse(st, state)
+	response.ImageWarnings = warnings
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) handleStartStack(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	var warnings []string
 	if tasks, err := s.db.Query(r.Context(), rqlite.Statement{SQL: `SELECT id FROM tasks WHERE stack_id=? AND type=? AND state!='done' LIMIT 1`, Params: []interface{}{id, worker.TaskBackupRestore}}); err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -443,10 +466,12 @@ func (s *Server) handleStartStack(w http.ResponseWriter, r *http.Request) {
 		if staging != "" {
 			workingDir = staging
 		}
-		if _, err := compose.ParseLifecycleAt(canonical, st.Name, workingDir); err != nil {
+		spec, err := compose.ParseLifecycleAt(canonical, st.Name, workingDir)
+		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		canonical, warnings = s.pinStackImages(r.Context(), st.PrimaryNodeID, canonical, spec)
 		if staging != "" {
 			if err := compose.CopyProject(staging, filepath.Join("/floatlab", st.Name)); err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
@@ -489,7 +514,11 @@ func (s *Server) handleStartStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusAccepted, map[string]string{"state": string(updated.State)})
+	response := map[string]string{"state": string(updated.State)}
+	if len(warnings) > 0 {
+		response["image_warnings"] = strings.Join(warnings, "\n")
+	}
+	writeJSON(w, http.StatusAccepted, response)
 }
 
 func (s *Server) handleCreateAndStartStack(w http.ResponseWriter, r *http.Request, requestedName string) {
@@ -586,6 +615,7 @@ func (s *Server) handleCreateAndStartStack(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	source, warnings := s.pinStackImages(r.Context(), executionNode, source, spec)
 	if staging != "" {
 		if _, err := s.hosts.Execute(r.Context(), executionNode, "fs.dataset.create", ipc.DatasetCreatePayload{Dataset: "floatlab/" + name, BlockSize: "32K", Compression: "lz4"}); err != nil {
 			writeError(w, http.StatusBadGateway, err.Error())
@@ -606,7 +636,11 @@ func (s *Server) handleCreateAndStartStack(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": operationID(r.Context()), "stack_id": stack.ID, "status": "pending"})
+	response := map[string]string{"operation_id": operationID(r.Context()), "stack_id": stack.ID, "status": "pending"}
+	if len(warnings) > 0 {
+		response["image_warnings"] = strings.Join(warnings, "\n")
+	}
+	writeJSON(w, http.StatusAccepted, response)
 }
 
 func (s *Server) handleStopStack(w http.ResponseWriter, r *http.Request) {

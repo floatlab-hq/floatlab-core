@@ -118,11 +118,12 @@ func (s *Server) CommitReplicaTakeover(ctx context.Context, p worker.BackupResto
 		}
 		return err
 	}
-	if err := s.db.Execute(ctx, []rqlite.Statement{
+	statements := []rqlite.Statement{
 		config.StackInsert(stack),
 		move.ownerStatement(),
 		{SQL: `DELETE FROM workload_move_reservations WHERE operation_id=?`, Params: []any{p.OperationID}},
-	}); err != nil {
+	}
+	if err := s.db.Execute(ctx, appendFailedWorkloadUpgrades(statements, stack.ID, p.FailedUpgrades)); err != nil {
 		return errors.Join(worker.ErrMoveMustResume, err)
 	}
 	return verifyStackOwnerClaim(ctx, s.db, p.StackID, p.DestinationNodeID, p.OperationID, p.OwnerGeneration)

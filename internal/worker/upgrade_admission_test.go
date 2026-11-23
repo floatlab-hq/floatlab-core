@@ -20,7 +20,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func upgradeFixture(t *testing.T) (*Worker, StackUpgradePayload, *atomic.Int32) {
+func upgradeFixture(t *testing.T, pullError ...error) (*Worker, StackUpgradePayload, *atomic.Int32) {
 	t.Helper()
 	ctx := t.Context()
 	db, err := rqlite.OpenLocal(filepath.Join(t.TempDir(), "upgrade.sqlite"), "node")
@@ -64,7 +64,13 @@ func upgradeFixture(t *testing.T) (*Worker, StackUpgradePayload, *atomic.Int32) 
 	server := ipc.NewServer(socket, zap.NewNop())
 	calls := &atomic.Int32{}
 	for _, command := range []string{"compose.pull", "fs.snapshot.create", "compose.source.write", "compose.up"} {
-		server.Handle(command, func(context.Context, json.RawMessage) (any, error) { calls.Add(1); return nil, nil })
+		server.Handle(command, func(context.Context, json.RawMessage) (any, error) {
+			calls.Add(1)
+			if command == "compose.pull" && len(pullError) != 0 {
+				return nil, pullError[0]
+			}
+			return nil, nil
+		})
 	}
 	server.Handle("docker.list", func(context.Context, json.RawMessage) (any, error) {
 		return ipc.DockerListResult{Containers: []ipc.ContainerInfo{{State: "running", Health: "healthy"}}}, nil
@@ -88,6 +94,28 @@ func upgradeFixture(t *testing.T) (*Worker, StackUpgradePayload, *atomic.Int32) 
 	pool.Register("node", socket)
 	w := New(db, cfg, pool, node, zap.NewNop())
 	return w, p, calls
+}
+
+func TestFailedAutomaticUpgradeAlertsAndPersistsCandidate(t *testing.T) {
+	w, p, calls := upgradeFixture(t, errors.New("registry refused candidate"))
+	p.Candidate = "candidate-version"
+	if err := w.saveUpgrade(t.Context(), p); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("failed image pull changed the live stack: %d host calls", calls.Load())
+	}
+	op, err := w.ops.Get(t.Context(), p.OperationID)
+	if err != nil || op.State != "failed" || op.Checkpoint != "rolled-back" {
+		t.Fatalf("operation=%+v err=%v", op, err)
+	}
+	rows, err := w.db.Query(t.Context(), rqlite.Statement{SQL: `SELECT a.message,f.candidate FROM alerts a JOIN failed_workload_upgrades f ON f.stack_id=a.stack_id WHERE a.stack_id=? AND a.kind='failure'`, Params: []any{p.StackID}})
+	if err != nil || len(rows.Values) != 1 || rows.Values[0][1] != p.Candidate {
+		t.Fatalf("failure not recorded: rows=%+v err=%v", rows, err)
+	}
 }
 
 func TestUpgradeDurableIntentSurvivesRestartAndCompletionRetry(t *testing.T) {

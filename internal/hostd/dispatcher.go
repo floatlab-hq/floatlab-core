@@ -2,6 +2,7 @@ package hostd
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,11 +16,13 @@ import (
 	"sync"
 
 	"github.com/floatlab/floatlab-core/internal/hostnetwork"
+	"github.com/floatlab/floatlab-core/pkg/compose"
 	"github.com/floatlab/floatlab-core/pkg/docker"
 	"github.com/floatlab/floatlab-core/pkg/ipc"
 	"github.com/floatlab/floatlab-core/pkg/release"
 	"github.com/floatlab/floatlab-core/pkg/store"
 	"go.uber.org/zap"
+	"gopkg.in/yaml.v3"
 )
 
 // Dispatcher registers all IPC command handlers on the IPC server.
@@ -56,6 +59,8 @@ func (d *Dispatcher) register() {
 	d.handle("compose.down", d.composeDown)
 	d.handle("compose.pull", d.composePull)
 	d.handle("compose.source.write", d.composeSourceWrite)
+	d.handle("compose.running-images", d.composeRunningImages)
+	d.handle("docker.image.lookup", d.lookupImage)
 	d.handle("fs.dataset.create", d.datasetCreate)
 	d.handle("fs.dataset.destroy", d.datasetDestroy)
 	d.handle("fs.dataset.set", d.datasetSet)
@@ -217,6 +222,9 @@ func (d *Dispatcher) composeUp(ctx context.Context, raw json.RawMessage) (any, e
 	if err := d.docker.ComposeUp(ctx, p.StackID, runtimePath); err != nil {
 		return nil, fmt.Errorf("compose.up: %w", err)
 	}
+	if err := writeFile(appliedComposePath(composePath), []byte(composeFingerprint(p.ComposeFile)), 0600); err != nil {
+		d.log.Warn("could not record applied Compose configuration", zap.Error(err))
+	}
 	d.log.Info("compose.up", zap.String("stack", p.StackID))
 	return map[string]string{"status": "up"}, nil
 }
@@ -268,6 +276,68 @@ func (d *Dispatcher) composeSourceWrite(_ context.Context, raw json.RawMessage) 
 		return nil, err
 	}
 	return map[string]string{"path": composePath}, writeFile(composePath, []byte(p.ComposeFile), 0644)
+}
+
+func (d *Dispatcher) lookupImage(ctx context.Context, raw json.RawMessage) (any, error) {
+	var p ipc.ImageLookupPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, err
+	}
+	return docker.LookupImage(ctx, p)
+}
+
+func (d *Dispatcher) composeRunningImages(ctx context.Context, raw json.RawMessage) (any, error) {
+	var p ipc.InspectStackImagesPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, err
+	}
+	_, composePath, err := composeArgs(p.StackID, p.DatasetPath)
+	if err != nil {
+		return nil, err
+	}
+	runtimePath, cleanup, err := temporaryCompose(composePath, p.ComposeFile)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	if d.docker == nil {
+		return nil, fmt.Errorf("docker client not available")
+	}
+	result, err := d.docker.RunningImages(ctx, p.StackID, runtimePath)
+	if err != nil || !result.Matches {
+		return result, err
+	}
+	applied, err := os.ReadFile(appliedComposePath(composePath))
+	if os.IsNotExist(err) {
+		applied, err = os.ReadFile(composePath)
+		result.Matches = err == nil && composeFingerprint(string(applied)) == composeFingerprint(p.Source)
+	} else {
+		result.Matches = err == nil && string(applied) == composeFingerprint(p.ComposeFile)
+	}
+	return result, nil
+}
+
+func appliedComposePath(composePath string) string {
+	return filepath.Join(filepath.Dir(composePath), ".floatlab-applied-compose")
+}
+
+func composeFingerprint(source string) string {
+	content := []byte(source)
+	var project map[string]any
+	if yaml.Unmarshal(content, &project) == nil {
+		services, _ := project["services"].(map[string]any)
+		for _, service := range services {
+			fields, _ := service.(map[string]any)
+			// Docker separately verifies each running service's image identity.
+			delete(fields, "image")
+			delete(fields, compose.UpgradePolicyKey)
+			delete(fields, compose.ManagedImageKey)
+		}
+		if normalized, err := json.Marshal(project); err == nil {
+			content = normalized
+		}
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(content))
 }
 
 func temporaryCompose(canonicalPath, content string) (string, func(), error) {

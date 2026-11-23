@@ -19,7 +19,7 @@ import (
 	runstate "github.com/floatlab/floatlab-core/pkg/run"
 )
 
-var labCacheTables = []string{"nodes", "users", "user_credentials", "user_recovery_codes", "networks", "prefix_pools", "network_pools", "network_pool_nodes", "network_pool_scope", "node_pool_ranges", "alert_rules", "alert_rule_overrides"}
+var labCacheTables = []string{"nodes", "users", "user_credentials", "user_recovery_codes", "networks", "prefix_pools", "network_pools", "network_pool_nodes", "network_pool_scope", "node_pool_ranges", "alert_rules", "alert_rule_overrides", "workload_upgrade_settings"}
 
 var workloadTables = []string{"stacks", "stack_runtime", "tasks", "operations", "idempotency_keys", "ip_reservations", "network_allocations", "lifecycle_events", "stack_alert_rules", "alert_status", "stack_snapshots", "recovery_points", "scheduler_state", "dns_outbox", "notifications", "alerts", "alert_evaluations", "failover_steps"}
 

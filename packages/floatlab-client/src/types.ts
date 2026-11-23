@@ -92,7 +92,7 @@ export interface FloatLabApi {
   listContainers(stackId: string): Promise<Container[]>;
   validateCompose(body: { name?: string; stack_id?: string; compose_file: string }): Promise<void>;
   createStack(body: { name: string; compose_file: string }, idempotencyKey: string): Promise<Stack>;
-  updateCompose(id: string, compose_file: string, idempotencyKey: string): Promise<Stack>;
+  updateCompose(id: string, compose_file: string, idempotencyKey: string, expected_compose_file?: string): Promise<Stack>;
   startStack(id: string, idempotencyKey: string): Promise<unknown>;
   stopStack(id: string, idempotencyKey: string): Promise<unknown>;
   startContainer(stackId: string, containerId: string, idempotencyKey: string): Promise<Container>;

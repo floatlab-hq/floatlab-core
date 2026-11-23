@@ -132,7 +132,7 @@ export function createApiClient(options: ApiClientOptions): FloatLabApi & HostNe
     listNodes: () => send<Node[]>("/nodes"), listContainers: (id) => send<Container[]>(`/stacks/${encodeURIComponent(id)}/containers`),
     validateCompose: (body) => send<void>("/stacks/validate", { method: "POST", body: JSON.stringify(body) }),
     createStack: (body, key) => mutation<Stack>("/stacks", "POST", key, body),
-    updateCompose: (id, compose_file, key) => mutation<Stack>(`/stacks/${encodeURIComponent(id)}/compose`, "PUT", key, { compose_file }),
+    updateCompose: (id, compose_file, key, expected_compose_file) => mutation<Stack>(`/stacks/${encodeURIComponent(id)}/compose`, "PUT", key, { compose_file, expected_compose_file }),
     startStack: (id, key) => mutation(`/stacks/${encodeURIComponent(id)}/start`, "POST", key),
     stopStack: (id, key) => mutation(`/stacks/${encodeURIComponent(id)}/stop`, "POST", key),
     moveStack: (id, request, key) => mutation(`/stacks/${encodeURIComponent(id)}/move`, "POST", key, request),
