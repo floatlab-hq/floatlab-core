@@ -4,17 +4,17 @@ let
   host = import nixpkgs { system = builtins.currentSystem; };
   outputs = (import ./flake.nix).outputs { inherit nixpkgs; self = outputs; };
   vm = outputs.packages.x86_64-linux.installer-preview;
-  runner = host.writeShellApplication {
+  novnc = host.runCommand "floatlab-novnc-assets" {} ''
+    mkdir -p "$out"
+    cd ${host.novnc.src}
+    cp -r app core po vendor vnc.html vnc_lite.html "$out/"
+  '';
+in host.writeShellApplication {
   name = "floatlab-installer-preview";
-  runtimeInputs = [ host.python3Packages.websockify ];
   text = ''
     cd /workspace/.local/installer/vm
-    websockify --web=${host.novnc}/share/webapps/novnc 6080 127.0.0.1:5900 &
+    ./installer-vm-control serve --web=${novnc} &
     trap 'kill "$!"' EXIT
     ${vm}/bin/run-floatlab-installer-preview-vm
   '';
-  };
-in host.symlinkJoin {
-  name = "floatlab-installer-preview-tools";
-  paths = [ runner host.python3 ];
 }

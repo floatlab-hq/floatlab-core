@@ -75,7 +75,7 @@ Uncommitted changes retain HEAD's version. Set `FLOATLAB_INSTALLER_VERSION` to
 override the version explicitly; the release workflow uses the triggering tag.
 
 The helper builds a local host payload and management image and bundles sidecars.
-It requires Python 3.11+, Docker (with a running daemon), and registry access while
+It requires Go, Docker (with a running daemon), and registry access while
 building; installation and subsequent boots require no registry access.
 Set `FLOATLAB_ISO_BUNDLE` to a prepared release bundle to consume published
 artifacts instead. Direct `nix build .#iso --impure` requires that variable.
@@ -108,10 +108,10 @@ A host/manage tag requires a matching `## X.Y.Z` entry; its body becomes the
 GitHub release notes. CLI versions follow management releases.
 
 Publish host and management first. Then, from the repository root, populate the
-ISO lock using GitHub CLI authentication, Go, Python 3.11+ and Docker Buildx:
+ISO lock using GitHub CLI authentication, Go and Docker Buildx:
 
 ```bash
-python3 scripts/release.py lock --host host-v0.1.0 --manage manage-v0.1.0
+go run ./scripts/release lock --host host-v0.1.0 --manage manage-v0.1.0
 ```
 
 Commit `releases/iso.lock.json` before creating an `iso-v` tag. The initial lock
@@ -134,10 +134,10 @@ configuration bytes, independent of the build daemon's image store. Before
 publication, CI extracts the images and metadata from the finished ISO and checks
 all four IDs, Linux/amd64 configurations, archive tags, and Compose references.
 Any mismatch fails the release before its assets are uploaded. To run the same
-check locally with Python 3.11+ and `xorriso` installed:
+check locally with Go and `xorriso` installed:
 
 ```bash
-python3 scripts/release.py verify-iso /path/to/floatlab-installer.iso
+go run ./scripts/release verify-iso /path/to/floatlab-installer.iso
 ```
 
 Management's host range lives in `pkg/release/compatibility.json`: minimum is
@@ -276,17 +276,16 @@ nix run .#installer-test -- --iso /absolute/path/to/floatlab.iso --disks 1 --fai
 nix run .#installer-test -- --iso /absolute/path/to/floatlab.iso --disks 2 --totp --timezone Australia/Melbourne --cli /absolute/path/to/floatlab
 ```
 
-`--before-storage` kills the worker at its first wipe-command boundary, then
-restarts the VM and checks that disks remain unchanged. `--failures` disconnects
-the console, reboots after the storage checkpoint, disables NTP, injects a failed
-registry pull, retries finalization, and verifies repeated bootstrap and bypass
-of the wizard for an existing Compose installation. `--static` uses `10.0.2.20`
+`--before-storage` kills the worker at its first wipe command and checks that
+restarting the installer does not change disk partitions. `--failures` injects
+a bootloader failure and checks that the failure remains visible until manual
+reboot. `--static` uses `10.0.2.20`
 on QEMU's isolated user network. `--totp` waits for NTP synchronization, enrolls
 an authenticator, checks replay rejection and recovery-code persistence across
 all mirror boots, and verifies that repeated bootstrap cannot reset credentials
 or restore a consumed recovery code. Supply `--cli` with the compiled CLI to
-exercise interactive login against the installed appliance. Run NTP-failure and
-TOTP-enrollment cases separately. These tests modify only disposable VM disks.
+exercise interactive login against the installed appliance. These tests modify
+only disposable VM disks.
 
 ZFS-root validation completed on 2026-10-14 on x86-64 Linux with KVM.
 Fresh single-disk installation with static IPv4 and Melbourne timezone passed
@@ -452,18 +451,20 @@ Service pools remain in the cluster database. Set explicit `node_ids` when creat
 
 Service aliases are restored from cluster allocation ownership after reboot, preventing a host from blindly reclaiming an address transferred to another node. The control plane retries local ownership reconciliation after DHCP startup and daemon reconnection.
 
-Run the isolated DHCP/static, DNS, LACP, service-address, reboot, and rollback test with:
+The Go VM driver runs the isolated DHCP/static, DNS, LACP, service-address,
+reboot, and rollback checks. It also runs the recovery password and SSH policy
+checks across two reboots.
 
 ```console
-nix build .#checks.x86_64-linux.host-network --print-build-logs
+nix build .#checks.x86_64-linux.host-network .#checks.x86_64-linux.recovery-password --print-build-logs
 ```
 
-If the Nix build users cannot access `/dev/kvm`, build the driver and run it as a host user in the `kvm` group:
+QEMU uses KVM when accessible and falls back to software emulation. To run the
+network check directly and keep its serial logs in a chosen directory:
 
 ```console
 nix build .#checks.x86_64-linux.host-network.driver -o result-network-driver
-mkdir -p /tmp/floatlab-network-test
-./result-network-driver/bin/nixos-test-driver --no-interactive -o /tmp/floatlab-network-test
+./result-network-driver/bin/floatlab-host-network-test --logs /tmp/floatlab-network-test
 ```
 
 ## Important implementation choices

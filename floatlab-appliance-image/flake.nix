@@ -57,9 +57,49 @@
       floatlab-binaries = buildBinaries "floatlab-host" hostVersion [ "cmd/floatlab-hostd" ];
       floatlab-manage-binaries = buildBinaries "floatlab-manage" "0.1.0-dev" [ "cmd/floatlab-control" ];
       floatlab-installer-binaries = buildBinaries "floatlab-installer" floatlab-version [ "cmd/install-tui" "cmd/install-service" "cmd/install-service-mock" ];
+      installer-test-binary = buildBinaries "floatlab-installer-test" floatlab-version [ "scripts/installer-vm-test" ];
+      hostd-test-rpc = buildBinaries "floatlab-hostd-test-rpc" floatlab-version [ "scripts/hostd-test-rpc" ];
+      vm-test-binary = buildBinaries "floatlab-nixos-vm-test" floatlab-version [ "scripts/nixos-vm-test" ];
+      testVM = name: module:
+        let
+          vm = nixpkgs.lib.nixosSystem {
+            inherit system pkgs;
+            modules = [
+              (nixpkgs + "/nixos/modules/virtualisation/qemu-vm.nix")
+              {
+                networking.hostName = name;
+                system.stateVersion = "26.05";
+                system.disableInstallerTools = true;
+                documentation.enable = false;
+                virtualisation = { graphics = false; qemu.package = pkgs.qemu_test; };
+                services.qemuGuest.package = pkgs.qemu_test.ga;
+              }
+              module
+            ];
+          };
+        in "${vm.config.system.build.vm}/bin/run-${name}-vm";
+      vmCheck = name: mode: launchers:
+        let
+          driver = pkgs.writeShellApplication {
+            name = "floatlab-${name}-test";
+            runtimeInputs = pkgs.lib.optionals (mode == "network") [ pkgs.vde2 ];
+            text = ''
+              exec ${vm-test-binary}/bin/nixos-vm-test ${mode} "$@" ${pkgs.lib.escapeShellArgs launchers}
+            '';
+          };
+        in pkgs.runCommand "floatlab-${name}-check" { passthru = { inherit driver; }; } ''
+          mkdir -p "$out"
+          ${pkgs.lib.getExe driver} --logs "$out"
+        '';
+      networkVMs = import ./tests/network.nix { inherit pkgs floatlab-binaries hostd-test-rpc; };
+      shellCheck = test: ''
+        export GOCACHE="$TMPDIR/go-cache" GOENV=off GO111MODULE=off
+        export FLOATLAB_TEST_MODULES=${./nixos/modules}
+        go test ${./tests/shellchecks}/*.go -run "^${test}$"
+      '';
       installed = self.nixosConfigurations.floatlab-installed.config;
       closure = pkgs.closureInfo { rootPaths = [ installed.system.build.toplevel ]; };
-      host-image = pkgs.runCommand "floatlab-host-${hostVersion}" { nativeBuildInputs = [ pkgs.gnutar pkgs.gzip pkgs.python3 ]; } ''
+      host-image = pkgs.runCommand "floatlab-host-${hostVersion}" { nativeBuildInputs = [ pkgs.gnutar pkgs.gzip pkgs.jq ]; } ''
         mkdir -p "$out" root/nix/store root/boot root/etc root/var root/run root/tmp
         chmod 1777 root/tmp
         while IFS= read -r path; do cp -a --parents "$path" root; done < ${closure}/store-paths
@@ -71,19 +111,19 @@
         du -sb root | cut -f1 > "$out/root-bytes"
         tar --sort=name --mtime=@1 --owner=0 --group=0 --numeric-owner -C root -cf - . | gzip -n > "$out/floatlab-root.tar.gz"
         cp ${zfsbootmenu} "$out/zfsbootmenu.EFI"
-        python3 - <<'PYHOST' > "$out/host-manifest.json"
-        import hashlib, json, os
-        out = os.environ['out']
-        files = {n: hashlib.file_digest(open(out+'/'+n, 'rb'), 'sha256').hexdigest() for n in ['floatlab-root.tar.gz', 'zfsbootmenu.EFI']}
-        print(json.dumps({"version": "${hostVersion}", "git_commit": "${self.rev or self.dirtyRev or "unknown"}",
-          "recovery_protocol": 1, "bootloader": "zfsbootmenu-3.1.0", "pool_compatibility": "openzfs-2.3-linux",
-          "engine": {"docker": "${pkgs.docker.version}", "containerd": "${pkgs.containerd.version}", "storage_driver": "zfs", "data_root": "/floatlab/system/docker"},
-          "qualified_sources": ${builtins.toJSON ((builtins.fromJSON (builtins.readFile ../releases/host-compatibility.json)).qualified_transitions.${hostVersion} or [])},
-          "architecture": "amd64", "init": "${installed.system.build.toplevel}/init",
-          "kernel": "${installed.boot.kernelPackages.kernel}", "nixpkgs_rev": "${nixpkgs.rev}",
-          "root_bytes": int(open(out+'/root-bytes').read()), "files": files,
-          "bytes": sum(os.stat(out+'/'+n).st_size for n in files)}))
-        PYHOST
+        rootDigest=$(sha256sum "$out/floatlab-root.tar.gz" | cut -d" " -f1)
+        bootDigest=$(sha256sum "$out/zfsbootmenu.EFI" | cut -d" " -f1)
+        bytes=$(stat --format=%s "$out/floatlab-root.tar.gz" "$out/zfsbootmenu.EFI" | paste -sd+)
+        jq -n --arg rootDigest "$rootDigest" --arg bootDigest "$bootDigest" \
+          --argjson rootBytes "$(cat "$out/root-bytes")" --argjson bytes "$((bytes))" '
+          {version: "${hostVersion}", git_commit: "${self.rev or self.dirtyRev or "unknown"}",
+           recovery_protocol: 1, bootloader: "zfsbootmenu-3.1.0", pool_compatibility: "openzfs-2.3-linux",
+           engine: {docker: "${pkgs.docker.version}", containerd: "${pkgs.containerd.version}", storage_driver: "zfs", data_root: "/floatlab/system/docker"},
+           qualified_sources: ${builtins.toJSON ((builtins.fromJSON (builtins.readFile ../releases/host-compatibility.json)).qualified_transitions.${hostVersion} or [])},
+           architecture: "amd64", init: "${installed.system.build.toplevel}/init",
+           kernel: "${installed.boot.kernelPackages.kernel}", nixpkgs_rev: "${nixpkgs.rev}", root_bytes: $rootBytes,
+           files: {"floatlab-root.tar.gz": $rootDigest, "zfsbootmenu.EFI": $bootDigest}, bytes: $bytes}
+        ' > "$out/host-manifest.json"
       '';
       bundlePath = builtins.getEnv "FLOATLAB_ISO_BUNDLE";
       bundle = if bundlePath == "" then throw "Set FLOATLAB_ISO_BUNDLE using scripts/build-iso.sh" else builtins.path { path = /. + bundlePath; name = "floatlab-iso-bundle"; };
@@ -131,10 +171,10 @@
         installer-preview = self.nixosConfigurations.floatlab-installer-preview.config.system.build.vm;
         installer-test = pkgs.writeShellApplication {
           name = "floatlab-installer-test";
-          runtimeInputs = [ pkgs.qemu (pkgs.python3.withPackages (p: [ p.pexpect ])) ];
+          runtimeInputs = [ pkgs.qemu_test ];
           text = ''
             export FLOATLAB_OVMF=${pkgs.OVMF.fd}/FV
-            exec python3 ${./tests/installer-vm.py} "$@"
+            exec ${installer-test-binary}/bin/installer-vm-test "$@"
           '';
         };
         inherit floatlab-binaries floatlab-manage-binaries floatlab-installer-binaries host-image;
@@ -154,12 +194,12 @@
            pkgs.runCommand "floatlab-power-management-check" {} ''
              touch "$out"
            '';
-        installer-answers = pkgs.runCommand "floatlab-installer-answers-check" { nativeBuildInputs = [ pkgs.python3 pkgs.bash pkgs.coreutils ]; } ''
-          python3 ${./tests/installer-answers.py} ${./nixos/modules/installer-answers.sh}
+        installer-answers = pkgs.runCommand "floatlab-installer-answers-check" { nativeBuildInputs = [ pkgs.go pkgs.bash pkgs.coreutils ]; } ''
+          ${shellCheck "TestInstallerAnswers"}
           touch "$out"
         '';
-        zfs-memory = pkgs.runCommand "floatlab-zfs-memory-check" { nativeBuildInputs = [ pkgs.python3 pkgs.bash pkgs.gawk ]; } ''
-          python3 ${./tests/zfs-memory.py} ${./nixos/modules/zfs-memory.sh}
+        zfs-memory = pkgs.runCommand "floatlab-zfs-memory-check" { nativeBuildInputs = [ pkgs.go pkgs.bash pkgs.gawk ]; } ''
+          ${shellCheck "TestZFSMemory"}
           touch "$out"
         '';
         zfsbootmenu-efi = pkgs.runCommand "floatlab-zfsbootmenu-efi-check" {} ''
@@ -174,16 +214,16 @@
             *) exit 1 ;;
           esac
         '';
-        os-live = pkgs.runCommand "floatlab-os-live-check" { nativeBuildInputs = [ pkgs.python3 pkgs.bash ]; } ''
-          python3 ${./tests/os-live.py} ${./nixos/modules/os-live.sh}
+        os-live = pkgs.runCommand "floatlab-os-live-check" { nativeBuildInputs = [ pkgs.go pkgs.bash ]; } ''
+          ${shellCheck "TestOSLive"}
           touch "$out"
         '';
         installer-runtime =
         let
           cfg = self.nixosConfigurations.floatlab-iso.config;
           closure = pkgs.closureInfo { rootPaths = [ cfg.system.build.toplevel ]; };
-        in pkgs.runCommand "floatlab-installer-runtime-check" { nativeBuildInputs = [ pkgs.python3 pkgs.bash ]; } ''
-          python3 ${./tests/installer-root.py} ${./nixos/modules/installer-root.sh}
+        in pkgs.runCommand "floatlab-installer-runtime-check" { nativeBuildInputs = [ pkgs.go pkgs.bash ]; } ''
+          ${shellCheck "TestInstallerRoot"}
           if grep -E -- '-(docker|docker-buildx|docker-compose|docker-containerd|docker-runc|moby)-[0-9]|-floatlab-control\.tar' ${closure}/store-paths; then
             echo "Container runtime remains in the live installer closure" >&2
             exit 1
@@ -194,8 +234,13 @@
           fi
           touch "$out"
         '';
-        host-network = import ./tests/network.nix { inherit pkgs floatlab-binaries; };
-        recovery-password = import ./tests/recovery-password.nix { inherit pkgs installed; };
+        host-network = vmCheck "host-network" "network" [
+          (testVM "network-host" networkVMs.host)
+          (testVM "network-peer" networkVMs.peer)
+        ];
+        recovery-password = vmCheck "recovery-password" "recovery" [
+          (testVM "recovery" (import ./tests/recovery-password.nix { inherit pkgs installed; }))
+        ];
         image-trim =
         let
           configurations = map (name: self.nixosConfigurations.${name}.config)
@@ -289,7 +334,7 @@
 
       devShells.${system}.default = pkgs.mkShell {
         FLOATLAB_OVMF = "${pkgs.OVMF.fd}/FV";
-        packages = with pkgs; [ just qemu_kvm libvirt virt-manager coreutils jq python3 docker-client go gh xorriso bun pnpm ];
+        packages = with pkgs; [ just qemu_kvm libvirt coreutils jq docker-client go gh xorriso bun pnpm ];
       };
     };
 }

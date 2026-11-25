@@ -7,6 +7,7 @@
 
   networking.hostName = "floatlab-installer-preview";
   system.stateVersion = "26.05";
+  system.disableInstallerTools = true;
   documentation.enable = false;
   virtualisation = {
     memorySize = 1536;

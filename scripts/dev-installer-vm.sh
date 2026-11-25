@@ -31,16 +31,18 @@ docker run --rm \
   --workdir /workspace \
   --env GOMODCACHE=/workspace/.local/installer/go-mod \
   --env GOCACHE=/workspace/.local/installer/go-build \
-  --env GOARCH=amd64 --env CGO_ENABLED=0 \
+  --env CGO_ENABLED=0 \
   golang:1.26.3-bookworm \
-  go build -o .local/installer/vm/bin/ ./cmd/install-tui ./cmd/install-service-mock
+  sh -ec '
+    GOARCH=amd64 go build -o .local/installer/vm/bin/ ./cmd/install-tui ./cmd/install-service-mock
+    go build -o .local/installer/vm/installer-vm-control ./scripts/installer-vm-control
+  '
 
 docker exec "$container" nix build --impure \
   --file /workspace/floatlab-appliance-image/preview-build.nix \
   --out-link /workspace/.local/installer/vm/runner
 
-docker exec "$container" /workspace/.local/installer/vm/runner/bin/python3 \
-  /workspace/scripts/installer-vm-control.py refresh || \
+docker exec "$container" /workspace/.local/installer/vm/installer-vm-control refresh || \
   docker exec -d "$container" sh -c \
     'exec /workspace/.local/installer/vm/runner/bin/floatlab-installer-preview > /workspace/.local/installer/vm/preview.log 2>&1'
 

@@ -28,8 +28,15 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          go-version-file: go.mod
+      - name: Build release tooling
+        run: go build -o "$RUNNER_TEMP/" ./scripts/release ./scripts/check-manage-image
+      - uses: actions/checkout@v4
+        if: ${{ inputs.tag != '' }}
+        with:
+          ref: ${{ inputs.tag }}
       - name: Validate publication configuration
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -46,10 +53,7 @@ jobs:
             echo "DOCKERHUB=docker.io/$DOCKERHUB_NAMESPACE/floatlab-manage:${RELEASE_TAG#manage-v}"
             echo "GIT_COMMIT=$(git rev-parse HEAD)"
           } >> "$GITHUB_ENV"
-          python3 scripts/release.py notes "$RELEASE_TAG" > /tmp/release-notes.md
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
+          "$RUNNER_TEMP/release" notes "$RELEASE_TAG" > /tmp/release-notes.md
       - uses: oven-sh/setup-bun@v2
       - uses: pnpm/action-setup@v4
         with:
@@ -86,7 +90,7 @@ jobs:
             --build-arg VERSION="$VERSION" --build-arg GIT_COMMIT="$GIT_COMMIT" \
             --tag "$GHCR" --tag "$DOCKERHUB" --file docker/floatlab-control.Dockerfile .
       - name: Verify management UI and API over HTTP
-        run: python3 scripts/check-manage-image.py "$GHCR" "$VERSION"
+        run: '"$RUNNER_TEMP/check-manage-image" "$GHCR" "$VERSION"'
       - name: Publish verified image to both registries
         run: |
           docker push "$GHCR"
@@ -94,7 +98,7 @@ jobs:
       - name: Verify registry images and publish metadata
         run: |
           mkdir -p release-dist
-          python3 scripts/release.py manage-manifest "$VERSION" "$GIT_COMMIT" "$GHCR" "$DOCKERHUB" release-dist
+          "$RUNNER_TEMP/release" manage-manifest "$VERSION" "$GIT_COMMIT" "$GHCR" "$DOCKERHUB" release-dist
           cd release-dist
           sha256sum lab-* manage-manifest.json > SHA256SUMS
       - uses: softprops/action-gh-release@v2

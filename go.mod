@@ -9,6 +9,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.10.1
 	github.com/coder/websocket v1.8.15
 	github.com/compose-spec/compose-go/v2 v2.11.0
+	github.com/containerd/console v1.0.5
 	github.com/digitalocean/go-libvirt v0.0.0-20261013170128-efbbdf578ac8
 	github.com/distribution/reference v0.6.0
 	github.com/docker/cli v29.5.1+incompatible
@@ -30,6 +31,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/spf13/cobra v1.10.2
+	github.com/spf13/pflag v1.0.10
 	github.com/vishvananda/netlink v1.3.1
 	go.etcd.io/bbolt v1.4.3
 	go.uber.org/zap v1.27.0
@@ -56,7 +58,6 @@ require (
 	github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc // indirect
 	github.com/charmbracelet/x/cellbuf v0.0.13-0.20250311204145-2c3ea96c31dd // indirect
 	github.com/charmbracelet/x/term v0.2.1 // indirect
-	github.com/containerd/console v1.0.5 // indirect
 	github.com/containerd/containerd/api v1.10.0 // indirect
 	github.com/containerd/containerd/v2 v2.2.3 // indirect
 	github.com/containerd/continuity v0.4.5 // indirect
@@ -141,7 +142,6 @@ require (
 	github.com/sigstore/sigstore-go v1.1.4 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966 // indirect
-	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/tilt-dev/fsnotify v1.4.8-0.20220602155310-fff9c274a375 // indirect
 	github.com/tonistiigi/dchapes-mode v0.0.0-20250318174251-73d941a28323 // indirect
 	github.com/tonistiigi/fsutil v0.0.0-20251211185533-a2aa163d723f // indirect

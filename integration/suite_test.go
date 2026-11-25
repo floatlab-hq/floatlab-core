@@ -103,7 +103,7 @@ var _ = BeforeSuite(func(ctx SpecContext) {
 	iso := filepath.Join(suiteDirectory, "iso")
 	buildEnv := []string{"FLOATLAB_INTEGRATION_COVERAGE=1"}
 	run(t, root, buildEnv, "nix", "build", "path:"+root+"?dir=floatlab-appliance-image#host-image", "--impure", "--print-build-logs", "--out-link", host)
-	run(t, root, buildEnv, "python3", "scripts/release.py", "prepare-iso", bundle, "--version", "integration", "--local-host", host)
+	run(t, root, buildEnv, "go", "run", "./scripts/release", "prepare-iso", bundle, "--version", "integration", "--local-host", host)
 	run(t, root, append(buildEnv, "FLOATLAB_ISO_BUNDLE="+bundle), "nix", "build", "path:"+root+"?dir=floatlab-appliance-image#iso", "--impure", "--print-build-logs", "--out-link", iso)
 	images, err := filepath.Glob(filepath.Join(iso, "iso", "*.iso"))
 	Expect(err).NotTo(HaveOccurred())

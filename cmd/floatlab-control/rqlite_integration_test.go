@@ -19,7 +19,7 @@ import (
 	"github.com/floatlab/floatlab-core/pkg/rqlite"
 )
 
-// This test uses the appliance's real pinned sidecar: the fast Python SQL fixture
+// This test uses the appliance's real pinned sidecar: the fast SQLite fixture
 // cannot check rqlite's HTTP validation, transaction errors or response metadata.
 func runTestPinnedRQLiteMigrationAndLocalAuthority(t ginkgo.GinkgoTInterface) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

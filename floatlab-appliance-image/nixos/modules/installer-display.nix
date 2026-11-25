@@ -1,4 +1,4 @@
-{ config, pkgs, floatlab-installer-binaries, floatlab-installer-command, ... }:
+{ config, lib, pkgs, floatlab-installer-binaries, floatlab-installer-command, ... }:
 let
   command = if floatlab-installer-command == null
     then "${floatlab-installer-binaries}/bin/install-tui"
@@ -37,7 +37,8 @@ in {
     wants = [ "systemd-logind.service" ];
     after = [ "systemd-udev-settle.service" "systemd-logind.service" "getty@tty1.service" ];
     environment = { TERM = "xterm-256color"; COLORTERM = "truecolor"; };
-    path = with pkgs; [ coreutils util-linux dosfstools gnutar gzip nix zfs systemd inetutils iproute2 ];
+    path = with pkgs; [ coreutils ] ++ lib.optionals (floatlab-installer-command == null)
+      [ util-linux dosfstools gnutar gzip nix zfs systemd inetutils iproute2 ];
     serviceConfig = {
       # kmscon resets PATH and COLORTERM for its child; restore tools and RGB.
       ExecStart = "${pkgs.kmscon}/bin/kmscon --configdir ${configuration} --vt=tty1 --no-switchvt --login -- ${pkgs.coreutils}/bin/env PATH=${config.systemd.services.floatlab-installer-display.environment.PATH} COLORTERM=truecolor TERM=xterm-256color ${command}";

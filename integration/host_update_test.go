@@ -35,7 +35,7 @@ func runHostUpdate(t testT, fixture *applianceFixture) {
 		candidate = reuse
 	} else {
 		run(t, root, []string{"FLOATLAB_INTEGRATION_COVERAGE=1", "FLOATLAB_HOST_VERSION=0.1.0-dev"}, "nix", "build", flake+"#host-image", "--impure", "--print-build-logs", "--out-link", source)
-		run(t, root, []string{"FLOATLAB_INTEGRATION_COVERAGE=1"}, "python3", "scripts/release.py", "prepare-iso", bundle, "--version", "upgrade-acceptance", "--local-host", source)
+		run(t, root, []string{"FLOATLAB_INTEGRATION_COVERAGE=1"}, "go", "run", "./scripts/release", "prepare-iso", bundle, "--version", "upgrade-acceptance", "--local-host", source)
 		run(t, root, []string{"FLOATLAB_INTEGRATION_COVERAGE=1", "FLOATLAB_HOST_VERSION=0.1.0-dev", "FLOATLAB_ISO_BUNDLE=" + bundle}, "nix", "build", flake+"#iso", "--impure", "--print-build-logs", "--out-link", isoResult)
 		run(t, root, []string{"FLOATLAB_INTEGRATION_COVERAGE=1", "FLOATLAB_HOST_VERSION=0.1.1-dev"}, "nix", "build", flake+"#host-image", "--impure", "--print-build-logs", "--out-link", candidate)
 		images, err := filepath.Glob(filepath.Join(isoResult, "iso", "*.iso"))

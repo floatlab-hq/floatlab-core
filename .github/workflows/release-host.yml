@@ -14,13 +14,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - uses: cachix/install-nix-action@v31
       - name: Build host payload
         env:
           FLOATLAB_HOST_VERSION: ${{ github.ref_name }}
         run: |
           export FLOATLAB_HOST_VERSION="${FLOATLAB_HOST_VERSION#host-v}"
-          python3 scripts/release.py notes "$GITHUB_REF_NAME" > /tmp/release-notes.md
+          go run ./scripts/release notes "$GITHUB_REF_NAME" > /tmp/release-notes.md
           nix build ./floatlab-appliance-image#host-image --impure --out-link /tmp/floatlab-host --print-build-logs
           nix build ./floatlab-appliance-image#checks.x86_64-linux.os-live ./floatlab-appliance-image#checks.x86_64-linux.zfsbootmenu-efi --no-link --print-build-logs
           mkdir -p release-dist

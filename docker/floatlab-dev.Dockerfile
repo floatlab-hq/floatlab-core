@@ -12,7 +12,7 @@ COPY --from=docker /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=sqlite-builder /sqlite-tools/ /usr/local/bin/
 ENV FLOATLAB_SQLITE_RSYNC_VERSION=3.50.4
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git gh openssh-client tini ripgrep python3 \
+    ca-certificates curl git gh openssh-client tini ripgrep \
     && rm -rf /var/lib/apt/lists/*
 ARG CODEX_VERSION=latest
 ARG CLAUDE_VERSION=latest

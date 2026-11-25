@@ -148,7 +148,7 @@ database migrations or workload/storage changes made by development code; take
 a backup before testing changes to persistent data. A failed mode switch reports
 an error and leaves the requested mode selected; rerun it or select production.
 
-Validation: `python3 scripts/dev-workflow.test.py` checks isolated mode/deployment
+Validation: `go test ./scripts/dev-workflow` checks isolated mode/deployment
 and PR behavior plus Compose merging. After building the image,
 `bash scripts/dev-container-smoke.sh` tests the frontend, API, editor, tools, Go
 reload and restart persistence using disposable containers and volumes, with no
@@ -395,7 +395,7 @@ nix develop "path:$PWD?dir=floatlab-appliance-image" -c env FLOATLAB_INTEGRATION
   go test -count=1 -timeout 12h -v ./integration
 ```
 
-The Ginkgo suite creates disposable UEFI appliances through the pure-Go libvirt RPC client over `/var/run/libvirt/libvirt-sock`. It requires Go, Nix, Python, Docker, Bun, pnpm, xorriso, and image-pull access; neither `virsh`, `virt-install`, libvirt headers, nor C bindings are required by the runner. Docker/rqlite package checks execute inside appliances too. Ordinary `go test` leaves appliance execution disabled.
+The Ginkgo suite creates disposable UEFI appliances through the pure-Go libvirt RPC client over `/var/run/libvirt/libvirt-sock`. It requires Go, Nix, Docker, Bun, pnpm, xorriso, and image-pull access; neither `virsh`, `virt-install`, libvirt headers, nor C bindings are required by the runner. Docker/rqlite package checks execute inside appliances too. Ordinary `go test` leaves appliance execution disabled.
 
 Select scenarios with `-args -ginkgo.label-filter=multi-node` (or `Lab`, `Replication`, `BackupRestore`, `single-node`, `cli-caddy`, `management-update`, `host-update`, `docker`, `rqlite`). The multi-node table gives each entry fresh appliances and ordered narrative stages. Single-node stages retain their shared appliance. Independent scenarios run serially, and a failed stage skips its dependent stages without retrying it.
 
